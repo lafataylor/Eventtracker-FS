@@ -1,0 +1,45 @@
+# Environment and secrets
+.env
+.env.*
+!.env.example
+!**/.env.example
+*.pem
+**/key.json
+**/firebase-service-account.json
+**/serviceAccount*.json
+!**/*.example.json
+
+# Dependencies
+node_modules/
+.venv/
+venv/
+env/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.pytest_cache/
+
+# Next.js / frontend build
+FE/out/
+FE/.next/
+FE/tsconfig.tsbuildinfo
+
+# Logs and OS
+*.log
+nohup.out
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Local scraper artifacts
+API/ImagesFetcher/scraper/posters/

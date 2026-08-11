@@ -1,0 +1,303 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+
+
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+  font-weight: 400;
+}
+
+input[type='date']::-webkit-inner-spin-button,
+input[type='date']::-webkit-calendar-picker-indicator {
+  display: none;
+  -webkit-appearance: none;
+}
+.react-calendar {
+  border: var(--color-midnight) !important;
+  box-shadow: none !important;
+}
+
+
+.react-calendar__tile {
+  width: 40px !important;
+  height: 40px !important;
+  color: var(--color-mist-white) !important;
+}
+
+.react-calendar__month-view__weekdays__weekday {
+  text-decoration: none !important;
+  font-size: 0.9rem;
+}
+
+.react-calendar__month-view__weekdays__weekday > abbr {
+  text-decoration: none !important;
+  font-weight: 400;
+  color: var(--color-light-beige);
+  font-size: 0.7rem;
+}
+
+.react-calendar__month-view__days {
+  display: grid !important;
+  grid-template-columns: repeat(7, 1fr) !important;
+  grid-auto-rows: 1fr !important;
+  align-items: center !important;
+  justify-items: center !important;
+}
+
+.react-calendar__tile--now  {
+  background-color: transparent!important;
+
+}
+.react-calendar__tile--hasActive {
+  background-color: var(--color-midnight) !important;
+  border-radius: 50%;
+  color: var(--color-mist-white) !important;
+}
+.react-calendar__tile--now {
+  border-radius: 0;
+
+}
+
+.react-calendar__tile--rangeStart{
+  border-top-left-radius: 50%!important;
+  border-bottom-left-radius: 50%!important;
+}
+
+.react-calendar__tile--rangeEnd{
+  border-top-right-radius: 50%!important;
+  border-bottom-right-radius: 50%!important;
+}
+
+.react-calendar__tile--hoverStart{
+  border-radius: 50% 0 0px 50%!important;
+}
+
+
+.react-calendar__tile--hoverEnd{
+  border-radius: 0 50% 50% 0!important;
+}
+.react-calendar__tile--hoverBothEnds{
+  border-radius: 50%!important;
+}
+
+
+.react-calendar__tile:enabled:hover,
+.react-calendar__tile--hover,
+.react-calendar__tile:enabled:focus {
+  background-color: var(--color-midnight) !important;
+}
+::-webkit-scrollbar-corner {
+  background-color: #DA702C00!important;
+}
+.scroll-margin::-webkit-scrollbar-track {
+  background: transparent; /* Background color of the scrollbar track */
+  margin-top: 50px; /* Top margin for the scrollbar track */
+}
+.react-calendar__tile--active,.react-calendar__tile--rangeStart ,.react-calendar__tile--rangeEnd {
+  background-color: var(--color-midnight) !important;
+  color: var(--color-mist-white) !important;
+}
+.react-calendar__tile--hasActive + .react-calendar__tile--range,
+.react-calendar__tile--range + .react-calendar__tile--hasActive {
+  border-radius: 0;
+}
+
+
+
+.react-calendar__tile--range, .react-calendar__tile--hover {
+  background-color: var(--color-midnight) !important;
+}
+
+
+
+
+.react-calendar__navigation__prev2-button,
+.react-calendar__navigation__next2-button {
+  display: none;
+}
+
+.react-calendar__navigation button {
+  font-size: 1.2rem !important;
+}
+
+.react-calendar__navigation button:enabled:hover,
+.react-calendar__navigation button:enabled:focus {
+  background-color: transparent !important;
+}
+
+.react-calendar__navigation__label__labelText--from {
+  font-weight: 700;
+  font-size: 0.95rem;
+  color: var(--color-light-beige);
+}
+
+.react-calendar__tile:disabled {
+  background-color: var(--color-midnight) !important;
+  color: var(--color-light-beige) !important;
+}
+
+.react-calendar__navigation button:disabled {
+  background-color: var(--color-midnight) !important;
+}
+html,
+body,
+#__next {
+  height: 100%;
+  background-color: #282726;
+}
+
+.date_field input:focus-visible {
+  outline: 1px solid #282726;
+  background-color: #343331;
+}
+
+input:focus-visible {
+  outline: none;
+}
+
+.container-scroll > div:first-child {
+  overflow-x: hidden !important;
+}
+
+.multiple-value-field {
+  position: absolute;
+  left: 0.75rem;
+  bottom: 20%;
+}
+
+.multiple-value-field > div > div:first-of-type {
+  pointer-events: none;
+  user-select: none;
+  opacity: 0;
+  position: absolute;
+  left: 0;
+}
+
+.setting_sync_inp_radio:after {
+  width: 15px;
+  height: 15px;
+  border-radius: 15px;
+  top: -2px;
+  left: -1px;
+  position: relative;
+  background-color: transparent;
+  content: '';
+  display: inline-block;
+  visibility: visible;
+  border: -2px solid white;
+}
+
+.setting_sync_inp_radio:checked:after {
+  width: 15px;
+  height: 15px;
+  border-radius: 15px;
+  top: -2px;
+  left: -1px;
+  position: relative;
+  background-color: #DA702C;
+  content: '';
+  display: inline-block;
+  visibility: visible;
+  border: -2px solid #1b4965;
+}
+
+/* Hide the default checkbox */
+.custom_checkbox input[type='checkbox'] {
+  visibility: hidden;
+}
+
+/* Creating a custom checkbox
+        based on demand */
+.custom_checkbox_mark {
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 13px;
+  width: 13px;
+  border: 1px solid #ffffff;
+  transform: translate(0%, 50%);
+}
+
+/* Specify the background color to be
+        shown when checkbox is active */
+.custom_checkbox input:active ~ .custom_checkbox_mark {
+  background-color: #AD8301;
+}
+
+/* Specify the background color to be
+        shown when checkbox is checked */
+.custom_checkbox input:checked ~ .custom_checkbox_mark {
+  background-color: #AD8301;
+}
+
+.styles-module_info__BWdHW {
+  background-color: #5fa8d3 !important;
+}
+
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+
+
+*::-webkit-scrollbar-thumb {
+  background: var(--color-beaming-orange-transparent, rgba(208,162,21,0.4)) !important;
+  border-radius: 5px;
+  opacity: 20;
+}
+
+.transparent {
+  background-color: transparent;
+}
+
+
+.today {
+  background-color: #DA702C70!important;
+}
+.default-today {
+  background-color: #DA702C70!important;
+  border-radius: 50%;
+}
+
+
+.gradient-text {
+  background: linear-gradient(to right, #FF5733, #ffdd00, #ffdd00);
+  -webkit-background-clip: text;
+  color: transparent;
+}
+.react-calendar__navigation__prev-button{
+  color: #ffffff!important;
+}
+.react-calendar__navigation__next-button{
+  color: #ffffff!important;
+
+}
+
+.map-container{
+  height: 100%;
+  width: 100%;
+  border-radius: 1rem;
+  overflow: hidden;
+}
+
+/* Fade-in animation for signup toast */
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-fade-in {
+  animation: fadeIn 0.3s ease-out forwards;
+}

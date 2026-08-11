@@ -1,0 +1,17 @@
+asgiref
+Django
+django-cors-headers
+djangorestframework
+PyJWT
+python-dateutil
+pytz
+six
+sqlparse
+Pyrebase4
+tenacity
+imageio[ffmpeg]
+apify_client
+openai
+celery
+fuzzywuzzy[speedup]
+django-dbbackuppython-dotenv
