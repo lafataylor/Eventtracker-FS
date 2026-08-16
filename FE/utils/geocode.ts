@@ -46,9 +46,12 @@ export const geocodeLocation = async (location: string): Promise<google.maps.Lat
   }
   
   try {
-    // Try backend endpoint first
+    // Try backend endpoint first. Strip any trailing slash so a base URL that
+    // ends in "/" does not produce "/v1//admin/..." (the auth middleware 403s
+    // on the double slash). Matches the normalization in services/apiClient.tsx.
+    const apiBase = (process.env.NEXT_PUBLIC_API_BASE_URL || 'https://eventtrackerapi.lafaslist.com/v1').replace(/\/+$/, '');
     const response = await fetch(
-      `${process.env.NEXT_PUBLIC_API_BASE_URL || 'https://eventtrackerapi.lafaslist.com/v1'}/admin/geocode/?address=${encodeURIComponent(cleanLocation)}`
+      `${apiBase}/admin/geocode/?address=${encodeURIComponent(cleanLocation)}`
     );
 
     if (!response.ok) {

@@ -1,8 +1,8 @@
 import { extractLocationsFromEvents } from './utils';
 
 const getApiBase = () =>
-  process.env.NEXT_PUBLIC_API_BASE_URL ||
-  'https://eventtrackerapi.lafaslist.com/v1';
+  (process.env.NEXT_PUBLIC_API_BASE_URL ||
+    'https://eventtrackerapi.lafaslist.com/v1').replace(/\/+$/, '');
 
 const formatTodayForApi = () => {
   const now = new Date();
