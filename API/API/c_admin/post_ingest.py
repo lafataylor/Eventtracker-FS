@@ -187,10 +187,11 @@ def build_payloads(extraction, *, shortcode, post_link, slide_urls,
     the positional source_key from those and upserts, so re-scrapes update in
     place instead of inserting duplicates.
     """
-    from .extraction import to_api_payload
+    from .extraction import expand_recurring, to_api_payload
 
+    # Recurring series become one event per date (product owner's requirement).
     payloads = []
-    for ordinal, event in enumerate(extraction.events):
+    for ordinal, event in enumerate(expand_recurring(extraction.events)):
         slide = event.source_slide_index
         if slide is not None and 0 <= slide < len(slide_urls):
             image_url = slide_urls[slide]
