@@ -3,6 +3,7 @@ from rest_framework.views import APIView
 
 from .models import Event, Venue, Execution, Feedback, FavoritesData, BlacklistedLink
 from .serializers import EventSerializer, FeedbackSerializer
+from .ingest import build_source_key, resolve_venue, upsert_event
 from django.db.models import Q
 
 from c_admin.models import Account, AccountDetail
@@ -183,77 +184,62 @@ class AdminEvent(APIView):
 
         try:
             saved_events = []
+            # Per-batch ordinal counter, keyed by (shortcode, slide). Two events
+            # extracted from the same carousel slide get distinct positional keys
+            # so neither can overwrite the other — critical because 72% of events
+            # have no name to distinguish them by.
+            slide_ordinals = {}
             for event in events:
-                venue = event.get("venue")
-                if venue:
-                    venue_obj = Venue.objects.create(
-                        name=venue.get("name"),
-                        city=venue.get("city"),
-                        state=venue.get("state"),
-                        country=venue.get("country"),
-                        address=venue.get("address"),
-                    )
-                    venue_obj.save()
-                    venue = venue_obj
-
                 exec_id = event.get("exec_id")
                 if exec_id:
                     exec_id = Execution.objects.get(pk=exec_id)
 
+                # Poster account — initialised to None so a poster-less event does
+                # not NameError, and so later events don't silently inherit the
+                # previous event's account (both were live bugs).
+                poster = None
                 poster_name = event.get("poster")
                 if poster_name:
                     try:
-                        poster = Account.objects.filter(user=poster_name)
-                        if poster.exists():
-                            poster = poster[0]
-                        else:
-                            poster_obj = Account.objects.create(
-                                user=poster_name,
-                                is_personal=True,
-                                created_by = "Admin"
-                            )
-                            poster_obj.save()
-                            poster = poster_obj
-                            #return ServerProcessingError()
+                        poster = Account.objects.filter(user=poster_name).first() or \
+                            Account.objects.create(
+                                user=poster_name, is_personal=True, created_by="Admin")
                     except Exception as e:
-                        logger.debug("Error while creating poster: "+str(e)+"\n\n\n")
-                        
-                        #return ServerProcessingError()
+                        logger.debug("Error while creating poster: " + str(e) + "\n\n\n")
 
-                # Resolve account detail overrides (enforce / fallback) — non-fatal
+                # Resolve account detail overrides (enforce / fallback) — non-fatal.
                 venue_overrides = {}
                 event_overrides = {}
                 try:
                     if poster and hasattr(poster, 'pk'):
-                        account_details = AccountDetail.objects.filter(account=poster)
                         raw_venue = event.get('venue') or {}
-                        for detail in account_details:
-                            fn = detail.field_name
-                            val = detail.value
-                            mode = detail.mode
+                        for detail in AccountDetail.objects.filter(account=poster):
+                            fn, val, mode = detail.field_name, detail.value, detail.mode
                             if fn.startswith('venue_'):
-                                vkey = fn[6:]  # strip 'venue_' prefix → name/city/state/country/address
-                                current_venue_val = raw_venue.get(vkey) if isinstance(raw_venue, dict) else None
-                                if mode == 'enforce' or (mode == 'fallback' and not current_venue_val):
+                                vkey = fn[6:]  # name/city/state/country/address
+                                current = raw_venue.get(vkey) if isinstance(raw_venue, dict) else None
+                                if mode == 'enforce' or (mode == 'fallback' and not current):
                                     venue_overrides[vkey] = val
                             else:
-                                current_event_val = event.get(fn)
-                                if mode == 'enforce' or (mode == 'fallback' and not current_event_val):
+                                # AccountDetail field_names are snake_case but a
+                                # few event JSON keys are camelCase; without this
+                                # alias, fallback never sees the real value and so
+                                # always overrides (behaving like enforce).
+                                json_key = {'age_barrier': 'ageBarrier'}.get(fn, fn)
+                                current = event.get(json_key)
+                                if mode == 'enforce' or (mode == 'fallback' and not current):
                                     event_overrides[fn] = val
                 except Exception as _detail_exc:
                     logger.warning(f"AccountDetail override skipped (non-fatal): {_detail_exc}")
-                    venue_overrides = {}
-                    event_overrides = {}
+                    venue_overrides, event_overrides = {}, {}
 
-                # Apply venue overrides
-                if venue_overrides and isinstance(venue, Venue):
-                    try:
-                        for _vk, _vv in venue_overrides.items():
-                            if hasattr(venue, _vk):
-                                setattr(venue, _vk, _vv)
-                        venue.save()
-                    except Exception as _ve:
-                        logger.warning(f"Venue override save failed (non-fatal): {_ve}")
+                # Fold venue overrides into the lookup values BEFORE resolving, so
+                # an identical venue is reused only when it matches the final
+                # values. Never mutate/save a shared venue row — doing so would
+                # rewrite the venue for every other event that reuses it.
+                venue_data = dict(event.get("venue") or {})
+                venue_data.update(venue_overrides)
+                venue = resolve_venue(Venue, venue_data)
 
                 def _ev(key, raw_key=None):
                     """Return event_overrides value if present, else fall back to event dict."""
@@ -286,7 +272,22 @@ class AdminEvent(APIView):
                 forLocation = _ev("forLocation")
 
 
-                event_obj = Event.objects.create(
+                # Post identity for idempotent ingestion (Tickets 1 & 2).
+                # Positional key {shortcode}__{slide}__{ordinal}: collision-free
+                # even when the name is null, so distinct events never overwrite
+                # each other. Callers with no shortcode fall back to a plain
+                # create (previous behaviour), so nothing regresses until the
+                # extractor starts supplying post identity.
+                shortcode = event.get("shortcode")
+                slide_index = event.get("sourceSlideIndex")
+                source_key = event.get("source_key")
+                if not source_key and shortcode:
+                    okey = (shortcode, slide_index)
+                    ordinal = slide_ordinals.get(okey, 0)
+                    slide_ordinals[okey] = ordinal + 1
+                    source_key = build_source_key(shortcode, slide_index, ordinal)
+
+                event_defaults = dict(
                     exec=exec_id,
                     venue=venue,
                     poster=poster,
@@ -314,9 +315,13 @@ class AdminEvent(APIView):
                     num_events=num_events,
                     genres=genres,
                     is_duplicate=is_duplicate,
-                    forLocation=forLocation
+                    forLocation=forLocation,
                 )
-                event_obj.save()
+
+                # Upsert instead of the previous blind create(), which let every
+                # re-scrape insert another row (23,355 surplus rows in prod).
+                event_obj, _action = upsert_event(
+                    Event, source_key, shortcode, slide_index, event_defaults)
                 saved_events.append(event_obj.id)
 
             logger.debug("Event created successfully.\n\n\n")
