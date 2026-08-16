@@ -1,10 +1,11 @@
 from rest_framework.decorators import api_view
 from rest_framework.views import APIView
 
-from .models import Event, Venue, Execution, Feedback, FavoritesData, BlacklistedLink
+from .models import Event, Venue, Execution, Feedback, FavoritesData, BlacklistedLink, EventMatch
 from .serializers import EventSerializer, FeedbackSerializer
-from .ingest import build_source_key, resolve_venue, upsert_event
+from .ingest import build_source_key, resolve_venue, upsert_event, coerce_int
 from django.db.models import Q
+from django.utils import timezone
 
 from c_admin.models import Account, AccountDetail
 
@@ -282,7 +283,11 @@ class AdminEvent(APIView):
                 slide_index = event.get("sourceSlideIndex")
                 source_key = event.get("source_key")
                 if not source_key and shortcode:
-                    okey = (shortcode, slide_index)
+                    # Key the counter on the SAME coerced slide value the key
+                    # builder uses, so a None-slide and a 0-slide event of one
+                    # post don't each start at ordinal 0 and collide on
+                    # "{shortcode}__0__0".
+                    okey = (shortcode, coerce_int(slide_index))
                     ordinal = slide_ordinals.get(okey, 0)
                     slide_ordinals[okey] = ordinal + 1
                     source_key = build_source_key(shortcode, slide_index, ordinal)
@@ -842,6 +847,102 @@ def get_duplicate_events(request):
     except Exception as e:
         logger.error(f"Error retrieving duplicate events: {e}")
         return ServerProcessingError(message="Error retrieving duplicate events: "+str(e))
+
+
+@api_view(["GET"])
+def get_event_matches(request):
+    """Ticket 1: candidate duplicate PAIRS for side-by-side review.
+
+    Unlike get_duplicate_events (which returns a flat list of flagged events and
+    a bare duplicate_link string), this returns both full events of each pair so
+    the owner can actually compare them. Ordered most-confident first.
+    """
+    status = request.GET.get("status", "pending")
+    try:
+        limit = max(1, min(int(request.GET.get("limit", 50)), 200))
+    except (TypeError, ValueError):
+        limit = 50
+
+    try:
+        matches = (EventMatch.objects.filter(status=status)
+                   .select_related('event_a', 'event_a__venue', 'event_a__poster',
+                                   'event_b', 'event_b__venue', 'event_b__poster')
+                   .order_by('-score', '-id')[:limit])
+        data = [{
+            "match_id": m.id,
+            "score": m.score,
+            "match_type": m.match_type,
+            "event_a": EventSerializer(m.event_a).data,
+            "event_b": EventSerializer(m.event_b).data,
+        } for m in matches]
+        pending_total = EventMatch.objects.filter(status='pending').count()
+        return Success({"matches": data, "pending_total": pending_total})
+    except Exception as e:
+        logger.error(f"Error retrieving event matches: {e}")
+        return ServerProcessingError(message="Error retrieving event matches: " + str(e))
+
+
+@api_view(["POST"])
+def resolve_event_match(request):
+    """Ticket 1: the owner's verdict on a candidate pair.
+
+    action:
+      keep_a / keep_b  -> suppress the other event (recoverable: suppressed=True
+                          + canonical set, never deleted) and confirm the match
+      not_duplicate    -> reject the match, touch neither event
+    """
+    match_id = request.data.get("match_id")
+    action = request.data.get("action")
+
+    if validator.is_missing([match_id, action]):
+        return MissingInformation()
+    if action not in ("keep_a", "keep_b", "not_duplicate"):
+        return InvalidParameters()
+    try:
+        match_id = int(match_id)
+    except (TypeError, ValueError):
+        return InvalidParameters()
+
+    try:
+        match = EventMatch.objects.select_related('event_a', 'event_b').filter(id=match_id).first()
+        if not match:
+            return EventNotFound()
+
+        # All-or-nothing: keep/drop/match mutations must commit together, or a
+        # mid-way failure would leave one event mutated and the pair still
+        # pending. Re-resolving a pair is allowed (the owner may change their
+        # mind) and is idempotent.
+        with transaction.atomic():
+            if action == "not_duplicate":
+                match.status = "rejected"
+            else:
+                keep = match.event_a if action == "keep_a" else match.event_b
+                drop = match.event_b if action == "keep_a" else match.event_a
+                # The owner chose to keep this event, so it must be visible —
+                # clear any suppression AND any stale is_duplicate flag left by
+                # the old (broken) dedup, which over-flagged real events.
+                keep.suppressed = False
+                keep.canonical = None
+                keep.is_duplicate = False
+                keep.duplicate_link = None
+                keep.save(update_fields=['suppressed', 'canonical', 'is_duplicate', 'duplicate_link'])
+                # Set is_duplicate on the dropped event so the existing read
+                # paths (which filter is_duplicate=False) hide it immediately;
+                # suppressed carries the canonical link. (A later cleanup can
+                # migrate reads to `suppressed` and retire is_duplicate.)
+                drop.suppressed = True
+                drop.canonical = keep
+                drop.is_duplicate = True
+                drop.duplicate_link = keep.orig_link or f"event_{keep.id}"
+                drop.save(update_fields=['suppressed', 'canonical', 'is_duplicate', 'duplicate_link'])
+                match.status = "confirmed"
+
+            match.reviewed_at = timezone.now()
+            match.save(update_fields=['status', 'reviewed_at'])
+        return Success({"status": "success", "resolved": action})
+    except Exception as e:
+        logger.error(f"Error resolving event match: {e}")
+        return ServerProcessingError(message="Error resolving event match: " + str(e))
 
 
 @api_view(["GET"])
