@@ -85,14 +85,21 @@ const Index = () => {
       // Drop the resolved pair AND any other pending pair that references the
       // now-suppressed event — otherwise a sibling pair would still offer to
       // "keep" it and silently un-hide it.
-      const remaining = matches.filter((m) =>
-        m.match_id !== match.match_id &&
-        (suppressedId == null ||
-          (m.event_a.id !== suppressedId && m.event_b.id !== suppressedId))
-      );
-      const removed = matches.length - remaining.length;
-      setMatches(remaining);
-      setPendingTotal((n) => Math.max(0, n - removed));
+      //
+      // Functional updater, not the captured `matches`: resolutions can be in
+      // flight concurrently, and filtering a stale snapshot would resurrect a
+      // pair another verdict had just removed.
+      let remainingCount = 0;
+      setMatches((prev) => {
+        const remaining = prev.filter((m) =>
+          m.match_id !== match.match_id &&
+          (suppressedId == null ||
+            (m.event_a.id !== suppressedId && m.event_b.id !== suppressedId))
+        );
+        setPendingTotal((n) => Math.max(0, n - (prev.length - remaining.length)));
+        remainingCount = remaining.length;
+        return remaining;
+      });
       notify(
         action === 'not_duplicate'
           ? 'Marked as not duplicates — both kept.'
@@ -101,7 +108,7 @@ const Index = () => {
       );
       // If this batch of 50 is exhausted but more remain server-side, pull the
       // next page instead of showing a false "all caught up".
-      if (remaining.length === 0) {
+      if (remainingCount === 0) {
         fetchMatches();
       }
     } catch (error) {
