@@ -22,6 +22,25 @@ import os
 
 logger = logging.getLogger('django')
 
+# Per-slide network budget for the request path. The scraper's
+# @retry(stop_after_attempt(5), wait_fixed(15)) downloader is built for a
+# background cron; across 20 carousel slides its worst case is many minutes,
+# while the frontend's axios client gives up at 30s.
+SLIDE_DOWNLOAD_TIMEOUT = 8
+
+
+def fast_download(url, save_path, timeout=SLIDE_DOWNLOAD_TIMEOUT):
+    """Single-attempt slide download, bounded so a request can't hang.
+
+    Raises on failure; mirror_slides skips that slide and keeps the rest.
+    """
+    import requests
+
+    response = requests.get(url, timeout=timeout)
+    response.raise_for_status()
+    with open(save_path, 'wb') as handle:
+        handle.write(response.content)
+
 
 def slide_image_urls(post_data):
     """Every image URL of an Apify Instagram post, in slide order.
@@ -106,13 +125,24 @@ def mirror_slides(urls, *, exec_id, user, output_file_path, downloader, uploader
     Returns (durable_urls, original_urls) for the slides that succeeded. A slide
     that fails is skipped rather than aborting the post — partial extraction
     beats none. `limit` matches Instagram's 20-slide carousel maximum.
+
+    Callers on a request path should pass a downloader WITHOUT long retries:
+    the scraper's retry(5, wait 15s) across 20 slides can block a worker for
+    tens of minutes, far past the frontend's 30s timeout.
+
+    A uuid is mixed into the temp path because the caller's name is only
+    second-resolution — two concurrent manual adds in the same second would
+    otherwise overwrite each other's slide files.
     """
+    import uuid
+    run_id = uuid.uuid4().hex[:8]
+
     durable, originals = [], []
     for index, url in enumerate(urls[:limit]):
-        local_path = f"/tmp/{output_file_path}_{index}.jpg"
+        local_path = f"/tmp/{output_file_path}_{run_id}_{index}.jpg"
         try:
             downloader(url, local_path)
-            hosted = uploader(exec_id, user, f"{output_file_path}_{index}",
+            hosted = uploader(exec_id, user, f"{output_file_path}_{run_id}_{index}",
                               local_path, url)
             if hosted:
                 durable.append(hosted)

@@ -160,6 +160,11 @@ def _join(values):
     return ", ".join(v for v in values if v) if values else None
 
 
+def _today_mmddyyyy():
+    from datetime import date
+    return date.today().strftime("%m-%d-%Y")
+
+
 def to_api_payload(event: ExtractedEvent, *, shortcode, slide_index, ordinal,
                    post_link, image_url, for_location=None, poster=None):
     """Map one ExtractedEvent to the dict AdminEvent.post consumes.
@@ -185,7 +190,10 @@ def to_api_payload(event: ExtractedEvent, *, shortcode, slide_index, ordinal,
         "endDate": event.end_date,
         "startTime": event.start_time,
         "endTime": event.end_time,
-        "timestamp": event.start_date,
+        # AdminEvent.get filters timestamp__gte, so a null timestamp makes the
+        # event invisible in the admin dashboard. Fall back to today rather than
+        # inventing a start_date — a missing event date stays honestly null.
+        "timestamp": event.start_date or _today_mmddyyyy(),
         "venue": {
             "name": event.venue,
             "address": event.overall_address or event.address,
@@ -202,6 +210,11 @@ def to_api_payload(event: ExtractedEvent, *, shortcode, slide_index, ordinal,
         "rsvpRequired": event.rsvp_required,
         "isEvent": event.is_event,
         "numEvents": 1,
+        # Must be an explicit False, not omitted: AdminEvent.post stores
+        # event.get("is_duplicate") verbatim, and every read path filters
+        # is_duplicate=False — which never matches NULL in SQL. Omitting it
+        # would save the event but hide it from the entire site.
+        "is_duplicate": False,
         "orig_link": post_link,
         "orig_thumb": image_url,
         "shortcode": shortcode,

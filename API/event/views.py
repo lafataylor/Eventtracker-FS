@@ -869,7 +869,12 @@ def get_event_matches(request):
         limit = 50
 
     try:
+        # Exclude pairs whose events are already suppressed. With chained pairs
+        # (A,B) then (B,C), keeping B in the second pair would clear its
+        # suppression and resurrect a duplicate the owner had already hidden.
         matches = (EventMatch.objects.filter(status=status)
+                   .exclude(event_a__suppressed=True)
+                   .exclude(event_b__suppressed=True)
                    .select_related('event_a', 'event_a__venue', 'event_a__poster',
                                    'event_b', 'event_b__venue', 'event_b__poster')
                    .order_by('-score', '-id')[:limit])
@@ -880,7 +885,9 @@ def get_event_matches(request):
             "event_a": EventSerializer(m.event_a).data,
             "event_b": EventSerializer(m.event_b).data,
         } for m in matches]
-        pending_total = EventMatch.objects.filter(status='pending').count()
+        pending_total = (EventMatch.objects.filter(status='pending')
+                         .exclude(event_a__suppressed=True)
+                         .exclude(event_b__suppressed=True).count())
         return Success({"matches": data, "pending_total": pending_total})
     except Exception as e:
         logger.error(f"Error retrieving event matches: {e}")
