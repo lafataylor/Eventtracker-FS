@@ -58,6 +58,12 @@ class ExtractedEvent(BaseModel):
     source_slide_index: Optional[int] = Field(
         description="0-based index of the carousel slide this event came from, "
                     "or null for a single-image post.")
+    recurrence: Optional[str] = Field(
+        description="For a repeating series, how often it repeats: 'weekly', "
+                    "'biweekly', or 'monthly'. Null for a one-off event.")
+    recurrence_until: Optional[str] = Field(
+        description="MM-DD-YYYY the series ends, if the post states one. Null "
+                    "if open-ended.")
 
 
 class PostExtraction(BaseModel):
@@ -82,8 +88,10 @@ Return a PostExtraction:
 photos are all the SAME event). Return exactly ONE event.
    - "roundup": SEVERAL DIFFERENT events in one post (e.g. a "this weekend" list, \
 or one event per slide). Return one entry PER distinct event.
-   - "recurring": one event that repeats (e.g. "every Thursday"). Return ONE event \
-describing the series.
+   - "recurring": one event that repeats (e.g. "every Thursday"). Return ONE entry \
+describing the series, with start_date set to the FIRST occurrence and \
+recurrence set to weekly/biweekly/monthly (the server expands it into one event \
+per date). Set recurrence_until only if the post states an end date.
    Do NOT split a single event into multiple events just because it spans slides.
 
 2) For each event set source_slide_index to the 0-based slide it came from \
@@ -154,6 +162,56 @@ def extract_events(client, image_urls, caption="", biography="", external_url=""
             f"(finish_reason={getattr(choice, 'finish_reason', None)!r}, "
             f"refusal={refusal!r})")
     return parsed
+
+
+RECURRENCE_STEPS = {'weekly': 7, 'biweekly': 14, 'monthly': 30}
+MAX_OCCURRENCES = 12  # ~3 months of a weekly series
+
+
+def expand_recurring(events, max_occurrences=MAX_OCCURRENCES):
+    """Expand a recurring series into one event per date.
+
+    The product owner wants a recurring post to produce a separate entry per
+    date, not one entry for the series. Expansion is done here rather than
+    asking the model to enumerate dates, because date arithmetic is exactly the
+    thing an LLM gets wrong (the existing corpus has a 3,319-row 01-01 sentinel
+    cluster from bad date inference).
+
+    Open-ended series are capped at max_occurrences so "every Thursday" cannot
+    generate rows forever.
+    """
+    from datetime import datetime, timedelta
+
+    expanded = []
+    for event in events:
+        step = RECURRENCE_STEPS.get((event.recurrence or '').lower())
+        if not step or not event.start_date:
+            expanded.append(event)
+            continue
+        try:
+            start = datetime.strptime(event.start_date, '%m-%d-%Y')
+        except ValueError:
+            expanded.append(event)
+            continue
+
+        until = None
+        if event.recurrence_until:
+            try:
+                until = datetime.strptime(event.recurrence_until, '%m-%d-%Y')
+            except ValueError:
+                until = None
+
+        for n in range(max_occurrences):
+            occurrence = start + timedelta(days=step * n)
+            if until and occurrence > until:
+                break
+            # Each occurrence is its own event, dated to that day. Only
+            # start_date changes; everything else is copied.
+            expanded.append(event.model_copy(update={
+                'start_date': occurrence.strftime('%m-%d-%Y'),
+                'end_date': None,
+            }))
+    return expanded
 
 
 def _join(values):

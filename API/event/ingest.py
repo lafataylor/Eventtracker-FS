@@ -44,6 +44,34 @@ def normalize_text(value):
     return re.sub(r'\s+', ' ', stripped).strip().casefold()
 
 
+def normalize_poster_name(value):
+    """Return a plain Instagram username, or None if the value is unusable.
+
+    Guards a live corruption: a serialized Account sometimes reaches this field,
+    and the old code created a NEW Account named after that blob. The next run
+    serialized *that* account and nested it again, so the username grew
+    exponentially — production holds 37 such rows, the longest 3,739 characters
+    in a CharField(max_length=255) (SQLite does not enforce the limit).
+
+    Accepts a dict (takes its "user") and rejects anything that looks like a
+    serialized object, so the chain cannot extend further.
+    """
+    if value is None:
+        return None
+    if isinstance(value, dict):
+        value = value.get('user')
+    if not isinstance(value, str):
+        return None
+    value = value.strip()
+    if not value:
+        return None
+    # A serialized Account/dict, not a username.
+    if value.startswith('{') or ("'user'" in value) or ('"user"' in value):
+        return None
+    # Instagram usernames are <=30 chars; anything longer is not one.
+    return value if len(value) <= 30 else None
+
+
 def coerce_int(value, default=0):
     """Best-effort int. Never raises — a bad slide/ordinal must not abort the
     whole ingest batch (it previously propagated a ValueError to the view)."""

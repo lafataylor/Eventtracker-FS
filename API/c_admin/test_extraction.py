@@ -30,6 +30,7 @@ def mk_event(**over):
         state=None, country=None, overall_address=None, price=None, currency=None,
         age_barrier=None, ticket_link=None, late=False, link_in_bio=False,
         rsvp_required=False, source_slide_index=None,
+        recurrence=None, recurrence_until=None,
     )
     base.update(over)
     return ExtractedEvent(**base)
@@ -150,9 +151,28 @@ class CarouselIngestTests(TestCase):
         self.assertEqual(len(set(ids)), 2)
         self.assertEqual(Event.objects.filter(shortcode="nameless").count(), 2)
 
-    def test_recurring_is_one_event(self):
-        extraction = PostExtraction(
-            post_type="recurring",
-            events=[mk_event(event_name="Every Thursday", source_slide_index=0)])
-        ids = ingest(extraction, "weekly")
-        self.assertEqual(len(ids), 1)
+    def test_recurring_expands_to_one_event_per_date(self):
+        # Product owner: a recurring post should create a separate entry per
+        # date, not one entry for the series.
+        from c_admin.extraction import expand_recurring
+        series = mk_event(event_name="Every Thursday", source_slide_index=0,
+                          start_date="09-03-2026", recurrence="weekly",
+                          recurrence_until="09-24-2026")
+        dates = [e.start_date for e in expand_recurring([series])]
+        self.assertEqual(dates, ["09-03-2026", "09-10-2026", "09-17-2026", "09-24-2026"])
+
+    def test_open_ended_series_is_capped(self):
+        from c_admin.extraction import expand_recurring, MAX_OCCURRENCES
+        series = mk_event(event_name="Every Thursday", start_date="09-03-2026",
+                          recurrence="weekly")
+        self.assertEqual(len(expand_recurring([series])), MAX_OCCURRENCES)
+
+    def test_non_recurring_event_untouched(self):
+        from c_admin.extraction import expand_recurring
+        one_off = mk_event(event_name="One Night", start_date="09-03-2026")
+        self.assertEqual(len(expand_recurring([one_off])), 1)
+
+    def test_recurring_without_date_not_expanded(self):
+        from c_admin.extraction import expand_recurring
+        bad = mk_event(event_name="Weekly", start_date=None, recurrence="weekly")
+        self.assertEqual(len(expand_recurring([bad])), 1)

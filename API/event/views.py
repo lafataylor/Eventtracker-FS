@@ -3,7 +3,8 @@ from rest_framework.views import APIView
 
 from .models import Event, Venue, Execution, Feedback, FavoritesData, BlacklistedLink, EventMatch
 from .serializers import EventSerializer, FeedbackSerializer
-from .ingest import build_source_key, resolve_venue, upsert_event, coerce_int
+from .ingest import (build_source_key, coerce_int, normalize_poster_name,
+                     resolve_venue, upsert_event)
 from django.db import transaction
 from django.db.models import Q
 from django.utils import timezone
@@ -200,7 +201,10 @@ class AdminEvent(APIView):
                 # not NameError, and so later events don't silently inherit the
                 # previous event's account (both were live bugs).
                 poster = None
-                poster_name = event.get("poster")
+                # Reject serialized-Account blobs: creating an Account named
+                # after one is what produced 37 rows whose username is a nested
+                # dict, each run wrapping the previous one.
+                poster_name = normalize_poster_name(event.get("poster"))
                 if poster_name:
                     try:
                         poster = Account.objects.filter(user=poster_name).first() or \
