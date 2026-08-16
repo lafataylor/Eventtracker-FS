@@ -78,6 +78,27 @@ class ExtractionParseTests(TestCase):
         images = [c for c in kwargs["messages"][0]["content"] if c["type"] == "image_url"]
         self.assertEqual(len(images), 2)
 
+    def test_payload_sets_visibility_fields(self):
+        """Regression: omitting these saved the event but hid it from the site.
+
+        AdminEvent.post stores is_duplicate verbatim and every read path filters
+        is_duplicate=False, which never matches NULL. AdminEvent.get filters
+        timestamp__gte, so a null timestamp hides the event from admin too.
+        """
+        p = to_api_payload(mk_event(event_name="X", start_date=None),
+                           shortcode="s", slide_index=0, ordinal=0,
+                           post_link="L", image_url="I", poster="acct")
+        self.assertIs(p["is_duplicate"], False)      # not None
+        self.assertIsNotNone(p["timestamp"])         # falls back to today
+        self.assertIsNone(p["startDate"])            # but the real date stays honest
+        self.assertEqual(p["poster"], "acct")        # Account FK + AccountDetail overrides
+
+    def test_payload_prefers_real_start_date_for_timestamp(self):
+        p = to_api_payload(mk_event(event_name="X", start_date="09-01-2026"),
+                           shortcode="s", slide_index=0, ordinal=0,
+                           post_link="L", image_url="I")
+        self.assertEqual(p["timestamp"], "09-01-2026")
+
     def test_payload_maps_lists_and_slide(self):
         ev = mk_event(event_name="Rave", artists=["A", "B"], source_slide_index=2,
                       venue="Warehouse", city="Berlin")

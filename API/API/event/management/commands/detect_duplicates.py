@@ -114,12 +114,14 @@ class Command(BaseCommand):
               .select_related('venue'))
         if limit:
             qs = qs[:limit]
-        signatures = [event_signature(e) for e in qs.iterator(chunk_size=2000)]
+        # Collect the shortcode while iterating: a follow-up
+        # filter(id__in=[~55k ids]) blows past SQLite's host-parameter limit
+        # (OperationalError: too many SQL variables).
+        signatures, sc = [], {}
+        for event in qs.iterator(chunk_size=2000):
+            signatures.append(event_signature(event))
+            sc[event.id] = event.shortcode
         self.stdout.write(f'[fuzzy] scanning {len(signatures)} dated events')
-
-        # shortcode per id, to skip same-post pairs (those are exact's job)
-        sc = dict(Event.objects.filter(id__in=[s['id'] for s in signatures])
-                  .values_list('id', 'shortcode'))
 
         created = examined = 0
         for lo, hi, score in find_fuzzy_pairs(signatures):

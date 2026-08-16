@@ -22,8 +22,8 @@ from .constants import *
 # rebinds `client` to an ApifyClient locally, so alias it to stay reachable.
 from .scraper import client as openai_client
 from .extraction import extract_events
-from .post_ingest import (build_payloads, mirror_slides, post_shortcode,
-                          shortcode_from_url, slide_image_urls)
+from .post_ingest import (build_payloads, fast_download, mirror_slides,
+                          post_shortcode, shortcode_from_url, slide_image_urls)
 
 import base64
 import os
@@ -450,8 +450,11 @@ def create_event_from_instagram_link(request):
         if not slide_urls:
             return ServerProcessingError(message="No image found in Instagram post")
 
-        # Skip blacklisted posts (guard preserved from the previous implementation).
-        if is_link_blacklisted(instagram_url):
+        # Blacklist guard, on the IMAGE url as the previous implementation did.
+        # It must not key on the post URL: the batch scraper blacklists the post
+        # link for every first-seen post, so doing that here would reject every
+        # post the nightly run has already ingested.
+        if is_link_blacklisted(slide_urls[0]):
             return Success({"saved_events": [],
                             "message": "This post is blacklisted."})
 
@@ -477,7 +480,7 @@ def create_event_from_instagram_link(request):
         hosted_urls, _originals = mirror_slides(
             slide_urls, exec_id=exec_id, user=account,
             output_file_path=output_file_path,
-            downloader=download_and_save_image, uploader=saveImage)
+            downloader=fast_download, uploader=saveImage)
         if not hosted_urls:
             return ServerProcessingError(message="Failed to download image from Instagram")
 
