@@ -11,7 +11,8 @@ from django.test import SimpleTestCase
 
 from c_admin.extraction import PostExtraction
 from c_admin.post_ingest import (build_payloads, mirror_slides, post_shortcode,
-                                 shortcode_from_url, slide_image_urls)
+                                 shortcode_from_url, slide_image_urls,
+                                 split_child_shortcode)
 from c_admin.test_extraction import mk_event
 
 
@@ -55,6 +56,34 @@ class SlideUrlTests(SimpleTestCase):
         self.assertEqual(post_shortcode({"shortCode": "A"}), "A")
         self.assertEqual(post_shortcode({"shortcode": "B"}), "B")
         self.assertIsNone(post_shortcode({}))
+
+
+class SplitChildShortcodeTests(SimpleTestCase):
+    """The batch path keys images as "{shortcode}__{idx}"; parsing it back is
+    what lets the nightly scraper upsert instead of re-inserting."""
+
+    def test_carousel_slide(self):
+        self.assertEqual(split_child_shortcode("DDz_j5Cpz9s__3"), ("DDz_j5Cpz9s", 3))
+        self.assertEqual(split_child_shortcode("abc__0"), ("abc", 0))
+
+    def test_single_image_post_has_no_slide(self):
+        self.assertEqual(split_child_shortcode("DDz_j5Cpz9s"), ("DDz_j5Cpz9s", None))
+
+    def test_shortcode_containing_double_underscore(self):
+        # Real production shortcodes contain "__" (e.g. DC2LX__qOJ3). Only a
+        # trailing all-digit segment is a slide index — otherwise the audit's
+        # "72 slide markers" false positive repeats here.
+        self.assertEqual(split_child_shortcode("DC2LX__qOJ3"), ("DC2LX__qOJ3", None))
+        self.assertEqual(split_child_shortcode("DF__sAxRaTs"), ("DF__sAxRaTs", None))
+        # ...and that same shortcode WITH a slide still parses correctly
+        self.assertEqual(split_child_shortcode("DC2LX__qOJ3__5"), ("DC2LX__qOJ3", 5))
+
+    def test_story_key(self):
+        self.assertEqual(split_child_shortcode("story_12345"), ("story_12345", None))
+
+    def test_empty(self):
+        self.assertEqual(split_child_shortcode(None), (None, None))
+        self.assertEqual(split_child_shortcode(""), (None, None))
 
 
 class ShortcodeFromUrlTests(SimpleTestCase):
