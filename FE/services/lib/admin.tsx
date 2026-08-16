@@ -244,6 +244,21 @@ export function recoverDuplicate(event_id: string) {
   });
 }
 
+// Ticket 1: candidate duplicate PAIRS for side-by-side review.
+export function readEventMatches(status: string = 'pending', limit: number = 50) {
+  return axiosClient.get(`event/matches/?status=${status}&limit=${limit}`, {
+    headers: getHeader()
+  });
+}
+
+// Ticket 1: record the owner's verdict on a pair.
+// action: 'keep_a' | 'keep_b' | 'not_duplicate'
+export function resolveEventMatch(match_id: number, action: string) {
+  return axiosClient.post('event/matches/resolve/', { match_id, action }, {
+    headers: getHeader()
+  });
+}
+
 export function addDuplicate(event_id: string) {
   return axiosClient.post('event/addDuplicate/', { event_id }, {
     headers: getHeader()
