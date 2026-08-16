@@ -1,0 +1,159 @@
+"""Post-level ingestion for the manual add-by-URL path (Ticket 2, phase C).
+
+The manual path (`create_event_from_instagram_link`) previously took only
+`post_data["displayUrl"]` — one image — and never checked `type == "Sidecar"`,
+so pasting a carousel URL could only ever produce a single event. The batch
+path split carousels but then labelled each slide independently, so a slide
+listing several events still collapsed into one.
+
+This module does it once, correctly, for both callers:
+  1. collect EVERY slide image of the post,
+  2. mirror each to Firebase (Instagram CDN URLs expire, and the stored
+     orig_thumb has to keep working),
+  3. run ONE structured-output vision call over all slides,
+  4. return one API payload per extracted event, carrying shortcode +
+     source_slide_index so ingestion can upsert on source_key.
+
+`slide_image_urls` is pure and unit-tested; the rest is I/O orchestration.
+"""
+
+import logging
+import os
+
+logger = logging.getLogger('django')
+
+
+def slide_image_urls(post_data):
+    """Every image URL of an Apify Instagram post, in slide order.
+
+    Handles the shapes the actor returns:
+      * Sidecar (carousel): `images` (URL list) and/or `childPosts` (per-slide
+        objects). childPosts is preferred when present because it carries
+        per-slide metadata; `images` is the fallback the old scraper used.
+      * Image / Video / story-normalised items: a single `displayUrl`.
+    Falls back to displayUrl so a malformed carousel still yields one image
+    rather than nothing.
+    """
+    if not isinstance(post_data, dict):
+        return []
+
+    urls = []
+    for child in post_data.get('childPosts') or []:
+        if isinstance(child, dict):
+            url = child.get('displayUrl') or child.get('imageUrl')
+            if url:
+                urls.append(url)
+
+    if not urls:
+        for image in post_data.get('images') or []:
+            if isinstance(image, str):
+                urls.append(image)
+            elif isinstance(image, dict):
+                url = image.get('url') or image.get('displayUrl')
+                if url:
+                    urls.append(url)
+
+    if not urls:
+        display = post_data.get('displayUrl')
+        if display:
+            urls.append(display)
+
+    # De-duplicate while preserving slide order.
+    seen, ordered = set(), []
+    for url in urls:
+        if url not in seen:
+            seen.add(url)
+            ordered.append(url)
+    return ordered
+
+
+import re
+
+# Same pattern migration 0010 uses to backfill shortcodes, so a URL parsed here
+# yields the identical shortcode that path produces.
+_POST_RE = re.compile(r'/(?:p|reel|tv)/([^/?#]+)')
+_STORY_RE = re.compile(r'/stories/[^/]+/(\d+)')
+
+
+def post_shortcode(post_data):
+    """The post's Instagram shortcode under any of the actor's key spellings."""
+    if not isinstance(post_data, dict):
+        return None
+    return (post_data.get('shortCode') or post_data.get('shortcode')
+            or post_data.get('code') or None)
+
+
+def shortcode_from_url(url):
+    """Parse a shortcode out of an Instagram URL.
+
+    Must strip query strings and fragments: share links carry `?igsh=...`, and
+    a naive split on '/' would fold that into the shortcode, producing a
+    different source_key every time and defeating the upsert.
+    """
+    if not url:
+        return None
+    story = _STORY_RE.search(url)
+    if story:
+        return f'story_{story.group(1)}'[:100]
+    post = _POST_RE.search(url)
+    return post.group(1)[:100] if post else None
+
+
+def mirror_slides(urls, *, exec_id, user, output_file_path, downloader, uploader,
+                  limit=20):
+    """Download each slide and mirror it to durable storage.
+
+    Returns (durable_urls, original_urls) for the slides that succeeded. A slide
+    that fails is skipped rather than aborting the post — partial extraction
+    beats none. `limit` matches Instagram's 20-slide carousel maximum.
+    """
+    durable, originals = [], []
+    for index, url in enumerate(urls[:limit]):
+        local_path = f"/tmp/{output_file_path}_{index}.jpg"
+        try:
+            downloader(url, local_path)
+            hosted = uploader(exec_id, user, f"{output_file_path}_{index}",
+                              local_path, url)
+            if hosted:
+                durable.append(hosted)
+                originals.append(url)
+        except Exception as exc:  # noqa: BLE001 — one bad slide must not kill the post
+            logger.warning("[CAROUSEL] slide %s mirror failed for %s: %s",
+                           index, output_file_path, exc)
+        finally:
+            try:
+                if os.path.exists(local_path):
+                    os.remove(local_path)
+            except OSError:
+                pass
+    return durable, originals
+
+
+def build_payloads(extraction, *, shortcode, post_link, slide_urls,
+                   for_location=None, poster=None):
+    """Map a PostExtraction to AdminEvent.post payloads, one per event.
+
+    Each payload carries shortcode + sourceSlideIndex; AdminEvent.post derives
+    the positional source_key from those and upserts, so re-scrapes update in
+    place instead of inserting duplicates.
+    """
+    from .extraction import to_api_payload
+
+    payloads = []
+    for ordinal, event in enumerate(extraction.events):
+        slide = event.source_slide_index
+        if slide is not None and 0 <= slide < len(slide_urls):
+            image_url = slide_urls[slide]
+        else:
+            image_url = slide_urls[0] if slide_urls else None
+        payloads.append(to_api_payload(
+            event,
+            shortcode=shortcode,
+            slide_index=slide,
+            ordinal=ordinal,
+            post_link=post_link,
+            image_url=image_url,
+            for_location=for_location,
+            poster=poster,
+        ))
+    return payloads

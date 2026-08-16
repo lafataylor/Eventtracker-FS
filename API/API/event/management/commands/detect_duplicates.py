@@ -59,18 +59,27 @@ class Command(BaseCommand):
 
     # --- pass 1: exact re-scrapes sharing a shortcode ---------------------
     def _exact(self, dry, limit):
-        groups = (Event.objects.filter(shortcode__isnull=False, suppressed=False)
-                  .values('shortcode').annotate(n=Count('id')).filter(n__gt=1)
-                  .order_by('-n'))
+        # Only legacy rows (source_key NULL) are collapsed by shortcode.
+        #
+        # Ticket 2 deliberately writes N events for one roundup carousel, all
+        # sharing that post's shortcode — those are DISTINCT events, not
+        # duplicates, and they are exactly the rows that carry a source_key.
+        # Collapsing by shortcode alone would suppress N-1 real events.
+        legacy = Event.objects.filter(shortcode__isnull=False, suppressed=False,
+                                      source_key__isnull=True)
+        groups = (legacy.values('shortcode').annotate(n=Count('id'))
+                  .filter(n__gt=1).order_by('-n'))
         if limit:
             groups = groups[:limit]
         groups = list(groups)
-        self.stdout.write(f'[exact] {len(groups)} shortcode groups with duplicates')
+        self.stdout.write(f'[exact] {len(groups)} shortcode groups with duplicates '
+                          f'(legacy rows only; source_key rows are left alone)')
 
         suppressed = pairs = 0
         for g in groups:
             rows = list(Event.objects.filter(
-                shortcode=g['shortcode'], suppressed=False).select_related('venue'))
+                shortcode=g['shortcode'], suppressed=False,
+                source_key__isnull=True).select_related('venue'))
             if len(rows) < 2:
                 continue
             canonical = max(rows, key=completeness)

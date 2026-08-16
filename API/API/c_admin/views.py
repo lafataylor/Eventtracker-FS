@@ -17,6 +17,14 @@ from .scraper import *
 from .session import *
 from .constants import *
 
+# Ticket 2 — post-level carousel extraction.
+# `client` from scraper is the OpenAI client, but create_event_from_instagram_link
+# rebinds `client` to an ApifyClient locally, so alias it to stay reachable.
+from .scraper import client as openai_client
+from .extraction import extract_events
+from .post_ingest import (build_payloads, mirror_slides, post_shortcode,
+                          shortcode_from_url, slide_image_urls)
+
 import base64
 import os
 import requests
@@ -435,47 +443,76 @@ def create_event_from_instagram_link(request):
         if not post_data:
             return ServerProcessingError(message="Could not scrape Instagram post data")
 
-        # Extract image URL and other metadata
-        image_url = post_data.get("displayUrl")
-        if not image_url:
+        # Ticket 2: read EVERY slide of the post, not just displayUrl. Previously
+        # only the cover image was used and `type == "Sidecar"` was never
+        # checked, so pasting a carousel URL could only ever yield one event.
+        slide_urls = slide_image_urls(post_data)
+        if not slide_urls:
             return ServerProcessingError(message="No image found in Instagram post")
+
+        # Skip blacklisted posts (guard preserved from the previous implementation).
+        if is_link_blacklisted(instagram_url):
+            return Success({"saved_events": [],
+                            "message": "This post is blacklisted."})
 
         caption = post_data.get("caption", "")
         owner_username = post_data.get("ownerUsername", "instagram_user")
-        owner_full_name = post_data.get("ownerFullName", "")
-        
-        # Download the image to temporary location
-        current_timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
-        image_filename = f"instagram_{current_timestamp}.jpg"
-        image_path = f"/tmp/{image_filename}"
-        
-        import requests
-        response = requests.get(image_url)
-        if response.status_code == 200:
-            with open(image_path, "wb") as file:
-                file.write(response.content)
-        else:
-            return ServerProcessingError(message="Failed to download image from Instagram")
+        # Parse the URL rather than splitting on '/': share links carry
+        # ?igsh=... which would otherwise become part of the shortcode and give
+        # a different source_key on every paste.
+        shortcode = post_shortcode(post_data) or shortcode_from_url(instagram_url)
+        if not shortcode:
+            return ServerProcessingError(message="Could not determine the Instagram post id")
 
-        # Use the existing forced_label_and_save function with Instagram metadata
+        current_timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
         account = f"instagram_{owner_username}"
         exec_id = "-1"
         output_file_path = f"{current_timestamp}"
         headers = get_headers()
 
-        # Since this is from Instagram, we don't have a specific account forLocation
-        for_location = request.data.get("for_location")
-        
-        if not for_location:
-            for_location = None
+        for_location = request.data.get("for_location") or None
 
-        # Create a custom version of forced_label_and_save that includes Instagram metadata
-        saved_events = forced_label_and_save_with_instagram_data(
-            account, exec_id, output_file_path, image_path, image_url, 
-            caption, owner_full_name, instagram_url, headers, for_location
-        )
+        # Mirror every slide to durable storage (Instagram CDN URLs expire, and
+        # the stored orig_thumb has to keep working).
+        hosted_urls, _originals = mirror_slides(
+            slide_urls, exec_id=exec_id, user=account,
+            output_file_path=output_file_path,
+            downloader=download_and_save_image, uploader=saveImage)
+        if not hosted_urls:
+            return ServerProcessingError(message="Failed to download image from Instagram")
 
-        return Success({"saved_events": saved_events})
+        logger.info("[CAROUSEL_MANUAL] shortcode=%r slides=%d hosted=%d",
+                    shortcode, len(slide_urls), len(hosted_urls))
+
+        # ONE structured-output vision call over all slides -> an ARRAY of
+        # events with per-event source_slide_index (replaces the old free-text
+        # prompt whose `subEvents` was requested but never parsed).
+        extraction = extract_events(
+            openai_client, hosted_urls, caption=caption,
+            biography=post_data.get("ownerFullName", ""), external_url="")
+
+        payloads = build_payloads(
+            extraction, shortcode=shortcode, post_link=instagram_url,
+            slide_urls=hosted_urls, for_location=for_location,
+            poster=owner_username)
+        payloads = [p for p in payloads if p.get("isEvent")]
+
+        logger.info("[CAROUSEL_MANUAL] shortcode=%r post_type=%s extracted=%d kept=%d",
+                    shortcode, extraction.post_type, len(extraction.events), len(payloads))
+
+        if not payloads:
+            return Success({"saved_events": [], "post_type": extraction.post_type,
+                            "message": "No events found in this post."})
+
+        # AdminEvent.post derives the positional source_key from shortcode +
+        # sourceSlideIndex and upserts, so re-pasting the same URL updates rows
+        # instead of inserting duplicates.
+        saved_events = save_events_from_dashboard(
+            headers, {"events": payloads}, exec_id, [account])
+
+        return Success({"saved_events": saved_events,
+                        "post_type": extraction.post_type,
+                        "events_found": len(payloads)})
     except Exception as e:
         logger.error(f"Error creating event from Instagram link: {str(e)}")
         return ServerProcessingError(message="An error occurred processing the Instagram link: "+str(e))

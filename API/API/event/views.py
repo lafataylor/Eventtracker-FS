@@ -4,6 +4,7 @@ from rest_framework.views import APIView
 from .models import Event, Venue, Execution, Feedback, FavoritesData, BlacklistedLink, EventMatch
 from .serializers import EventSerializer, FeedbackSerializer
 from .ingest import build_source_key, resolve_venue, upsert_event, coerce_int
+from django.db import transaction
 from django.db.models import Q
 from django.utils import timezone
 
@@ -357,21 +358,25 @@ class AdminEvent(APIView):
                 updated_event.name = event.get("name")
             if "venue" in event:
                 event_venue = event['venue']
+                current_venue = Venue.objects.get(id=event_venue['id'])
 
-                updated_event_venue = Venue.objects.get(id=event_venue['id'])
-
-                if "name" in event_venue:
-                    updated_event_venue.name = event_venue['name']
-                if "address" in event_venue:
-                    updated_event_venue.address = event_venue['address']
-                if "city" in event_venue:
-                    updated_event_venue.city = event_venue['city']
-                if "state" in event_venue:
-                    updated_event_venue.state = event_venue['state']
-                if "country" in event_venue:
-                    updated_event_venue.country = event_venue['country']
-
-                updated_event_venue.save()
+                # Venues are now shared between events (resolve_venue reuses an
+                # identical row instead of creating one per event), so editing
+                # in place would silently rewrite the venue for every other
+                # event pointing at it. Build the new values, then reuse or
+                # create a matching row and repoint only THIS event at it.
+                values = {
+                    field: event_venue.get(field, getattr(current_venue, field))
+                    for field in ('name', 'address', 'city', 'state', 'country')
+                }
+                shared = Event.objects.filter(venue=current_venue).exclude(
+                    id=updated_event.id).exists()
+                if shared:
+                    updated_event.venue = resolve_venue(Venue, values)
+                else:
+                    for field, value in values.items():
+                        setattr(current_venue, field, value)
+                    current_venue.save()
 
             if "artist" in event:
                 updated_event.artist = event.get("artist")
