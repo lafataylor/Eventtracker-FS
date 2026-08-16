@@ -71,6 +71,10 @@ load_dotenv(dotenv_path=os.path.join(settings.BASE_DIR, '.env.local'))
 
 client = OpenAI()
 
+# Ticket 2: parse the post identity out of the per-image key so the batch
+# path can upsert. post_ingest deliberately imports nothing from scraper.
+from .post_ingest import split_child_shortcode
+
 def check_for_prerequisites():
     prerequisites = ["instatouch"]
     try:
@@ -2239,6 +2243,11 @@ def clean_label_and_save(account: str, exec_id: str, output_file_path: str, imag
                     
                     log_step_progressed(f"An image being uploaded to the cloud: {filename}")
 
+                    # Post identity for the upsert. `filename` is the child
+                    # shortcode process_post assigned ("{shortcode}__{idx}" for
+                    # a carousel slide, plain "{shortcode}" otherwise).
+                    _batch_shortcode, _batch_slide = split_child_shortcode(filename)
+
                     image_url = saveImage(
                         exec_id, user, filename, image['path'], image['link'])
                     logger.debug("\n Image URL: "+str(image_url))
@@ -2299,7 +2308,16 @@ def clean_label_and_save(account: str, exec_id: str, output_file_path: str, imag
                         "genres": None,
                         "is_duplicate": False,
                         "duplicate_link": None,
-                        "forLocation": for_location
+                        "forLocation": for_location,
+                        # Ticket 2: carry the post identity through to the API.
+                        # process_post already keys carousel slides as
+                        # "{shortcode}__{idx}", but that only ever named local
+                        # files — it never reached the DB, so every re-scrape
+                        # INSERTed again (23,355 surplus rows in production).
+                        # Sending these lets AdminEvent.post build a positional
+                        # source_key and upsert instead.
+                        "shortcode": _batch_shortcode,
+                        "sourceSlideIndex": _batch_slide,
                     }
 
                     missingFields = 0

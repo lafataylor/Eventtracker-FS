@@ -102,6 +102,26 @@ def post_shortcode(post_data):
             or post_data.get('code') or None)
 
 
+def split_child_shortcode(filename):
+    """Split the scraper's per-image key into (shortcode, slide_index).
+
+    process_post names carousel slides "{shortcode}__{idx}" (and single-image
+    posts just "{shortcode}"), but that identity was only ever used for local
+    filenames — it never reached the database, which is why re-scrapes could
+    not be deduplicated. Returning it lets the batch path send shortcode +
+    sourceSlideIndex so AdminEvent.post upserts instead of inserting.
+
+    Shortcodes themselves can contain "__" (e.g. "DC2LX__qOJ3"), so only a
+    trailing all-digit segment counts as a slide index.
+    """
+    if not filename:
+        return None, None
+    parent, sep, tail = str(filename).rpartition('__')
+    if sep and parent and tail.isdigit():
+        return parent, int(tail)
+    return str(filename), None
+
+
 def shortcode_from_url(url):
     """Parse a shortcode out of an Instagram URL.
 
