@@ -175,16 +175,25 @@ def _price_within(price_text, low, high):
     text = str(price_text).strip()
     if not text:
         return False
-    if re.search(r'\b(free|gratis|no cover|sin costo|entrada libre)\b',
-                 text, re.IGNORECASE):
-        return low <= 0 <= high
-    numbers = re.findall(r'\d+(?:\.\d+)?', text.replace(',', ''))
-    for raw in numbers:
+    # Drop tokens that are numbers but not prices, so "Free before 11pm, $150
+    # after" does not match on the "11" of "11pm" and "18+" is not read as $18:
+    #   - clock times: 11pm, 10:30 PM
+    #   - ages:        18+, 21 +
+    cleaned = re.sub(r'\d{1,2}(?::\d{2})?\s*(?:am|pm)\b', ' ', text, flags=re.IGNORECASE)
+    cleaned = re.sub(r'\d{1,2}\s*\+', ' ', cleaned)
+    # Check numeric tiers: a tiered price ("Free before 11pm, $150 after",
+    # "$150, $200, $300") matches if ANY listed price is in range (599 of 4,267
+    # production prices list more than one).
+    for raw in re.findall(r'\d+(?:\.\d+)?', cleaned.replace(',', '')):
         try:
             if low <= float(raw) <= high:
                 return True
         except ValueError:
             continue
+    # No price number matched: a free/no-cover event is a 0-price match.
+    if re.search(r'\b(free|gratis|no cover|sin costo|entrada libre)\b',
+                 text, re.IGNORECASE):
+        return low <= 0 <= high
     return False
 
 
@@ -332,7 +341,11 @@ class AdminEvent(APIView):
                 rsvp_required = event.get("rsvpRequired")
                 num_events = event.get("numEvents")
                 genres = _ev("genres")
-                is_duplicate = event.get("is_duplicate")
+                # Coerce at the source: is_duplicate is null=True, and every
+                # read path filters is_duplicate=False, which never matches NULL
+                # in SQL. Any caller that omits the key would otherwise save an
+                # event that is invisible site-wide. Default to visible.
+                is_duplicate = bool(event.get("is_duplicate") or False)
                 forLocation = _ev("forLocation")
 
 
@@ -597,10 +610,13 @@ def search_events(request):
                      | (Q(start_date__isnull=True)
                         & Q(created_at__gte=undated_cutoff)))
 
+        # Exclude only KNOWN non-events. is_event is null=True; filtering
+        # is_event=True would also drop NULL rows (unknown classification),
+        # which were previously searchable and have no admin control to flip.
         user_events = (Event.objects
                        .filter(matches_text & in_window
                                & Q(is_duplicate=False) & Q(suppressed=False)
-                               & Q(is_event=True))
+                               & ~Q(is_event=False))
                        .select_related('venue', 'poster')
                        .order_by('-timestamp')
                        .distinct()[:SEARCH_RESULT_LIMIT])
@@ -764,7 +780,10 @@ def filter_events(request):
                 bounds = _parse_price_bounds(condition, values)
                 if bounds is None:
                     return InvalidParameters()
-                price_bounds.append((bounds, use_or))
+                # Price needs Python-side parsing of a free-text field, so it is
+                # always ANDed (its conjugation is not honoured — noted here so a
+                # reader does not assume OR-price works).
+                price_bounds.append(bounds)
                 applied += 1
                 continue
 
@@ -805,10 +824,11 @@ def filter_events(request):
             queryset = queryset.filter(or_q)
 
         # Price is applied last and only to the already-narrowed set, because it
-        # needs Python-side parsing of a free-text field.
-        for (low, high), use_or in price_bounds:
+        # needs Python-side parsing of a free-text field. Cap the id list to the
+        # result limit so the final IN clause stays small.
+        for low, high in price_bounds:
             ids = [e.id for e in queryset.only('id', 'price')[:PRICE_SCAN_LIMIT]
-                   if _price_within(e.price, low, high)]
+                   if _price_within(e.price, low, high)][:SEARCH_RESULT_LIMIT]
             queryset = queryset.filter(id__in=ids)
 
         events = (queryset.select_related('venue', 'poster')

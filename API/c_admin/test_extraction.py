@@ -176,3 +176,20 @@ class CarouselIngestTests(TestCase):
         from c_admin.extraction import expand_recurring
         bad = mk_event(event_name="Weekly", start_date=None, recurrence="weekly")
         self.assertEqual(len(expand_recurring([bad])), 1)
+
+    def test_rescrape_does_not_resurrect_owner_hidden_duplicate(self):
+        # The owner hides a duplicate (is_duplicate/suppressed True). The nightly
+        # scraper re-ingests the same source_key with is_duplicate=False. The
+        # owner's decision must survive.
+        key = build_source_key("hidden", 0, 0)
+        obj, _ = upsert_event(Event, key, "hidden", 0,
+                              dict(name="Rave", is_event=True, orig_link="L"))
+        obj.is_duplicate = True
+        obj.suppressed = True
+        obj.save()
+        upsert_event(Event, key, "hidden", 0,
+                     dict(name="Rave", is_event=True, orig_link="L",
+                          is_duplicate=False, suppressed=False))
+        obj.refresh_from_db()
+        self.assertTrue(obj.is_duplicate)   # still hidden
+        self.assertTrue(obj.suppressed)

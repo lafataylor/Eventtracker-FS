@@ -120,13 +120,22 @@ def resolve_venue(venue_model, data):
     return venue_model.objects.filter(**lookup).first() or venue_model.objects.create(**lookup)
 
 
+# Owner-controlled resolution state. A re-scrape must never overwrite these:
+# once the owner hides a duplicate (is_duplicate/suppressed/canonical) the
+# nightly ingest of the same source_key would otherwise flip is_duplicate back
+# to the payload's False and resurrect the event the owner hid.
+_OWNER_RESOLUTION_FIELDS = frozenset(
+    {'is_duplicate', 'suppressed', 'canonical', 'canonical_id', 'duplicate_link'})
+
+
 def _coalesce_into(instance, defaults):
     """Copy only non-empty incoming values onto instance. Returns True if any
     field changed. A sparse re-scrape (flaky extraction often returns nulls)
-    must not clobber previously-good name/venue/price with None."""
+    must not clobber previously-good name/venue/price with None, nor overwrite
+    the owner's duplicate-resolution decisions."""
     changed = False
     for field, value in defaults.items():
-        if value in (None, ''):
+        if value in (None, '') or field in _OWNER_RESOLUTION_FIELDS:
             continue
         if getattr(instance, field, None) != value:
             setattr(instance, field, value)
