@@ -490,9 +490,13 @@ def create_event_from_instagram_link(request):
         # ONE structured-output vision call over all slides -> an ARRAY of
         # events with per-event source_slide_index (replaces the old free-text
         # prompt whose `subEvents` was requested but never parsed).
+        # Pass the post URL as external_url so a "link in bio" post can use it
+        # as ticket_link (the prompt falls back to the bio URL). The replaced
+        # path passed the Instagram URL here; "" silently dropped ticket links.
         extraction = extract_events(
             openai_client, hosted_urls, caption=caption,
-            biography=post_data.get("ownerFullName", ""), external_url="")
+            biography=post_data.get("ownerFullName", ""),
+            external_url=instagram_url)
 
         payloads = build_payloads(
             extraction, shortcode=shortcode, post_link=instagram_url,

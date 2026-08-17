@@ -36,6 +36,23 @@ class PriceMatchingTests(TestCase):
         self.assertTrue(_price_within("Gratis", 0, 50))
         self.assertFalse(_price_within("Free", 10, 50))
 
+    def test_tiered_free_and_paid(self):
+        # "Free before 11pm, $150 after" has BOTH a free tier and a $150 tier,
+        # so it matches a cheap filter (free) and a mid filter ($150), but not a
+        # gap between them. "11pm" must not be read as a $11 price.
+        tiered = "Free before 11pm, $150 after"
+        self.assertTrue(_price_within(tiered, 0, 50))     # free tier
+        self.assertTrue(_price_within(tiered, 100, 200))  # $150 tier
+        self.assertFalse(_price_within(tiered, 60, 90))   # neither tier
+
+    def test_age_barrier_not_read_as_price(self):
+        # "18+" is an age restriction, not an $18 price.
+        self.assertFalse(_price_within("18+", 10, 30))
+
+    def test_multiple_tiers_any_in_range(self):
+        self.assertTrue(_price_within("$150, $200, $300", 250, 350))
+        self.assertFalse(_price_within("$150, $200, $300", 400, 500))
+
     def test_outside_range_and_unusable(self):
         self.assertFalse(_price_within("$500", 0, 100))
         self.assertFalse(_price_within(None, 0, 100))

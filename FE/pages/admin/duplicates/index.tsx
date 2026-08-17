@@ -72,6 +72,16 @@ const Index = () => {
     fetchMatches();
   }, []);
 
+  // Refetch the next page when the current batch of 50 empties but more remain
+  // server-side. Done as an effect on committed state (not inside resolve)
+  // so concurrent resolutions can't read a stale snapshot and show a false
+  // "all caught up".
+  useEffect(() => {
+    if (!isLoading && !loadError && matches.length === 0 && pendingTotal > 0) {
+      fetchMatches();
+    }
+  }, [matches.length, pendingTotal, isLoading, loadError]);
+
   const resolve = async (match: Match, action: 'keep_a' | 'keep_b' | 'not_duplicate') => {
     if (!(await requestMiddleware(dispatch))) return;
     setBusyIds((prev) => new Set(prev).add(match.match_id));
@@ -86,31 +96,26 @@ const Index = () => {
       // now-suppressed event — otherwise a sibling pair would still offer to
       // "keep" it and silently un-hide it.
       //
-      // Functional updater, not the captured `matches`: resolutions can be in
-      // flight concurrently, and filtering a stale snapshot would resurrect a
-      // pair another verdict had just removed.
-      let remainingCount = 0;
-      setMatches((prev) => {
-        const remaining = prev.filter((m) =>
-          m.match_id !== match.match_id &&
-          (suppressedId == null ||
-            (m.event_a.id !== suppressedId && m.event_b.id !== suppressedId))
-        );
-        setPendingTotal((n) => Math.max(0, n - (prev.length - remaining.length)));
-        remainingCount = remaining.length;
-        return remaining;
-      });
+      // Kept pure: React may invoke state updaters more than once (StrictMode
+      // does), so no side effects are allowed inside them — an earlier version
+      // decremented pendingTotal inside the updater and double-counted.
+      const keepPair = (m: Match) =>
+        m.match_id !== match.match_id &&
+        (suppressedId == null ||
+          (m.event_a.id !== suppressedId && m.event_b.id !== suppressedId));
+      // Two pure sibling updaters — no side effects inside either, so StrictMode
+      // re-invoking them can't double-count. pendingTotal is an optimistic
+      // display value that self-heals on the next fetch; the empty-batch
+      // refetch is handled by the effect above, on committed state.
+      const removed = matches.length - matches.filter(keepPair).length;
+      setMatches((prev) => prev.filter(keepPair));
+      setPendingTotal((n) => Math.max(0, n - removed));
       notify(
         action === 'not_duplicate'
           ? 'Marked as not duplicates — both kept.'
           : 'Duplicate hidden. You can restore it later.',
         false
       );
-      // If this batch of 50 is exhausted but more remain server-side, pull the
-      // next page instead of showing a false "all caught up".
-      if (remainingCount === 0) {
-        fetchMatches();
-      }
     } catch (error) {
       notify('Could not save your choice. Please try again.', true);
     } finally {
