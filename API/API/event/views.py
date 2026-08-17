@@ -27,6 +27,19 @@ logger = logging.getLogger('django')
 
 EVENT_CUTOFF_TIME = timedelta(hours=25)
 
+# Events with no extracted start_date are still real events (2,534 of them in
+# production). They are included in search when recently scraped rather than
+# excluded outright, which is what made them permanently unfindable.
+UNDATED_EVENT_WINDOW_DAYS = 45
+
+# Search returned every match unpaginated. Bound it so one broad query cannot
+# serialize tens of thousands of rows.
+SEARCH_RESULT_LIMIT = 500
+
+# Price lives in a free-text CharField, so range filtering has to parse each
+# value in Python. Cap how many rows that scan touches per request.
+PRICE_SCAN_LIMIT = 5000
+
 @api_view(["GET"])
 def event(request):
     event_id = request.GET.get("id")
@@ -128,6 +141,51 @@ def get_favorites(request):
     except Exception as e:
         logger.error(f"Error retrieving favorites: {e}")
         return ServerProcessingError(message="Error retrieving favorites: "+str(e))
+
+
+def _parse_price_bounds(condition, values):
+    """(low, high) for a price filter, or None if the input is unusable."""
+    try:
+        if condition == "between" and len(values) >= 2:
+            return float(values[0]), float(values[1])
+        if condition == "equal" and values:
+            exact = float(values[0])
+            return exact, exact
+    except (TypeError, ValueError):
+        return None
+    return None
+
+
+def _price_within(price_text, low, high):
+    """Is a free-text price inside [low, high]?
+
+    Prices are strings the extractor produced: "$200", "MXN 150", "150 pesos",
+    "Free", and tiered values like "$150, $200, $300". Matching only the FIRST
+    number misses tiers (599 of 4,267 non-empty production prices contain more
+    than one), so ANY number in range counts as a match.
+
+    "Free"/"no cover" is treated as 0. A free-text price is inherently fuzzy;
+    this errs toward including an event rather than hiding it, which is the
+    behaviour the ticket asks for.
+    """
+    import re
+
+    if price_text is None:
+        return False
+    text = str(price_text).strip()
+    if not text:
+        return False
+    if re.search(r'\b(free|gratis|no cover|sin costo|entrada libre)\b',
+                 text, re.IGNORECASE):
+        return low <= 0 <= high
+    numbers = re.findall(r'\d+(?:\.\d+)?', text.replace(',', ''))
+    for raw in numbers:
+        try:
+            if low <= float(raw) <= high:
+                return True
+        except ValueError:
+            continue
+    return False
 
 
 def convert_date_format(date_str):
@@ -512,31 +570,47 @@ def search_events(request):
         return MissingInformation()
 
     try:
-        venues = Venue.objects.filter(Q(address__icontains=query) | Q(
-            city__icontains=query) | Q(state__icontains=query) | Q(country__icontains=query)).all()
+        # venue NAME was previously not searched, only address/city/state/country.
+        # 6,738 venues have a name that does not appear in their address, so
+        # searching for those venues by name returned nothing.
+        venues = Venue.objects.filter(
+            Q(name__icontains=query) | Q(address__icontains=query)
+            | Q(city__icontains=query) | Q(state__icontains=query)
+            | Q(country__icontains=query))
 
-        try:
-            # Get current date and time
-            current_time = datetime.now()
-            # Calculate the cutoff time for events older than 48 hours
-            cutoff_time = current_time - EVENT_CUTOFF_TIME
+        current_time = datetime.now()
+        cutoff_date = (current_time - EVENT_CUTOFF_TIME).date()
+        # Undated events are kept only if they were scraped recently, so the
+        # backlog of old undated rows does not flood results.
+        undated_cutoff = current_time - timedelta(days=UNDATED_EVENT_WINDOW_DAYS)
 
-            cutoff_date = cutoff_time.date()
+        matches_text = (
+            Q(venue__in=venues) | Q(name__icontains=query)
+            | Q(artist__icontains=query) | Q(offering__icontains=query)
+            | Q(genres__icontains=query) | Q(opener__icontains=query)
+            | Q(host__icontains=query) | Q(promoter__icontains=query)
+            | Q(forLocation__icontains=query))
 
-            user_events = Event.objects.filter(
-                ((Q(venue__in=venues) | Q(name__icontains=query)) | Q(artist__icontains=query) | Q(offering__icontains=query) 
-                | Q(genres__icontains=query) | Q(opener__icontains=query) | Q(host__icontains=query))
-                & Q(start_date__gte=cutoff_date) 
-                & Q(is_duplicate=False)
-            ).order_by('-timestamp').all()
-        except:
-            user_events = []
+        # start_date IS NULL previously excluded the event outright, hiding
+        # 2,534 real events from search permanently. Include them when recent.
+        in_window = (Q(start_date__gte=cutoff_date)
+                     | (Q(start_date__isnull=True)
+                        & Q(created_at__gte=undated_cutoff)))
+
+        user_events = (Event.objects
+                       .filter(matches_text & in_window
+                               & Q(is_duplicate=False) & Q(suppressed=False)
+                               & Q(is_event=True))
+                       .select_related('venue', 'poster')
+                       .order_by('-timestamp')
+                       .distinct()[:SEARCH_RESULT_LIMIT])
 
         events_serializer = EventSerializer(user_events, many=True)
-
-        response_data = events_serializer.data
-        return Success(response_data, status=True)
-    except:
+        return Success(events_serializer.data, status=True)
+    except Exception as e:
+        # Was a bare `except: user_events = []`, which turned any query error
+        # into a silent "no results" and made real failures undiagnosable.
+        logger.error(f"Error searching events for {query!r}: {e}")
         return ServerProcessingError()
 
 
@@ -633,132 +707,115 @@ def filter_events(request):
     except:
         return InvalidParameters()
 
-    POSSIBLE_FILTER_TYPES = ["date", "price", "artist", "location"]
+    POSSIBLE_FILTER_TYPES = ["date", "price", "artist", "location", "account"]
 
     try:
-        response_data = []
-
-        # Get current date and time
         current_time = datetime.now()
-        # Calculate the cutoff time for events older than 48 hours
-        cutoff_time = current_time - EVENT_CUTOFF_TIME
+        cutoff_date = (current_time - EVENT_CUTOFF_TIME).date()
 
-        cutoff_date = cutoff_time.date()
+        # Base scope: upcoming, visible events. The date cutoff belongs here,
+        # not inside the date branch — otherwise a price/artist/location filter
+        # searches the whole 53k-row history instead of upcoming events.
+        queryset = (Event.objects
+                    .filter(is_duplicate=False, suppressed=False)
+                    .filter(start_date__gte=cutoff_date))
 
-        for filter in filters:
-            _type = filter.get("type")
-            condition = filter.get("condition")
-            values = filter.get("values")
+        # The UI attaches a conjugation ("and"/"or") to each filter. It was
+        # ignored, so an "Or" combination silently returned the intersection.
+        # AND-filters narrow the queryset; OR-filters accumulate into one Q.
+        or_q = Q()
+        has_or = False
+        price_bounds = []          # evaluated last; needs Python-side parsing
+        applied = 0
 
-            logger.debug("Running for filter: "+str(_type)+"\n\n\n\n")
+        for _filter in filters:
+            _type = _filter.get("type")
+            condition = _filter.get("condition")
+            values = _filter.get("values") or []
+            use_or = str(_filter.get("conjugation") or "and").lower() == "or"
 
+            # An unrecognised type (the admin UI also offers "run") must not
+            # silently pass through, or the response would be an unfiltered
+            # page of events reported as success.
             if _type not in POSSIBLE_FILTER_TYPES:
                 continue
 
-            filtered_events = []
-
+            clause = None
             if _type == "date":
-                if condition == "between":
+                if condition == "between" and len(values) >= 2:
                     try:
-                        intial_date = datetime.strptime(
-                            values[0], '%m/%d/%Y').date()
-                        final_date = datetime.strptime(
-                            values[1], '%m/%d/%Y').date()
-                    except:
+                        start = datetime.strptime(values[0], '%m/%d/%Y').date()
+                        end = datetime.strptime(values[1], '%m/%d/%Y').date()
+                    except (ValueError, TypeError):
                         return InvalidParameters()
-
-                    filtered_events = Event.objects.filter(
-                        start_date__range=[intial_date, final_date],
-                        start_date__gte=cutoff_date,
-                        is_duplicate=False
-                    )
-
-                if condition == "equal":
+                    clause = Q(start_date__range=[start, end])
+                elif condition == "equal" and values:
                     try:
-                        date = datetime.strptime(values[0], '%m/%d/%Y').date()
-                    except:
+                        day = datetime.strptime(values[0], '%m/%d/%Y').date()
+                    except (ValueError, TypeError):
                         return InvalidParameters()
-                    filtered_events = Event.objects.filter(
-                        start_date__date=date,
-                        start_date__gte=cutoff_date,
-                        is_duplicate=False
-                    ).all()
+                    clause = Q(start_date__date=day)
+                else:
+                    # Malformed date filter: reject rather than quietly
+                    # returning everything.
+                    return InvalidParameters()
 
-            if _type == "price":
-                if condition == "between":
-                    try:
-                        initial_price = int(float(values[0]))
-                        final_price = int(float(values[1]))
-                    except:
-                        return InvalidParameters()
+            elif _type == "price":
+                bounds = _parse_price_bounds(condition, values)
+                if bounds is None:
+                    return InvalidParameters()
+                price_bounds.append((bounds, use_or))
+                applied += 1
+                continue
 
-                    #TODO: migrate price to be float instead of string
-                    prices = []
-                    current_price = initial_price
-                    while current_price <= final_price:
-                        prices.append(str(current_price))
-                        
-                        prices.append(str(current_price + 0.5))
-                        
-                        prices.append(str(current_price + 0.99))
-                    
-                        current_price += 1
+            elif _type == "artist":
+                if condition != "equal" or not values:
+                    return InvalidParameters()
+                clause = Q(artist__icontains=str(values[0]))
 
-                    filtered_events = Event.objects.filter(
-                        price__in=prices,
-                        start_date__gte=cutoff_date,
-                        is_duplicate=False
-                    )
+            elif _type == "location":
+                if condition != "equal" or not values:
+                    return InvalidParameters()
+                location = str(values[0])
+                clause = (Q(venue__address__icontains=location)
+                          | Q(venue__name__icontains=location)
+                          | Q(venue__city__icontains=location)
+                          | Q(forLocation__icontains=location))
 
-                if condition == "equal":
-                    try:
-                        price = int(float(values[0]))
-                    except:
-                        return InvalidParameters()
+            elif _type == "account":
+                if condition != "equal" or not values:
+                    return InvalidParameters()
+                clause = Q(poster__user__in=[str(v) for v in values])
 
-                    filtered_events = Event.objects.filter(
-                        price=str(price),
-                        start_date__gte=cutoff_date,
-                        is_duplicate=False
-                    ).all()
+            if clause is None:
+                continue
+            applied += 1
+            if use_or:
+                or_q |= clause
+                has_or = True
+            else:
+                queryset = queryset.filter(clause)
 
-            if _type == "artist":
-                if condition == "equal":
-                    try:
-                        artist = str(values[0])
-                    except:
-                        return InvalidParameters()
+        if not applied:
+            # Nothing recognised: return no results rather than a page of
+            # arbitrary events labelled "success".
+            return Success([], status=True)
 
-                    logger.debug("Running for artist filter: "+str(artist)+"\n\n\n\n")
+        if has_or:
+            queryset = queryset.filter(or_q)
 
-                    filtered_events = Event.objects.filter(
-                        artist__startswith=artist,
-                        start_date__gte=cutoff_date,
-                        is_duplicate=False
-                    ).all()
+        # Price is applied last and only to the already-narrowed set, because it
+        # needs Python-side parsing of a free-text field.
+        for (low, high), use_or in price_bounds:
+            ids = [e.id for e in queryset.only('id', 'price')[:PRICE_SCAN_LIMIT]
+                   if _price_within(e.price, low, high)]
+            queryset = queryset.filter(id__in=ids)
 
-            if _type == "location":
-                if condition == "equal":
-                    try:
-                        location = str(values[0])
-                    except:
-                        return InvalidParameters()
-
-                    filtered_venues = Venue.objects.filter(address__startswith=location).all()
-
-                    for venue in filtered_venues:
-                        filtered_events += Event.objects.filter(
-                            venue=venue,
-                            start_date__gte=cutoff_date,
-                            is_duplicate=False
-                        ).all()
-
-        events_serializer = EventSerializer(filtered_events, many=True)
-        response_data = events_serializer.data
-
-        return Success(response_data, status=True)
+        events = (queryset.select_related('venue', 'poster')
+                  .order_by('-timestamp').distinct()[:SEARCH_RESULT_LIMIT])
+        return Success(EventSerializer(events, many=True).data, status=True)
     except Exception as e:
-        logger.debug("An error occurred during event filtering : "+str(e)+"\n\n\n\n")
+        logger.error(f"An error occurred during event filtering: {e}")
         return ServerProcessingError()
 
 
