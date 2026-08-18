@@ -2224,7 +2224,6 @@ def clean_label_and_save(account: str, exec_id: str, output_file_path: str, imag
     timestamp = timezone.now()
     events = []
     # Change from a set to a dictionary that maps event properties to their index in the events list
-    seen_events_dict = {}
     
     # Track events by their image link to identify duplicates
     events_by_link = {}
@@ -2511,33 +2510,21 @@ def clean_label_and_save(account: str, exec_id: str, output_file_path: str, imag
                                 newEvent.get("is_duplicate"),
                             )
                         
-                        # Also check for similar events based on properties
-                        event_key = (newEvent["name"], newEvent["venue"]["address"], newEvent["startDate"], newEvent["artist"])
-                        match_found = False
-                        
-                        for seen_key in seen_events_dict:
-                            if is_similar(event_key, seen_key):
-                                match_found = True
-                                # Mark as duplicate if it's similar to another event by properties
-                                if not newEvent["is_duplicate"] and newEvent["isEvent"] and hasEnoughData:
-                                    newEvent["is_duplicate"] = True
-                                    # Use the index stored in the dictionary to get the original event's link
-                                    original_event_index = seen_events_dict[seen_key]
-                                    newEvent["duplicate_link"] = events[original_event_index]["orig_link"]
-                                    log_step_progressed(f"Marking as duplicate of similar event: {filename}")
-                                break
-                        
-                        if not match_found and newEvent["isEvent"] and hasEnoughData and not newEvent["is_duplicate"]:
-                            # Store the index of this event in the events list along with its key
-                            seen_events_dict[event_key] = len(events)
-
-                    # Then check for duplicates in database
-                    if not newEvent["is_duplicate"]:
-                        is_db_duplicate, duplicate_id = is_event_duplicate_in_db(newEvent)
-                        if is_db_duplicate:
-                            newEvent["is_duplicate"] = True
-                            newEvent["duplicate_link"] = f"database_event_{duplicate_id}"
-                            log_step_progressed(f"!Marking as duplicate of existing database event: {filename}")
+                        # NOTE (Ticket 1): the old inline duplicate flagging that
+                        # lived here is intentionally disabled. It used is_similar
+                        # — OR-logic over four loose thresholds (name/address/
+                        # artist >= 40, date >= 90) — which over-flagged real
+                        # events, and is_event_duplicate_in_db, which read a
+                        # non-existent Event.address and always failed. Because
+                        # flagging happened at ingest with no review, wrongly
+                        # hidden events had no recovery path.
+                        #
+                        # Duplicate handling now lives in the review pipeline:
+                        # the `detect_duplicates` command surfaces exact re-scrape
+                        # and fuzzy cross-post pairs as EventMatch rows, and the
+                        # owner confirms each on /admin/duplicates. Ingest saves
+                        # events un-suppressed; source_key upsert already prevents
+                        # re-scrape duplicates.
 
                     # Always add the event to the list (whether it's a duplicate or not)
                     events.append(newEvent)

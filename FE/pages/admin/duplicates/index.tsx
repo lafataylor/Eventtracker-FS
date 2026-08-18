@@ -11,6 +11,8 @@ import {
   requestMiddleware,
   readEventMatches,
   resolveEventMatch,
+  readAdminDuplicates,
+  recoverDuplicate,
 } from '../../../services/lib/admin';
 import { HIDE_INFO_OVERLAY, SHOW_INFO_OVERLAY } from '../../../store/actions/type';
 import { Event } from '../../../interface/objects/simpleObject';
@@ -23,6 +25,8 @@ interface Match {
   event_b: Event;
 }
 
+type ViewMode = 'pairs' | 'flagged';
+
 const MATCH_LABEL: Record<string, string> = {
   fuzzy: 'Similar event',
   exact_link: 'Same Instagram post',
@@ -34,8 +38,14 @@ const Index = () => {
   const { loader, actionDialog, auth } = state;
   const { overlay } = auth;
 
+  const [view, setView] = useState<ViewMode>('pairs');
   const [matches, setMatches] = useState<Match[]>([]);
   const [pendingTotal, setPendingTotal] = useState(0);
+  // "Previously flagged": single events the OLD scraper hid via is_duplicate
+  // before that auto-flagging was retired. Kept as a recovery path so an event
+  // wrongly hidden by the old logic can be restored (the new pairs view only
+  // covers EventMatch rows, which the old scraper never created).
+  const [flagged, setFlagged] = useState<Event[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState(false);
   // A set, not a scalar: resolving two cards at once must keep both disabled
@@ -44,6 +54,43 @@ const Index = () => {
 
   const notify = (message: string, isError = false) =>
     dispatch({ type: SHOW_INFO_OVERLAY, payload: { message, isError } });
+
+  const fetchFlagged = async () => {
+    if (!(await requestMiddleware(dispatch))) return;
+    setIsLoading(true);
+    setLoadError(false);
+    try {
+      const res = await readAdminDuplicates();
+      if (res.status === 200) {
+        setFlagged(res.data?.duplicate_events || []);
+      } else {
+        setLoadError(true);
+      }
+    } catch (error) {
+      setLoadError(true);
+      notify((error as string) || 'Error loading flagged events', true);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const restore = async (eventId: number) => {
+    if (!(await requestMiddleware(dispatch))) return;
+    setBusyIds((prev) => new Set(prev).add(eventId));
+    try {
+      await recoverDuplicate(String(eventId));
+      setFlagged((prev) => prev.filter((e) => e.id !== eventId));
+      notify('Event restored to the site.', false);
+    } catch (error) {
+      notify('Could not restore the event. Please try again.', true);
+    } finally {
+      setBusyIds((prev) => {
+        const next = new Set(prev);
+        next.delete(eventId);
+        return next;
+      });
+    }
+  };
 
   const fetchMatches = async () => {
     if (!(await requestMiddleware(dispatch))) return;
@@ -69,18 +116,23 @@ const Index = () => {
   };
 
   useEffect(() => {
-    fetchMatches();
-  }, []);
+    // Clear any in-flight busy state from the other view so a stale id can't
+    // disable a button here (the two views key busy state on different ids).
+    setBusyIds(new Set());
+    if (view === 'pairs') fetchMatches();
+    else fetchFlagged();
+  }, [view]);
 
   // Refetch the next page when the current batch of 50 empties but more remain
   // server-side. Done as an effect on committed state (not inside resolve)
   // so concurrent resolutions can't read a stale snapshot and show a false
   // "all caught up".
   useEffect(() => {
-    if (!isLoading && !loadError && matches.length === 0 && pendingTotal > 0) {
+    if (view === 'pairs' && !isLoading && !loadError
+        && matches.length === 0 && pendingTotal > 0) {
       fetchMatches();
     }
-  }, [matches.length, pendingTotal, isLoading, loadError]);
+  }, [view, matches.length, pendingTotal, isLoading, loadError]);
 
   const resolve = async (match: Match, action: 'keep_a' | 'keep_b' | 'not_duplicate') => {
     if (!(await requestMiddleware(dispatch))) return;
@@ -133,16 +185,33 @@ const Index = () => {
       <div className="px-8 pt-8 h-full flex flex-col w-full text-off-white overflow-x-auto">
         <nav className="border-b-4 border-beaming-orange flex justify-start items-center pb-3 gap-4">
           <div className="text-5xl font-bold px-3">Duplicates</div>
-          {!isLoading && (
+          {!isLoading && view === 'pairs' && (
             <div className="text-lg text-stone-gray self-end pb-1">
               {pendingTotal} pair{pendingTotal === 1 ? '' : 's'} to review
             </div>
           )}
         </nav>
 
+        <div className="flex gap-2 mt-4 px-3">
+          {(['pairs', 'flagged'] as ViewMode[]).map((v) => (
+            <button
+              key={v}
+              onClick={() => setView(v)}
+              className={`py-2 px-4 rounded-lg font-medium ${
+                view === v
+                  ? 'bg-beaming-orange text-black'
+                  : 'border border-stone-gray text-off-white'
+              }`}
+            >
+              {v === 'pairs' ? 'Duplicate pairs' : 'Previously flagged'}
+            </button>
+          ))}
+        </div>
+
         <p className="mt-4 px-3 text-stone-gray max-w-3xl">
-          These look like the same event posted twice. Compare them, then keep the
-          better one — the other is hidden from the site (and can be restored).
+          {view === 'pairs'
+            ? 'These look like the same event posted twice. Compare them, then keep the better one — the other is hidden from the site (and can be restored).'
+            : 'Events currently hidden as duplicates by the automatic scraper. If any is a real event that should be live, restore it.'}
         </p>
 
         <div className="flex-1 w-full overflow-y-auto py-8">
@@ -155,11 +224,38 @@ const Index = () => {
               <div className="text-xl">Couldn’t load duplicates.</div>
               <button
                 className="py-2 px-6 rounded-lg bg-beaming-orange text-black font-semibold"
-                onClick={fetchMatches}
+                onClick={() => (view === 'pairs' ? fetchMatches() : fetchFlagged())}
               >
                 Try again
               </button>
             </div>
+          ) : view === 'flagged' ? (
+            flagged.length === 0 ? (
+              <div className="w-full h-64 flex flex-col items-center justify-center gap-2">
+                <div className="text-2xl font-bold">Nothing flagged 🎉</div>
+                <div className="text-stone-gray">No previously-hidden events to review.</div>
+              </div>
+            ) : (
+              <div className="flex flex-wrap gap-6">
+                {flagged.map((event) => (
+                  <div
+                    key={`flagged-${event.id}`}
+                    className="p-4 bg-stone-gray bg-opacity-20 rounded-2xl flex flex-col items-center gap-3"
+                  >
+                    <div className="w-64">
+                      <EventCard event={event} disabled={false} isFavorite={false} />
+                    </div>
+                    <button
+                      className="py-2 px-4 w-64 rounded-lg bg-beaming-orange text-black font-semibold disabled:opacity-50"
+                      onClick={() => restore(event.id)}
+                      disabled={busyIds.has(event.id)}
+                    >
+                      Restore to site
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )
           ) : matches.length === 0 ? (
             <div className="w-full h-64 flex flex-col items-center justify-center gap-2">
               <div className="text-2xl font-bold">All caught up 🎉</div>

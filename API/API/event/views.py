@@ -915,20 +915,25 @@ def add_duplicate_label(request):
 
 @api_view(["GET"])
 def get_duplicate_events(request):
-    try:
-        # Get current date and time
-        current_time = datetime.now()
-        # Calculate the cutoff time for events older than 24 hours
-        cutoff_time = current_time - timedelta(hours=24)
-        cutoff_date = cutoff_time.date()
-        # Query events that are marked as duplicates and newer than the cutoff time
-        duplicate_events = Event.objects.filter(
-            is_duplicate=True,
-            start_date__gte=cutoff_date
-        ).order_by('-start_date')
+    """Events currently hidden as duplicates, for the recovery view.
 
+    Returns is_duplicate=True events that were flagged by automated logic
+    (suppressed=False), NOT the ones the owner confirmed through the pairs
+    review (those carry suppressed=True + a canonical and are excluded — the
+    owner already decided). No start_date floor: a wrongly-hidden event is
+    usually past-dated, so a 24h window would make most of them unrecoverable.
+    Ordered newest-flagged first and bounded.
+    """
+    try:
+        limit = min(int(request.GET.get("limit", 200)), 500)
+    except (TypeError, ValueError):
+        limit = 200
+    try:
+        duplicate_events = (Event.objects
+                            .filter(is_duplicate=True, suppressed=False)
+                            .select_related('venue', 'poster')
+                            .order_by('-created_at')[:limit])
         event_serializer = EventSerializer(duplicate_events, many=True)
-        
         return Success({"status": "success", "duplicate_events": event_serializer.data})
     except Exception as e:
         logger.error(f"Error retrieving duplicate events: {e}")
