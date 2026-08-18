@@ -179,8 +179,11 @@ def _price_within(price_text, low, high):
     # after" does not match on the "11" of "11pm" and "18+" is not read as $18:
     #   - clock times: 11pm, 10:30 PM
     #   - ages:        18+, 21 +
-    cleaned = re.sub(r'\d{1,2}(?::\d{2})?\s*(?:am|pm)\b', ' ', text, flags=re.IGNORECASE)
-    cleaned = re.sub(r'\d{1,2}\s*\+', ' ', cleaned)
+    cleaned = re.sub(r'\b\d{1,2}(?::\d{2})?\s*(?:am|pm)\b', ' ', text, flags=re.IGNORECASE)
+    # \b anchors are required: without them "MXN 250 + service fee" matched the
+    # "50 +" inside 250 and left "MXN 2", so a 250-peso event answered a $0-50
+    # filter.
+    cleaned = re.sub(r'\b\d{1,2}\s*\+', ' ', cleaned)
     # Check numeric tiers: a tiered price ("Free before 11pm, $150 after",
     # "$150, $200, $300") matches if ANY listed price is in range (599 of 4,267
     # production prices list more than one).
@@ -740,6 +743,7 @@ def filter_events(request):
         # ignored, so an "Or" combination silently returned the intersection.
         # AND-filters narrow the queryset; OR-filters accumulate into one Q.
         or_q = Q()
+        and_clauses = []
         has_or = False
         price_bounds = []          # evaluated last; needs Python-side parsing
         applied = 0
@@ -809,19 +813,31 @@ def filter_events(request):
             if clause is None:
                 continue
             applied += 1
+            and_clauses.append(clause)
             if use_or:
-                or_q |= clause
                 has_or = True
-            else:
-                queryset = queryset.filter(clause)
 
         if not applied:
             # Nothing recognised: return no results rather than a page of
             # arbitrary events labelled "success".
             return Success([], status=True)
 
+        # The UI only renders the conjugation dropdown from the SECOND filter
+        # onward, so filter 0 is always sent as "and". ANDing it before applying
+        # or_q made "Artist is A Or B" return the intersection (i.e. nothing).
+        # When any filter says OR, the whole set is unioned; otherwise ANDed.
         if has_or:
+            # Any "Or" makes the whole selection a union. The UI attaches the
+            # conjugation to filter N to join it to the ones before, and never
+            # offers the dropdown on filter 0 — so unioning only the OR-marked
+            # clauses dropped filter 0 entirely and "DJ One Or DJ Two" returned
+            # just DJ Two.
+            for clause in and_clauses:
+                or_q |= clause
             queryset = queryset.filter(or_q)
+        else:
+            for clause in and_clauses:
+                queryset = queryset.filter(clause)
 
         # Price is applied last and only to the already-narrowed set, because it
         # needs Python-side parsing of a free-text field. Cap the id list to the
@@ -880,10 +896,17 @@ def remove_duplicate_label(request):
         if not event:
             return EventNotFound()
             
-        # Set duplicate status to False
+        # Clear BOTH hiding mechanisms. The review flow sets suppressed +
+        # canonical alongside is_duplicate, so clearing is_duplicate alone left
+        # the event hidden from search/filter and made the UI's "you can
+        # restore it later" untrue.
         event.is_duplicate = False
-        event.save()
-        
+        event.duplicate_link = None
+        event.suppressed = False
+        event.canonical = None
+        event.save(update_fields=['is_duplicate', 'duplicate_link',
+                                  'suppressed', 'canonical'])
+
         return Success({"status": "success", "message": "Duplicate label removed from event."})
     except Exception as e:
         logger.error(f"Error removing duplicate label: {e}")
@@ -915,14 +938,15 @@ def add_duplicate_label(request):
 
 @api_view(["GET"])
 def get_duplicate_events(request):
-    """Events currently hidden as duplicates, for the recovery view.
+    """Every event currently hidden as a duplicate, for the recovery view.
 
-    Returns is_duplicate=True events that were flagged by automated logic
-    (suppressed=False), NOT the ones the owner confirmed through the pairs
-    review (those carry suppressed=True + a canonical and are excluded — the
-    owner already decided). No start_date floor: a wrongly-hidden event is
-    usually past-dated, so a 24h window would make most of them unrecoverable.
-    Ordered newest-flagged first and bounded.
+    Includes rows hidden by automated flagging AND by a confirmed pair review,
+    because the UI promises "you can restore it later" for both — excluding
+    suppressed rows left them with no way back. remove_duplicate_label clears
+    both flags, so anything listed here really is restorable.
+
+    No start_date floor: a wrongly-hidden event is usually past-dated, and a
+    24h window made most of them unreachable. Newest-flagged first, bounded.
     """
     try:
         limit = min(int(request.GET.get("limit", 200)), 500)
@@ -930,7 +954,7 @@ def get_duplicate_events(request):
         limit = 200
     try:
         duplicate_events = (Event.objects
-                            .filter(is_duplicate=True, suppressed=False)
+                            .filter(Q(is_duplicate=True) | Q(suppressed=True))
                             .select_related('venue', 'poster')
                             .order_by('-created_at')[:limit])
         event_serializer = EventSerializer(duplicate_events, many=True)

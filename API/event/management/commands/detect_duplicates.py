@@ -21,7 +21,8 @@ from django.db import transaction
 from django.db.models import Count
 
 from event.models import Event, EventMatch
-from event.dedupe import event_signature, find_fuzzy_pairs
+from event.dedupe import (event_signature, find_fuzzy_pairs,
+                          same_post_is_redundant)
 
 COMPLETENESS_FIELDS = ('name', 'artist', 'start_date', 'start_time', 'price',
                        'genres', 'ticket_link', 'orig_thumb', 'venue_id')
@@ -75,7 +76,7 @@ class Command(BaseCommand):
         self.stdout.write(f'[exact] {len(groups)} shortcode groups with duplicates '
                           f'(legacy rows only; source_key rows are left alone)')
 
-        suppressed = pairs = 0
+        suppressed = queued = pairs = 0
         for g in groups:
             rows = list(Event.objects.filter(
                 shortcode=g['shortcode'], suppressed=False,
@@ -83,10 +84,29 @@ class Command(BaseCommand):
             if len(rows) < 2:
                 continue
             canonical = max(rows, key=completeness)
+            canonical_sig = event_signature(canonical)
             for row in rows:
                 if row.id == canonical.id:
                     continue
                 lo, hi = sorted((canonical.id, row.id))
+
+                # Sharing a shortcode is NOT sufficient to auto-hide. Legacy
+                # carousel rows all carry the parent post URL as orig_link, so
+                # migration 0010 backfills every slide of a roundup to the same
+                # shortcode — collapsing blind would permanently suppress real,
+                # distinct events (317 rows on the production dataset).
+                # Auto-suppress only when the pair is also textually the same
+                # event; otherwise queue it for human review.
+                if not same_post_is_redundant(canonical_sig, event_signature(row)):
+                    if not dry:
+                        EventMatch.objects.get_or_create(
+                            event_a_id=lo, event_b_id=hi,
+                            defaults=dict(score=0.0, match_type='exact_link',
+                                          status='pending'))
+                    queued += 1
+                    pairs += 1
+                    continue
+
                 if not dry:
                     with transaction.atomic():
                         row.suppressed = True
@@ -104,8 +124,9 @@ class Command(BaseCommand):
                 pairs += 1
         verb = 'would suppress' if dry else 'suppressed'
         self.stdout.write(self.style.SUCCESS(
-            f'[exact] {verb} {suppressed} rows across {len(groups)} posts '
-            f'({pairs} EventMatch pairs)'))
+            f'[exact] {verb} {suppressed} rows across {len(groups)} posts; '
+            f'queued {queued} same-post pairs for review instead of hiding them '
+            f'({pairs} EventMatch pairs total)'))
 
     # --- pass 2: fuzzy cross-post duplicates ------------------------------
     def _fuzzy(self, dry, limit):

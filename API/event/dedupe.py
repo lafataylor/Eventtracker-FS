@@ -87,6 +87,27 @@ def score_pair(a, b):
     return weighted / total if total else 0.0
 
 
+def same_post_is_redundant(a, b):
+    """For two rows that share one Instagram post: is B a re-scrape of A?
+
+    Different question from score_pair, which compares events across posts and
+    needs a title to assert anything. Here the shared shortcode already says
+    "same post", so the only thing that can make them DISTINCT events is
+    positive evidence: two different titles, or two different dates (a roundup
+    carousel, or a recurring series). Absent that evidence they are the same
+    event scraped twice, which is what 23,355 of the production rows are.
+
+    Deliberately asymmetric: a false "distinct" only sends a pair to review,
+    while a false "redundant" hides a real event.
+    """
+    if a['name'] and b['name']:
+        if fuzz.token_set_ratio(a['name'], b['name']) < MIN_TITLE_SIM:
+            return False        # two different named events in one post
+    if a['date'] and b['date'] and abs((a['date'] - b['date']).days) > 1:
+        return False            # same post, different dates -> distinct dates
+    return True
+
+
 def find_fuzzy_pairs(signatures):
     """Yield (id_a, id_b, score) for cross-shortcode fuzzy duplicates.
 

@@ -201,6 +201,13 @@ def expand_recurring(events, max_occurrences=MAX_OCCURRENCES):
             except ValueError:
                 until = None
 
+        # A bad recurrence_until (before start_date) must not silently delete
+        # the event: every other failure branch above falls through to keeping
+        # it, and this one used to break at n=0 having appended nothing.
+        if until and until < start:
+            expanded.append(event)
+            continue
+
         for n in range(max_occurrences):
             occurrence = start + timedelta(days=step * n)
             if until and occurrence > until:

@@ -177,6 +177,16 @@ class CarouselIngestTests(TestCase):
         bad = mk_event(event_name="Weekly", start_date=None, recurrence="weekly")
         self.assertEqual(len(expand_recurring([bad])), 1)
 
+    def test_recurrence_until_before_start_keeps_the_event(self):
+        # A backwards recurrence_until used to break at n=0 having appended
+        # nothing, silently deleting the event instead of degrading to one.
+        from c_admin.extraction import expand_recurring
+        backwards = mk_event(event_name="Bad Range", start_date="09-10-2026",
+                             recurrence="weekly", recurrence_until="09-01-2026")
+        out = expand_recurring([backwards])
+        self.assertEqual(len(out), 1)
+        self.assertEqual(out[0].start_date, "09-10-2026")
+
     def test_rescrape_does_not_resurrect_owner_hidden_duplicate(self):
         # The owner hides a duplicate (is_duplicate/suppressed True). The nightly
         # scraper re-ingests the same source_key with is_duplicate=False. The
