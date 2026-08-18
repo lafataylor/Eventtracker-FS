@@ -48,3 +48,8 @@ API/ImagesFetcher/scraper/posters/
 *.sqlite3
 *.sqlite3-journal
 *.db
+
+# Databases must never be committed (a 548 MB prod copy nearly was)
+db.sqlite3
+*.db
+*.sqlite3
