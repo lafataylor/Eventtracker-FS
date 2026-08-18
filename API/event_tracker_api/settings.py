@@ -34,7 +34,13 @@ SECRET_KEY = os.getenv(
 API_VERSION = "v1"
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+# Defaults OFF. Production ran with DEBUG=True for two years, which (a) leaked
+# stack traces + settings on any error, (b) made Django accumulate every SQL
+# query in memory per long-lived gunicorn worker, and (c) logged every query
+# at DEBUG level into an unrotated file — the 16.5 GB log that filled the
+# disk on 2026-08-06 and stopped ingestion for 11 days.
+# Local dev opts in with DJANGO_DEBUG=True in .env (see LOCAL_SETUP.md).
+DEBUG = os.getenv('DJANGO_DEBUG', 'False').lower() in ('1', 'true', 'yes')
 
 ALLOWED_HOSTS = ['*']
 
@@ -124,22 +130,26 @@ AUTH_PASSWORD_VALIDATORS = [
 ]
 
 
+# The previous config was level DEBUG with maxBytes=1GB and backupCount=0.
+# backupCount=0 means RotatingFileHandler NEVER rotates (CPython's doRollover
+# only rolls when backupCount > 0), so the file grew without bound — 16.5 GB
+# in production. INFO + real rotation caps total logging at ~800 MB.
 LOGGING = {
     'version': 1,
     'disable_existing_loggers': False,
     'handlers': {
         'file': {
-            'level': 'DEBUG',
+            'level': os.getenv('DJANGO_LOG_LEVEL', 'INFO'),
             'class': 'logging.handlers.RotatingFileHandler',
             'filename': str(BASE_DIR / 'logs' / 'django.log'),
-            'maxBytes': 1024 * 1024 * 1024,  # 1 GB
-            'backupCount': 0,  # FIFO: only current file, drop old when full
+            'maxBytes': 200 * 1024 * 1024,  # 200 MB
+            'backupCount': 3,
         },
     },
     'loggers': {
         'django': {
             'handlers': ['file'],
-            'level': 'DEBUG',
+            'level': os.getenv('DJANGO_LOG_LEVEL', 'INFO'),
             'propagate': True,
         },
     },
