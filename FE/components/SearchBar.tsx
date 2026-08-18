@@ -23,6 +23,39 @@ interface SearchBarProps {
   forceShrink?: number;
 }
 
+/** Casefold and strip accents so "Café" matches "cafe" and "MÉXICO" matches
+ *  "mexico". The corpus is largely Spanish and German, and plain
+ *  toLowerCase().includes() misses every accented spelling. */
+const norm = (value?: string | null) =>
+  (value ?? '')
+    .normalize('NFKD')
+    .replace(/[̀-ͯ]/g, '')
+    .toLowerCase();
+
+/** Fields a local search looks at. Previously only name + venue.address, so
+ *  searching an artist, a genre, or a venue by NAME found nothing — the
+ *  "search misses events" complaint. Mirrors the server's search_events. */
+const eventMatchesTerm = (event: Event, term: string) => {
+  const q = norm(term);
+  if (!q) return true;
+  const venue: any = (event as any).venue ?? {};
+  return [
+    event.name,
+    (event as any).artist,
+    (event as any).opener,
+    (event as any).host,
+    (event as any).promoter,
+    (event as any).offering,
+    (event as any).genres,
+    (event as any).forLocation,
+    venue.name,
+    venue.address,
+    venue.city,
+    venue.state,
+    venue.country,
+  ].some((field) => norm(field as string).includes(q));
+};
+
 const SearchBar = ({
   isAccounts,
   allAccounts,
@@ -74,23 +107,26 @@ const SearchBar = ({
       // Use local filtering if available.
       if (isAccounts && allAccounts) {
         const filteredAccounts = allAccounts.filter((account) =>
-          account.user.toLowerCase().includes(searchTerm.toLowerCase())
+          norm(account.user).includes(norm(searchTerm))
         );
         setAccountsLoadedBySearch(filteredAccounts)(dispatch);
         setSearchLoading(false)(dispatch);
+        return;   // accounts search never falls through to the events API
       } else if (allEvents) {
         const filteredEvents = allEvents
-          .filter(
-            (event) =>
-              event.name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-              event.venue?.address
-                ?.toLowerCase()
-                .includes(searchTerm.toLowerCase())
-          )
+          .filter((event) => eventMatchesTerm(event, searchTerm))
           .sort((a: Event, b: Event) => new Date(a.start_date).getTime() - new Date(b.start_date).getTime());
-        setEventsLoadedBySearch(filteredEvents, searchTerm)(dispatch);
-        setSearchLoading(false)(dispatch);
-      } else {
+        // Local matching only sees the events already loaded for this view. If
+        // it finds nothing, fall through to the server so the user still gets
+        // the full catalogue (the API also searches artist/genre/venue name and
+        // reaches events outside the loaded window).
+        if (filteredEvents.length > 0) {
+          setEventsLoadedBySearch(filteredEvents, searchTerm)(dispatch);
+          setSearchLoading(false)(dispatch);
+          return;
+        }
+      }
+      {
         // Fire the API call.
         EventService.getEventsBySearchTerm({
           query: searchTerm,
