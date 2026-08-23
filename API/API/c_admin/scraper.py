@@ -2219,7 +2219,140 @@ def forced_label_and_save(account: str, exec_id: str, output_file_path: str, ima
         logger.debug("\n Events not persisted appropriately: "+str(e))
         raise e
 
+# Ticket 2: post-level extraction for the NIGHTLY path.
+#
+# clean_label_and_save labels one image at a time, so a slide listing several
+# events collapses into one and one event spread across slides can become
+# several. This variant groups a post's slides back together and runs the same
+# structured-output extraction the manual add-by-URL path uses, which returns
+# an ARRAY of events plus a post_type classification.
+#
+# Gated OFF by default. The nightly run is the site's only source of events, so
+# this ships dark and is enabled with STRUCTURED_BATCH_EXTRACTION=True only
+# after validation against real posts.
+STRUCTURED_BATCH_EXTRACTION = os.getenv(
+    'STRUCTURED_BATCH_EXTRACTION', 'False').lower() in ('1', 'true', 'yes')
+
+
+def clean_label_and_save_structured(account: str, exec_id: str, output_file_path: str,
+                                    images_to_upload: dict, headers: dict,
+                                    for_location: str = None):
+    """One extraction per POST instead of per image. Returns events saved."""
+    from .extraction import extract_events
+    from .post_ingest import build_payloads, group_slides_by_post
+
+    user = account
+    per_account = (images_to_upload or {}).get('users', {}).get(account, {}) or {}
+    posts = group_slides_by_post(dict(per_account))
+    log_step_progressed(
+        f"[STRUCTURED] {account}: {len(per_account)} images -> {len(posts)} posts")
+
+    events = []
+    for shortcode, slides in posts.items():
+        try:
+            post_link = None
+            hosted_urls = []
+            real_slides = []          # real slide index per hosted url
+            for filename, image, slide in slides:
+                post_link = post_link or image.get('link')
+                if is_link_blacklisted(image.get('link')):
+                    continue
+                hosted = saveImage(exec_id, user, filename, image.get('path'),
+                                   image.get('link'))
+                # saveImage returns the response BODY, which is truthy even for
+                # an error page. Only accept something that looks like a URL,
+                # or we would send an error string to the vision API as an
+                # image and lose the whole post.
+                if isinstance(hosted, str) and hosted.strip().startswith('http'):
+                    hosted_urls.append(hosted.strip())
+                    real_slides.append(slide)
+                else:
+                    logger.warning("[STRUCTURED] upload failed for %s (%r)",
+                                   filename, str(hosted)[:120])
+
+            if not hosted_urls:
+                log_step_progressed(f"[STRUCTURED] no usable slides for {shortcode}")
+                continue
+
+            caption, biography, external_url = _post_context(output_file_path, slides)
+
+            extraction = extract_events(
+                client, hosted_urls, caption=caption, biography=biography,
+                external_url=external_url)
+            if extraction is None:
+                log_step_failed(f"[STRUCTURED] extraction returned nothing for {shortcode}")
+                continue
+
+            payloads = build_payloads(
+                extraction, shortcode=shortcode,
+                post_link=post_link or f"https://www.instagram.com/p/{shortcode}/",
+                slide_urls=hosted_urls, for_location=for_location, poster=account)
+
+            # The model indexes the images it was SHOWN. Blacklisted or failed
+            # slides are absent from that list, so translate back to the real
+            # slide number before it is persisted and folded into source_key —
+            # otherwise one flaky upload shifts every key and the next run
+            # inserts duplicates instead of updating.
+            for payload in payloads:
+                shown = payload.get('sourceSlideIndex')
+                if shown is not None and 0 <= shown < len(real_slides):
+                    payload['sourceSlideIndex'] = real_slides[shown]
+                payload['exec_id'] = exec_id
+
+            logger.info(
+                "[STRUCTURED] account=%r shortcode=%r slides=%d post_type=%r events=%d",
+                account, shortcode, len(hosted_urls), extraction.post_type, len(payloads))
+            # Keep non-event payloads too: the legacy path stored them, and a
+            # post with no row is never recorded as processed.
+            events.extend(payloads)
+        except Exception as exc:  # one bad post must not kill the account
+            log_step_failed(f"[STRUCTURED] {shortcode} failed: {exc}\n{traceback.format_exc()}")
+
+    if not events:
+        log_step_progressed(f"[STRUCTURED] no events to save for {account}")
+        # Still advance LastRun. The legacy path always did; skipping it means
+        # these posts are re-downloaded and re-billed to OpenAI every night.
+        update_last_run(account)
+        return 0
+    try:
+        saved = save_events(headers, {"events": events}, exec_id, [account])
+        update_last_run(account)
+        return saved
+    except Exception as exc:
+        logger.debug(f"[STRUCTURED] error saving events: {exc}")
+        update_last_run(account)
+        return 0
+
+
+def _post_context(output_file_path, slides):
+    """Caption / biography / external url for a post, from the scrape file."""
+    caption = biography = external_url = ""
+    try:
+        with open(output_file_path, "r") as handle:
+            images_data = json.loads(handle.read())
+        wanted = {filename for filename, _img, _s in slides}
+        for item in images_data:
+            if item.get("shortcode") in wanted:
+                caption = item.get("caption") or ""
+                biography = item.get("biography") or ""
+                external_url = item.get("externalUrl") or ""
+                break
+    except Exception as exc:
+        # The caption drives post_type classification and date resolution, so a
+        # missing scrape file degrades a whole night's extraction. Say so.
+        logger.warning("[STRUCTURED] could not read post context from %s: %s",
+                       output_file_path, exc)
+    return caption, biography, external_url
+
+
 def clean_label_and_save(account: str, exec_id: str, output_file_path: str, images_to_upload: list, headers: dict, for_location: str = None):
+    # Ticket 2: post-level extraction, off unless explicitly enabled. See
+    # clean_label_and_save_structured for why this ships dark.
+    if STRUCTURED_BATCH_EXTRACTION:
+        return clean_label_and_save_structured(
+            account, exec_id, output_file_path, images_to_upload, headers,
+            for_location)
+
     user = account
     timestamp = timezone.now()
     events = []

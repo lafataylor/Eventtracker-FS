@@ -208,3 +208,35 @@ def build_payloads(extraction, *, shortcode, post_link, slide_urls,
             poster=poster,
         ))
     return payloads
+
+
+def group_slides_by_post(images_for_account):
+    """Group an account's scraped images back into posts.
+
+    The batch scraper flattens a post's carousel into separate entries keyed
+    "{shortcode}__{idx}" and then labels each one independently — which is why
+    a slide listing several events collapses into one, and why one event shown
+    across several slides can become several events.
+
+    Grouping prefers the entry's `link`, which process_post sets to the real
+    parent post URL. Filename parsing is only the fallback: an Instagram
+    shortcode may itself end in "__<digits>" (the alphabet includes digits and
+    underscores), and splitting on that would merge two unrelated posts into a
+    single vision call.
+
+    Returns {shortcode: [(filename, image_dict, slide_index), ...]} with each
+    post's slides in slide order, so the caller can run ONE extraction over the
+    whole post the way the manual add-by-URL path does.
+    """
+    grouped = {}
+    for filename, image in (images_for_account or {}).items():
+        parsed, slide = split_child_shortcode(filename)
+        from_link = shortcode_from_url((image or {}).get('link'))
+        shortcode = from_link or parsed
+        if not shortcode:
+            continue
+        grouped.setdefault(shortcode, []).append((filename, image, slide))
+    for slides in grouped.values():
+        # None (single-image post) sorts before real slide indexes.
+        slides.sort(key=lambda entry: (entry[2] is not None, entry[2] or 0))
+    return grouped
