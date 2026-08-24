@@ -13,6 +13,7 @@ import {
   resolveEventMatch,
   readAdminDuplicates,
   recoverDuplicate,
+  deleteEvents,
 } from '../../../services/lib/admin';
 import { HIDE_INFO_OVERLAY, SHOW_INFO_OVERLAY } from '../../../store/actions/type';
 import { Event } from '../../../interface/objects/simpleObject';
@@ -83,6 +84,30 @@ const Index = () => {
       notify('Event restored to the site.', false);
     } catch (error) {
       notify('Could not restore the event. Please try again.', true);
+    } finally {
+      setBusyIds((prev) => {
+        const next = new Set(prev);
+        next.delete(eventId);
+        return next;
+      });
+    }
+  };
+
+  // The old duplicates page let the owner permanently delete junk (spam or
+  // broken rows that should never go live). Restore-only left those with no
+  // exit: past-dated rows never appear on /admin/events either.
+  const removeForever = async (eventId: number) => {
+    if (!window.confirm('Delete this event permanently? This cannot be undone.')) {
+      return;
+    }
+    if (!(await requestMiddleware(dispatch))) return;
+    setBusyIds((prev) => new Set(prev).add(eventId));
+    try {
+      await deleteEvents({ events: [String(eventId)] });
+      setFlagged((prev) => prev.filter((e) => e.id !== eventId));
+      notify('Event deleted.', false);
+    } catch (error) {
+      notify('Could not delete the event. Please try again.', true);
     } finally {
       setBusyIds((prev) => {
         const next = new Set(prev);
@@ -251,6 +276,13 @@ const Index = () => {
                       disabled={busyIds.has(event.id)}
                     >
                       Restore to site
+                    </button>
+                    <button
+                      className="py-2 px-4 w-64 rounded-lg border border-stone-gray text-off-white hover:border-red-500 hover:text-red-400 disabled:opacity-50"
+                      onClick={() => removeForever(event.id)}
+                      disabled={busyIds.has(event.id)}
+                    >
+                      Delete permanently
                     </button>
                   </div>
                 ))}
