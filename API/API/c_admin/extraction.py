@@ -182,10 +182,12 @@ def expand_recurring(events, max_occurrences=MAX_OCCURRENCES):
     """
     from datetime import datetime, timedelta
 
+    from dateutil.relativedelta import relativedelta
+
     expanded = []
     for event in events:
-        step = RECURRENCE_STEPS.get((event.recurrence or '').lower())
-        if not step or not event.start_date:
+        recurrence = (event.recurrence or '').lower()
+        if recurrence not in RECURRENCE_STEPS or not event.start_date:
             expanded.append(event)
             continue
         try:
@@ -193,6 +195,15 @@ def expand_recurring(events, max_occurrences=MAX_OCCURRENCES):
         except ValueError:
             expanded.append(event)
             continue
+
+        # A cross-midnight event carries a real end_date; each occurrence keeps
+        # the same start->end span rather than discarding it.
+        end_delta = None
+        if event.end_date:
+            try:
+                end_delta = datetime.strptime(event.end_date, '%m-%d-%Y') - start
+            except ValueError:
+                end_delta = None
 
         until = None
         if event.recurrence_until:
@@ -209,14 +220,18 @@ def expand_recurring(events, max_occurrences=MAX_OCCURRENCES):
             continue
 
         for n in range(max_occurrences):
-            occurrence = start + timedelta(days=step * n)
+            if recurrence == 'monthly':
+                # Calendar months, not 30-day hops: a Jan 31 series must not
+                # drift to Mar 2 / Apr 1. relativedelta clamps to month end.
+                occurrence = start + relativedelta(months=n)
+            else:
+                occurrence = start + timedelta(days=RECURRENCE_STEPS[recurrence] * n)
             if until and occurrence > until:
                 break
-            # Each occurrence is its own event, dated to that day. Only
-            # start_date changes; everything else is copied.
             expanded.append(event.model_copy(update={
                 'start_date': occurrence.strftime('%m-%d-%Y'),
-                'end_date': None,
+                'end_date': ((occurrence + end_delta).strftime('%m-%d-%Y')
+                             if end_delta is not None else None),
             }))
     return expanded
 
@@ -284,6 +299,9 @@ def to_api_payload(event: ExtractedEvent, *, shortcode, slide_index, ordinal,
         "orig_thumb": image_url,
         "shortcode": shortcode,
         "sourceSlideIndex": slide,
+        # Part of source_key. Assigned at build time (per slide, pre-filter) so
+        # both ingestion paths derive identical keys for the same event.
+        "sourceOrdinal": ordinal,
         "forLocation": for_location,
         "poster": poster,
     }

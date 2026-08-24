@@ -157,16 +157,24 @@ def mirror_slides(urls, *, exec_id, user, output_file_path, downloader, uploader
     import uuid
     run_id = uuid.uuid4().hex[:8]
 
-    durable, originals = [], []
+    durable, real_indexes = [], []
     for index, url in enumerate(urls[:limit]):
         local_path = f"/tmp/{output_file_path}_{run_id}_{index}.jpg"
         try:
             downloader(url, local_path)
             hosted = uploader(exec_id, user, f"{output_file_path}_{run_id}_{index}",
                               local_path, url)
-            if hosted:
-                durable.append(hosted)
-                originals.append(url)
+            # The uploader returns the HTTP response BODY, which is truthy even
+            # for an error page — accept only something URL-shaped, or an error
+            # string gets sent to the vision API as an image / stored as
+            # orig_thumb.
+            if isinstance(hosted, str) and hosted.strip().startswith('http'):
+                durable.append(hosted.strip())
+                real_indexes.append(index)
+            else:
+                logger.warning("[CAROUSEL] upload for slide %s of %s returned "
+                               "non-URL (%r)", index, output_file_path,
+                               str(hosted)[:120])
         except Exception as exc:  # noqa: BLE001 — one bad slide must not kill the post
             logger.warning("[CAROUSEL] slide %s mirror failed for %s: %s",
                            index, output_file_path, exc)
@@ -176,7 +184,10 @@ def mirror_slides(urls, *, exec_id, user, output_file_path, downloader, uploader
                     os.remove(local_path)
             except OSError:
                 pass
-    return durable, originals
+    # real_indexes[i] is the ORIGINAL slide number of durable[i]. Callers must
+    # remap the model's shown-index back through it before persisting, or a
+    # single failed slide shifts every source_key and re-ingest duplicates.
+    return durable, real_indexes
 
 
 def build_payloads(extraction, *, shortcode, post_link, slide_urls,
@@ -190,9 +201,20 @@ def build_payloads(extraction, *, shortcode, post_link, slide_urls,
     from .extraction import expand_recurring, to_api_payload
 
     # Recurring series become one event per date (product owner's requirement).
+    #
+    # The ordinal is assigned HERE, per slide, before any caller filters the
+    # list. It is part of source_key ({shortcode}__{slide}__{ordinal}), so it
+    # must be identical no matter which path ingests the post — the manual
+    # path drops non-event payloads before POSTing while the nightly path
+    # keeps them, and a server-side arrival-order counter would give the same
+    # event two different keys across those paths.
     payloads = []
-    for ordinal, event in enumerate(expand_recurring(extraction.events)):
+    per_slide_counter = {}
+    for event in expand_recurring(extraction.events):
         slide = event.source_slide_index
+        slide_key = 0 if slide is None else int(slide)
+        ordinal = per_slide_counter.get(slide_key, 0)
+        per_slide_counter[slide_key] = ordinal + 1
         if slide is not None and 0 <= slide < len(slide_urls):
             image_url = slide_urls[slide]
         else:

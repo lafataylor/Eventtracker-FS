@@ -120,7 +120,10 @@ const SearchBar = ({
         // it finds nothing, fall through to the server so the user still gets
         // the full catalogue (the API also searches artist/genre/venue name and
         // reaches events outside the loaded window).
-        if (filteredEvents.length > 0) {
+        if (filteredEvents.length > 0 || searchTerm.trim().length < 3) {
+          // Short terms stay local: falling through to the server on every
+          // debounced keystroke would fire the API's most expensive query
+          // once per character typed.
           setEventsLoadedBySearch(filteredEvents, searchTerm)(dispatch);
           setSearchLoading(false)(dispatch);
           return;
@@ -138,6 +141,11 @@ const SearchBar = ({
               if (res.status === 200 && res.data.status === 'success') {
                 const sortedEvents = res.data.data.sort((a: Event, b: Event) => new Date(a.start_date).getTime() - new Date(b.start_date).getTime());
                 const filteredEvents = sortedEvents.filter((event: Event) => {
+                  // Undated events must pass: the API deliberately returns
+                  // recent events with no extracted date (2,534 in prod), and
+                  // new Date(null) is epoch 0, which a >= yesterday check
+                  // silently drops - re-hiding what the backend fix surfaced.
+                  if (!event.start_date) return true;
                   const eventDate = new Date(event.start_date).getTime();
                   const yesterday = new Date();
                   yesterday.setDate(yesterday.getDate() - 1);

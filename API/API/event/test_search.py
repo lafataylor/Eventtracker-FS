@@ -125,12 +125,15 @@ class SearchVisibilityTests(TestCase):
         self.by_venue.is_duplicate = True
         self.by_venue.save(update_fields=['suppressed', 'is_duplicate'])
 
-        # These two endpoints sit behind the auth middleware.
-        import jwt
+        # These two endpoints sit behind the auth middleware. Mint the token
+        # through the app's own helper so the signing key lives in exactly one
+        # place (c_auth.authentication) and key rotation can't strand a copy
+        # here.
+        from c_auth.authentication import create_jwt_token
         from c_auth.models import User
         user = User.objects.create(email='t@t.co', password='x')
-        auth = {'HTTP_AUTHORIZATION': 'Token ' + jwt.encode({'id': user.id}, 'secret',
-                                                            algorithm='HS256')}
+        token, _refresh = create_jwt_token(user.id, 60)
+        auth = {'HTTP_AUTHORIZATION': 'Token ' + token}
 
         listed = self.client.get('/v1/event/getDuplicateEvents/', **auth)
         ids = [e['id'] for e in listed.json()['duplicate_events']]

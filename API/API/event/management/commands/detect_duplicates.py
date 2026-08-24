@@ -109,6 +109,17 @@ class Command(BaseCommand):
 
                 if not dry:
                     with transaction.atomic():
+                        # get_or_create, NOT update_or_create: if this pair was
+                        # already processed once, a re-run must not redo it —
+                        # the owner may have restored the event via the
+                        # "Previously flagged" tab, and re-suppressing it would
+                        # silently erase that decision.
+                        match, was_new = EventMatch.objects.get_or_create(
+                            event_a_id=lo, event_b_id=hi,
+                            defaults=dict(score=100.0, match_type='exact_link',
+                                          status='confirmed'))
+                        if not was_new:
+                            continue
                         row.suppressed = True
                         row.canonical = canonical
                         # Also set is_duplicate so existing read paths hide it.
@@ -116,10 +127,6 @@ class Command(BaseCommand):
                         row.duplicate_link = canonical.orig_link or f"event_{canonical.id}"
                         row.save(update_fields=['suppressed', 'canonical',
                                                 'is_duplicate', 'duplicate_link'])
-                        EventMatch.objects.update_or_create(
-                            event_a_id=lo, event_b_id=hi,
-                            defaults=dict(score=100.0, match_type='exact_link',
-                                          status='confirmed'))
                 suppressed += 1
                 pairs += 1
         verb = 'would suppress' if dry else 'suppressed'

@@ -502,6 +502,18 @@ def create_event_from_instagram_link(request):
             extraction, shortcode=shortcode, post_link=instagram_url,
             slide_urls=hosted_urls, for_location=for_location,
             poster=owner_username)
+
+        # The model indexes the images it was SHOWN; a slide that failed to
+        # mirror is absent from that list. Translate back to real slide
+        # numbers before they land in source_key, or a transient CDN failure
+        # shifts every key and the next ingest of this post inserts
+        # duplicates. (Ordinals are already assigned in build_payloads, so
+        # filtering non-events below cannot shift keys.)
+        for payload in payloads:
+            shown = payload.get('sourceSlideIndex')
+            if shown is not None and 0 <= shown < len(real_slide_indexes):
+                payload['sourceSlideIndex'] = real_slide_indexes[shown]
+
         payloads = [p for p in payloads if p.get("isEvent")]
 
         logger.info("[CAROUSEL_MANUAL] shortcode=%r post_type=%s extracted=%d kept=%d",

@@ -2247,7 +2247,11 @@ def clean_label_and_save_structured(account: str, exec_id: str, output_file_path
     log_step_progressed(
         f"[STRUCTURED] {account}: {len(per_account)} images -> {len(posts)} posts")
 
+    # Parse the account scrape file ONCE; the loop below only does dict lookups.
+    context_by_shortcode = _load_post_contexts(output_file_path)
+
     events = []
+    processed_links = []
     for shortcode, slides in posts.items():
         try:
             post_link = None
@@ -2274,14 +2278,12 @@ def clean_label_and_save_structured(account: str, exec_id: str, output_file_path
                 log_step_progressed(f"[STRUCTURED] no usable slides for {shortcode}")
                 continue
 
-            caption, biography, external_url = _post_context(output_file_path, slides)
+            caption, biography, external_url = context_by_shortcode.get(
+                shortcode, ("", "", ""))
 
             extraction = extract_events(
                 client, hosted_urls, caption=caption, biography=biography,
                 external_url=external_url)
-            if extraction is None:
-                log_step_failed(f"[STRUCTURED] extraction returned nothing for {shortcode}")
-                continue
 
             payloads = build_payloads(
                 extraction, shortcode=shortcode,
@@ -2305,44 +2307,66 @@ def clean_label_and_save_structured(account: str, exec_id: str, output_file_path
             # Keep non-event payloads too: the legacy path stored them, and a
             # post with no row is never recorded as processed.
             events.extend(payloads)
+            if post_link:
+                processed_links.append(post_link)
         except Exception as exc:  # one bad post must not kill the account
             log_step_failed(f"[STRUCTURED] {shortcode} failed: {exc}\n{traceback.format_exc()}")
 
     if not events:
         log_step_progressed(f"[STRUCTURED] no events to save for {account}")
-        # Still advance LastRun. The legacy path always did; skipping it means
-        # these posts are re-downloaded and re-billed to OpenAI every night.
+        # A successfully-processed-but-empty night still advances LastRun; the
+        # legacy path always did, and skipping it re-downloads and re-bills the
+        # same posts to OpenAI every night.
         update_last_run(account)
         return 0
     try:
         saved = save_events(headers, {"events": events}, exec_id, [account])
-        update_last_run(account)
-        return saved
     except Exception as exc:
-        logger.debug(f"[STRUCTURED] error saving events: {exc}")
-        update_last_run(account)
+        # Save FAILED: do NOT advance LastRun and do NOT mark the posts as
+        # processed — the legacy path retried these next night, and advancing
+        # here would silently lose the whole night with no retry.
+        logger.error(f"[STRUCTURED] error saving events for {account}: {exc}")
         return 0
 
+    update_last_run(account)
+    # Mark posts processed in the same ledger the legacy path uses
+    # (blacklist_link doubles as the "already seen" marker that
+    # is_link_blacklisted checks). Without this, running structured for a
+    # while and switching back would re-upload and re-bill every post.
+    for link in processed_links:
+        try:
+            blacklist_link(link)
+        except Exception:
+            logger.warning("[STRUCTURED] could not mark %s processed", link)
+    return saved
 
-def _post_context(output_file_path, slides):
-    """Caption / biography / external url for a post, from the scrape file."""
-    caption = biography = external_url = ""
+
+def _load_post_contexts(output_file_path):
+    """{shortcode: (caption, biography, external_url)} from the scrape file.
+
+    Parsed once per account. The caption drives post_type classification and
+    date resolution, so a missing scrape file degrades a whole night's
+    extraction — log it loudly rather than returning silently.
+    """
+    contexts = {}
     try:
         with open(output_file_path, "r") as handle:
-            images_data = json.loads(handle.read())
-        wanted = {filename for filename, _img, _s in slides}
-        for item in images_data:
-            if item.get("shortcode") in wanted:
-                caption = item.get("caption") or ""
-                biography = item.get("biography") or ""
-                external_url = item.get("externalUrl") or ""
-                break
+            for item in json.loads(handle.read()):
+                code = item.get("shortcode")
+                if code and code not in contexts:
+                    contexts[code] = (item.get("caption") or "",
+                                      item.get("biography") or "",
+                                      item.get("externalUrl") or "")
+                # Child slides "SC__0" must also resolve for parent "SC".
+                parent = item.get("parent_shortcode")
+                if parent and parent not in contexts:
+                    contexts[parent] = (item.get("caption") or "",
+                                        item.get("biography") or "",
+                                        item.get("externalUrl") or "")
     except Exception as exc:
-        # The caption drives post_type classification and date resolution, so a
-        # missing scrape file degrades a whole night's extraction. Say so.
-        logger.warning("[STRUCTURED] could not read post context from %s: %s",
+        logger.warning("[STRUCTURED] could not read post contexts from %s: %s",
                        output_file_path, exc)
-    return caption, biography, external_url
+    return contexts
 
 
 def clean_label_and_save(account: str, exec_id: str, output_file_path: str, images_to_upload: list, headers: dict, for_location: str = None):

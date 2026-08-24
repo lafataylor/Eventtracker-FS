@@ -300,10 +300,34 @@ function EventCreate({ isEdit, onClose, account }: EventCreateProps) {
           for_location: processedLocation
         });
 
-        EventService.getEvent({ "id": createdEvent.data.saved_events[0]}).then((event) => {
-          state.eventDetailsDialog.event = event.data;
-          setBasicEventCreated(true);
-        });
+        // A carousel can save SEVERAL events, and a post the extractor decides
+        // is not an event legitimately saves NONE (saved_events: []). Reading
+        // [0] unguarded rendered a broken details dialog for the empty case.
+        const savedIds: any[] = createdEvent?.data?.saved_events ?? [];
+        if (savedIds.length === 0) {
+          dispatch({
+            type: 'SHOW_INFO_OVERLAY',
+            payload: {
+              message: createdEvent?.data?.message ||
+                'No events found in that post.',
+              isError: false,
+            },
+          });
+        } else {
+          if (savedIds.length > 1) {
+            dispatch({
+              type: 'SHOW_INFO_OVERLAY',
+              payload: {
+                message: `Saved ${savedIds.length} events from this post.`,
+                isError: false,
+              },
+            });
+          }
+          EventService.getEvent({ "id": savedIds[0]}).then((event) => {
+            state.eventDetailsDialog.event = event.data;
+            setBasicEventCreated(true);
+          });
+        }
       } else {
         console.error(uploadMethod === 'image' ? 'No image selected' : 'No Instagram URL provided');
       }

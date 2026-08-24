@@ -1,3 +1,4 @@
+import { getApiBase } from './locations';
 // Fallback geocoding using browser's Geocoding API (if available)
 const fallbackGeocode = async (location: string): Promise<google.maps.LatLngLiteral | null> => {
   const defaultCoordinates = { lat: 36.7783, lng: -119.4179 };
@@ -46,10 +47,8 @@ export const geocodeLocation = async (location: string): Promise<google.maps.Lat
   }
   
   try {
-    // Try backend endpoint first. Strip any trailing slash so a base URL that
-    // ends in "/" does not produce "/v1//admin/..." (the auth middleware 403s
-    // on the double slash). Matches the normalization in services/apiClient.tsx.
-    const apiBase = (process.env.NEXT_PUBLIC_API_BASE_URL || 'https://eventtrackerapi.lafaslist.com/v1').replace(/\/+$/, '');
+    // Try backend endpoint first.
+    const apiBase = getApiBase();
     const response = await fetch(
       `${apiBase}/admin/geocode/?address=${encodeURIComponent(cleanLocation)}`
     );

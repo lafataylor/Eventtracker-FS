@@ -361,6 +361,12 @@ class AdminEvent(APIView):
                 shortcode = event.get("shortcode")
                 slide_index = event.get("sourceSlideIndex")
                 source_key = event.get("source_key")
+                supplied_ordinal = event.get("sourceOrdinal")
+                if not source_key and shortcode and supplied_ordinal is not None:
+                    # Extractor-assigned ordinal: authoritative, identical
+                    # across ingestion paths regardless of payload filtering.
+                    source_key = build_source_key(
+                        shortcode, slide_index, supplied_ordinal)
                 if not source_key and shortcode:
                     # Key the counter on the SAME coerced slide value the key
                     # builder uses, so a None-slide and a 0-slide event of one
@@ -621,8 +627,7 @@ def search_events(request):
                                & Q(is_duplicate=False) & Q(suppressed=False)
                                & ~Q(is_event=False))
                        .select_related('venue', 'poster')
-                       .order_by('-timestamp')
-                       .distinct()[:SEARCH_RESULT_LIMIT])
+                       .order_by('-timestamp')[:SEARCH_RESULT_LIMIT])
 
         events_serializer = EventSerializer(user_events, many=True)
         return Success(events_serializer.data, status=True)
@@ -742,9 +747,11 @@ def filter_events(request):
         # The UI attaches a conjugation ("and"/"or") to each filter. It was
         # ignored, so an "Or" combination silently returned the intersection.
         # AND-filters narrow the queryset; OR-filters accumulate into one Q.
-        or_q = Q()
-        and_clauses = []
-        has_or = False
+        # The UI chains filters: each filter's conjugation joins it to the one
+        # BEFORE it ("A and B or C"). Consecutive OR-linked filters form a
+        # group; groups AND together. So "date AND (artistA OR artistB)" keeps
+        # the date constraint — a flat union would silently discard it.
+        clause_groups = []         # list of Q objects, ANDed at the end
         price_bounds = []          # evaluated last; needs Python-side parsing
         applied = 0
 
@@ -813,9 +820,10 @@ def filter_events(request):
             if clause is None:
                 continue
             applied += 1
-            and_clauses.append(clause)
-            if use_or:
-                has_or = True
+            if use_or and clause_groups:
+                clause_groups[-1] = clause_groups[-1] | clause   # extend group
+            else:
+                clause_groups.append(clause)                     # new AND group
 
         if not applied:
             # Nothing recognised: return no results rather than a page of
@@ -826,18 +834,8 @@ def filter_events(request):
         # onward, so filter 0 is always sent as "and". ANDing it before applying
         # or_q made "Artist is A Or B" return the intersection (i.e. nothing).
         # When any filter says OR, the whole set is unioned; otherwise ANDed.
-        if has_or:
-            # Any "Or" makes the whole selection a union. The UI attaches the
-            # conjugation to filter N to join it to the ones before, and never
-            # offers the dropdown on filter 0 — so unioning only the OR-marked
-            # clauses dropped filter 0 entirely and "DJ One Or DJ Two" returned
-            # just DJ Two.
-            for clause in and_clauses:
-                or_q |= clause
-            queryset = queryset.filter(or_q)
-        else:
-            for clause in and_clauses:
-                queryset = queryset.filter(clause)
+        for group in clause_groups:
+            queryset = queryset.filter(group)
 
         # Price is applied last and only to the already-narrowed set, because it
         # needs Python-side parsing of a free-text field. Cap the id list to the
@@ -847,8 +845,11 @@ def filter_events(request):
                    if _price_within(e.price, low, high)][:SEARCH_RESULT_LIMIT]
             queryset = queryset.filter(id__in=ids)
 
+        # No .distinct(): every join here is a single-valued FK, so rows are
+        # already unique — DISTINCT just forced SQLite to dedupe the full match
+        # set before applying the limit.
         events = (queryset.select_related('venue', 'poster')
-                  .order_by('-timestamp').distinct()[:SEARCH_RESULT_LIMIT])
+                  .order_by('-timestamp')[:SEARCH_RESULT_LIMIT])
         return Success(EventSerializer(events, many=True).data, status=True)
     except Exception as e:
         logger.error(f"An error occurred during event filtering: {e}")
@@ -982,9 +983,12 @@ def get_event_matches(request):
         # Exclude pairs whose events are already suppressed. With chained pairs
         # (A,B) then (B,C), keeping B in the second pair would clear its
         # suppression and resurrect a duplicate the owner had already hidden.
-        matches = (EventMatch.objects.filter(status=status)
+        # One base queryset for both the page and the count, so the "N pairs to
+        # review" header can never disagree with the list under it.
+        visible = (EventMatch.objects
                    .exclude(event_a__suppressed=True)
-                   .exclude(event_b__suppressed=True)
+                   .exclude(event_b__suppressed=True))
+        matches = (visible.filter(status=status)
                    .select_related('event_a', 'event_a__venue', 'event_a__poster',
                                    'event_b', 'event_b__venue', 'event_b__poster')
                    .order_by('-score', '-id')[:limit])
@@ -995,9 +999,7 @@ def get_event_matches(request):
             "event_a": EventSerializer(m.event_a).data,
             "event_b": EventSerializer(m.event_b).data,
         } for m in matches]
-        pending_total = (EventMatch.objects.filter(status='pending')
-                         .exclude(event_a__suppressed=True)
-                         .exclude(event_b__suppressed=True).count())
+        pending_total = visible.filter(status='pending').count()
         return Success({"matches": data, "pending_total": pending_total})
     except Exception as e:
         logger.error(f"Error retrieving event matches: {e}")

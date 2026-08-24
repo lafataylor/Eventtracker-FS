@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { getApiBase } from '../utils/locations';
 
 const axiosClient = axios.create({
   // Defaults to production so deployed behaviour is unchanged when the env var
@@ -10,10 +11,7 @@ const axiosClient = axios.create({
   // locations.ts and utils/geocode.ts build '${BASE}/admin/...' and so must
   // not. Without this, setting the env var yields '/v1//event/...' which the
   // auth middleware rejects with 403.
-  baseURL: `${(
-    process.env.NEXT_PUBLIC_API_BASE_URL ||
-    'https://eventtrackerapi.lafaslist.com/v1'
-  ).replace(/\/+$/, '')}/`,
+  baseURL: `${getApiBase()}/`,
   timeout: 30000,
 });
 
