@@ -180,13 +180,13 @@ const Index = () => {
         m.match_id !== match.match_id &&
         (suppressedId == null ||
           (m.event_a.id !== suppressedId && m.event_b.id !== suppressedId));
-      // Two pure sibling updaters — no side effects inside either, so StrictMode
-      // re-invoking them can't double-count. pendingTotal is an optimistic
+      // One filter pass; both state updates derive from it. Updaters stay
+      // pure (StrictMode re-invokes them), and pendingTotal is an optimistic
       // display value that self-heals on the next fetch; the empty-batch
       // refetch is handled by the effect above, on committed state.
-      const removed = matches.length - matches.filter(keepPair).length;
-      setMatches((prev) => prev.filter(keepPair));
-      setPendingTotal((n) => Math.max(0, n - removed));
+      const next = matches.filter(keepPair);
+      setMatches(next);
+      setPendingTotal((n) => Math.max(0, n - (matches.length - next.length)));
       notify(
         action === 'not_duplicate'
           ? 'Marked as not duplicates — both kept.'

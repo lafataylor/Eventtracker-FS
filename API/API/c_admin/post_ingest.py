@@ -29,6 +29,15 @@ logger = logging.getLogger('django')
 SLIDE_DOWNLOAD_TIMEOUT = 8
 
 
+def accept_hosted_url(value):
+    """The uploader (saveImage / the Firebase fn) returns the HTTP response
+    BODY, which is truthy even for an error page. Only a URL-shaped string may
+    be treated as a hosted image URL — anything else would be sent to the
+    vision API as an image or stored as orig_thumb. One rule, used by every
+    upload loop, so the two ingestion paths can't drift."""
+    return value.strip() if isinstance(value, str) and value.strip().startswith('http') else None
+
+
 def fast_download(url, save_path, timeout=SLIDE_DOWNLOAD_TIMEOUT):
     """Single-attempt slide download, bounded so a request can't hang.
 
@@ -164,12 +173,9 @@ def mirror_slides(urls, *, exec_id, user, output_file_path, downloader, uploader
             downloader(url, local_path)
             hosted = uploader(exec_id, user, f"{output_file_path}_{run_id}_{index}",
                               local_path, url)
-            # The uploader returns the HTTP response BODY, which is truthy even
-            # for an error page — accept only something URL-shaped, or an error
-            # string gets sent to the vision API as an image / stored as
-            # orig_thumb.
-            if isinstance(hosted, str) and hosted.strip().startswith('http'):
-                durable.append(hosted.strip())
+            accepted = accept_hosted_url(hosted)
+            if accepted:
+                durable.append(accepted)
                 real_indexes.append(index)
             else:
                 logger.warning("[CAROUSEL] upload for slide %s of %s returned "
@@ -191,12 +197,20 @@ def mirror_slides(urls, *, exec_id, user, output_file_path, downloader, uploader
 
 
 def build_payloads(extraction, *, shortcode, post_link, slide_urls,
-                   for_location=None, poster=None):
+                   for_location=None, poster=None, real_slide_indexes=None):
     """Map a PostExtraction to AdminEvent.post payloads, one per event.
 
     Each payload carries shortcode + sourceSlideIndex; AdminEvent.post derives
     the positional source_key from those and upserts, so re-scrapes update in
     place instead of inserting duplicates.
+
+    real_slide_indexes: mirror_slides' second return value. The model indexes
+    the images it was SHOWN; a slide that failed to mirror is absent from that
+    list, so the shown-index must be translated back to the true slide number
+    BEFORE it is folded into source_key — otherwise one flaky upload shifts
+    every key and the next ingest of the post inserts duplicates. The remap
+    lives HERE, not in callers: a caller-side copy already diverged once and
+    broke the manual add path with a NameError.
     """
     from .extraction import expand_recurring, to_api_payload
 
@@ -219,10 +233,14 @@ def build_payloads(extraction, *, shortcode, post_link, slide_urls,
             image_url = slide_urls[slide]
         else:
             image_url = slide_urls[0] if slide_urls else None
+        real_slide = slide
+        if (real_slide_indexes is not None and slide is not None
+                and 0 <= slide < len(real_slide_indexes)):
+            real_slide = real_slide_indexes[slide]
         payloads.append(to_api_payload(
             event,
             shortcode=shortcode,
-            slide_index=slide,
+            slide_index=real_slide,
             ordinal=ordinal,
             post_link=post_link,
             image_url=image_url,

@@ -24,16 +24,16 @@ backlog is not feasible. Text matching fully satisfies the contract; pHash can
 be added for freshly-ingested events later.
 """
 
-from datetime import date as date_cls
-
 from rapidfuzz import fuzz
 
 from .ingest import normalize_text
 
-# Dates the GPT extractor emits when it cannot find one (see the prompt's
-# "default to 01-01" rule). They are not real dates, so they must not be used
-# as a blocking key — 2025-01-01 alone holds 3,319 events.
-SENTINEL_DATES = {date_cls(2025, 1, 1), date_cls(2026, 1, 1)}
+def is_sentinel_date(value):
+    """True for the GPT extractor's fallback dates (see the prompt's
+    "default to Jan 1" rule). Any Jan 1 counts, not an enumerated year list —
+    the old hardcoded {2025-01-01, 2026-01-01} set was already one year behind
+    the data once, and 2025-01-01 alone holds 3,319 production rows."""
+    return value is not None and value.month == 1 and value.day == 1
 
 # Field weights for the fused score. Title dominates; venue/artist corroborate.
 WEIGHTS = {'name': 0.55, 'artist': 0.20, 'venue': 0.25}
@@ -118,7 +118,7 @@ def find_fuzzy_pairs(signatures):
     """
     by_date = {}
     for sig in signatures:
-        if sig['date'] is None or sig['date'] in SENTINEL_DATES:
+        if sig['date'] is None or is_sentinel_date(sig['date']):
             continue
         by_date.setdefault(sig['date'], []).append(sig)
 
@@ -127,12 +127,13 @@ def find_fuzzy_pairs(signatures):
     for day in seen_days:
         bucket = by_date[day]
         neighbours = bucket + by_date.get(day + timedelta(days=1), [])
-        # within-day pairs
+        # Each bucket event pairs with later same-day events and every
+        # next-day event; j starting at i+1 over the concatenated list gives
+        # exactly that without double-counting. (Ids can never collide: an
+        # event lives in exactly one date bucket.)
         for i in range(len(bucket)):
             for j in range(i + 1, len(neighbours)):
                 a, b = bucket[i], neighbours[j]
-                if a['id'] == b['id']:
-                    continue
                 s = score_pair(a, b)
                 if s >= FUZZY_THRESHOLD:
                     lo, hi = sorted((a['id'], b['id']))

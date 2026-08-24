@@ -99,9 +99,9 @@ per date). Set recurrence_until only if the post states an end date.
 per-slide, use the slide that best depicts each, else null.
 
 Date rules (apply strictly):
-- The current year is 2026.
+- Today's date is {current_date}. Resolve relative and year-less dates against it.
 - NEVER default to October. If no date is found, return null for start_date. The \
-only acceptable forced fallback is 01-01-2026.
+only acceptable forced fallback is January 1 of the current year.
 - Spanish months: enero=Jan, febrero=Feb, marzo=Mar, abril=Apr, mayo=May, junio=Jun, \
 julio=Jul, agosto=Aug, septiembre/setiembre=Sep, octubre=Oct, noviembre=Nov, \
 diciembre=Dec. "9 de abril" = April 9.
@@ -125,9 +125,16 @@ Instagram bio:
 
 def build_messages(image_urls, caption, biography, external_url):
     """One vision message containing the prompt and every slide image."""
+    from datetime import date
+
     content = [{
         "type": "text",
+        # The date is interpolated at call time. A hardcoded "current year is
+        # 2026" would rot exactly the way the previous prompt's 2025 constant
+        # did - the 3,319-row Jan-1 sentinel cluster in production is the
+        # fossil record of that rot.
         "text": PROMPT.format(
+            current_date=date.today().strftime("%B %d, %Y"),
             caption=caption or "",
             biography=biography or "",
             external_url=external_url or ""),

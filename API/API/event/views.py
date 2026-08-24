@@ -262,10 +262,16 @@ class AdminEvent(APIView):
             # so neither can overwrite the other — critical because 72% of events
             # have no name to distinguish them by.
             slide_ordinals = {}
+            # A nightly batch is one account and one execution repeated across
+            # hundreds of events; re-querying them per event added ~3 queries x
+            # batch size on the write-locked SQLite. Memoize per request.
+            _exec_cache, _poster_cache, _details_cache, _venue_cache = {}, {}, {}, {}
             for event in events:
                 exec_id = event.get("exec_id")
                 if exec_id:
-                    exec_id = Execution.objects.get(pk=exec_id)
+                    if exec_id not in _exec_cache:
+                        _exec_cache[exec_id] = Execution.objects.get(pk=exec_id)
+                    exec_id = _exec_cache[exec_id]
 
                 # Poster account — initialised to None so a poster-less event does
                 # not NameError, and so later events don't silently inherit the
@@ -276,12 +282,16 @@ class AdminEvent(APIView):
                 # dict, each run wrapping the previous one.
                 poster_name = normalize_poster_name(event.get("poster"))
                 if poster_name:
-                    try:
-                        poster = Account.objects.filter(user=poster_name).first() or \
-                            Account.objects.create(
-                                user=poster_name, is_personal=True, created_by="Admin")
-                    except Exception as e:
-                        logger.debug("Error while creating poster: " + str(e) + "\n\n\n")
+                    if poster_name in _poster_cache:
+                        poster = _poster_cache[poster_name]
+                    else:
+                        try:
+                            poster = Account.objects.filter(user=poster_name).first() or \
+                                Account.objects.create(
+                                    user=poster_name, is_personal=True, created_by="Admin")
+                        except Exception as e:
+                            logger.debug("Error while creating poster: " + str(e) + "\n\n\n")
+                        _poster_cache[poster_name] = poster
 
                 # Resolve account detail overrides (enforce / fallback) — non-fatal.
                 venue_overrides = {}
@@ -289,7 +299,10 @@ class AdminEvent(APIView):
                 try:
                     if poster and hasattr(poster, 'pk'):
                         raw_venue = event.get('venue') or {}
-                        for detail in AccountDetail.objects.filter(account=poster):
+                        if poster.pk not in _details_cache:
+                            _details_cache[poster.pk] = list(
+                                AccountDetail.objects.filter(account=poster))
+                        for detail in _details_cache[poster.pk]:
                             fn, val, mode = detail.field_name, detail.value, detail.mode
                             if fn.startswith('venue_'):
                                 vkey = fn[6:]  # name/city/state/country/address
@@ -315,7 +328,15 @@ class AdminEvent(APIView):
                 # rewrite the venue for every other event that reuses it.
                 venue_data = dict(event.get("venue") or {})
                 venue_data.update(venue_overrides)
-                venue = resolve_venue(Venue, venue_data)
+                # Nightly batches repeat the same venue for most events; without
+                # this cache each event full-scans the 73k-row unindexed Venue
+                # table inside the request.
+                _vkey = tuple(sorted((k, v) for k, v in venue_data.items() if v))
+                if _vkey in _venue_cache:
+                    venue = _venue_cache[_vkey]
+                else:
+                    venue = resolve_venue(Venue, venue_data)
+                    _venue_cache[_vkey] = venue
 
                 def _ev(key, raw_key=None):
                     """Return event_overrides value if present, else fall back to event dict."""
@@ -830,10 +851,6 @@ def filter_events(request):
             # arbitrary events labelled "success".
             return Success([], status=True)
 
-        # The UI only renders the conjugation dropdown from the SECOND filter
-        # onward, so filter 0 is always sent as "and". ANDing it before applying
-        # or_q made "Artist is A Or B" return the intersection (i.e. nothing).
-        # When any filter says OR, the whole set is unioned; otherwise ANDed.
         for group in clause_groups:
             queryset = queryset.filter(group)
 

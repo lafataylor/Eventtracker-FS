@@ -477,7 +477,7 @@ def create_event_from_instagram_link(request):
 
         # Mirror every slide to durable storage (Instagram CDN URLs expire, and
         # the stored orig_thumb has to keep working).
-        hosted_urls, _originals = mirror_slides(
+        hosted_urls, real_slide_indexes = mirror_slides(
             slide_urls, exec_id=exec_id, user=account,
             output_file_path=output_file_path,
             downloader=fast_download, uploader=saveImage)
@@ -501,18 +501,7 @@ def create_event_from_instagram_link(request):
         payloads = build_payloads(
             extraction, shortcode=shortcode, post_link=instagram_url,
             slide_urls=hosted_urls, for_location=for_location,
-            poster=owner_username)
-
-        # The model indexes the images it was SHOWN; a slide that failed to
-        # mirror is absent from that list. Translate back to real slide
-        # numbers before they land in source_key, or a transient CDN failure
-        # shifts every key and the next ingest of this post inserts
-        # duplicates. (Ordinals are already assigned in build_payloads, so
-        # filtering non-events below cannot shift keys.)
-        for payload in payloads:
-            shown = payload.get('sourceSlideIndex')
-            if shown is not None and 0 <= shown < len(real_slide_indexes):
-                payload['sourceSlideIndex'] = real_slide_indexes[shown]
+            poster=owner_username, real_slide_indexes=real_slide_indexes)
 
         payloads = [p for p in payloads if p.get("isEvent")]
 
