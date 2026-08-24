@@ -130,7 +130,8 @@ const SearchBar = ({
         }
       }
       {
-        // Fire the API call.
+        // Server search: reached when local matching found nothing for a
+        // settled term, or when this view has no local events at all.
         EventService.getEventsBySearchTerm({
           query: searchTerm,
           cancelToken: cancelSourceRef.current.token,
