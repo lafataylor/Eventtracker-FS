@@ -21,6 +21,10 @@ interface SearchBarProps {
   allEvents?: Event[];
   language?: string;
   forceShrink?: number;
+  /** City page context. When set, server-search results are scoped to it —
+   *  without this, a Berlin-page search whose local pass found nothing would
+   *  render Mexico City events under the Berlin banner. */
+  forLocation?: string;
 }
 
 /** Casefold and strip accents so "Café" matches "cafe" and "MÉXICO" matches
@@ -62,6 +66,7 @@ const SearchBar = ({
   allEvents,
   language = 'en',
   forceShrink = 0,
+  forLocation,
 }: SearchBarProps) => {
   const [state, dispatch] = useStore();
   const [searchTerm, setSearchTerm] = useState('');
@@ -141,7 +146,12 @@ const SearchBar = ({
             if (requestId === currentRequestIdRef.current) {
               if (res.status === 200 && res.data.status === 'success') {
                 const sortedEvents = res.data.data.sort((a: Event, b: Event) => new Date(a.start_date).getTime() - new Date(b.start_date).getTime());
-                const filteredEvents = sortedEvents.filter((event: Event) => {
+                const cityScoped = forLocation
+                  ? sortedEvents.filter((event: any) =>
+                      !event.forLocation ||
+                      norm(event.forLocation) === norm(forLocation))
+                  : sortedEvents;
+                const filteredEvents = cityScoped.filter((event: Event) => {
                   // Undated events must pass: the API deliberately returns
                   // recent events with no extracted date (2,534 in prod), and
                   // new Date(null) is epoch 0, which a >= yesterday check

@@ -232,8 +232,8 @@ export async function refetchToken(dispatch: Dispatch<any>) {
 }
 
 
-export function readAdminDuplicates() {
-  return axiosClient.get('event/getDuplicateEvents/', {
+export function readAdminDuplicates(offset: number = 0) {
+  return axiosClient.get(`event/getDuplicateEvents/?offset=${offset}`, {
     headers: getHeader()
   });
 }

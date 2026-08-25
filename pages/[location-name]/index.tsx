@@ -944,6 +944,7 @@ const LocationPage: NextPage<LocationPageProps> = ({ locationName, locations: in
               ).length
             }
             allEvents={allLocationEvents}
+            forLocation={formattedLocationName}
           />
           <div className="flex items-center gap-2">
             <button
