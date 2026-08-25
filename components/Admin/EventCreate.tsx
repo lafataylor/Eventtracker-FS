@@ -450,7 +450,7 @@ function EventCreate({ isEdit, onClose, account }: EventCreateProps) {
                   /* Instagram URL Section */
                   <>
                     <p className="text-off-white pb-4 px-2 max-w-[520px]">
-                      Enter an Instagram profile URL and we'll automatically extract event details from the latest post.
+                      Paste an Instagram post URL and we'll extract every event it contains (a profile URL uses its latest post). This can take a minute or two.
                     </p>
                     <div className="flex flex-col gap-3">
                       <div className="flex items-center gap-3">

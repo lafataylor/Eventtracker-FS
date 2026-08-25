@@ -139,7 +139,9 @@ const Index = () => {
 
   const filterEventsByLinkedAccounts = (events: Event[]): Event[] => {
     // If linkedAccounts includes "all" or is empty, show all events
-    if (linkedAccounts.includes('all')) {
+    // (the empty case previously fell through to the filter below, which
+    // filtered out EVERYTHING for an admin with no linked accounts).
+    if (linkedAccounts.length === 0 || linkedAccounts.includes('all')) {
       return events;
     }
     

@@ -32,8 +32,13 @@ function getEventByFilter(data: GetEventByFilterRequest) {
   return axiosClient.post(`event/filter/`, data);
 }
 
-function getEventsBySearchTerm(params: GetEventsBySearchTermRequest) {
-  return axiosClient.get('event/search/', { params: params });
+function getEventsBySearchTerm(
+  params: GetEventsBySearchTermRequest,
+  config: object = {}
+) {
+  // config carries axios options (e.g. cancelToken). It must stay separate
+  // from params: anything in params is serialized into the query string.
+  return axiosClient.get('event/search/', { params: params, ...config });
 }
 
 function addFeedback(data: AddFeedbackRequest) {
