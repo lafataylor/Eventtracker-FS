@@ -326,15 +326,16 @@ export async function createEventFromInstagram(data: CreateEventFromInstagramReq
   }
 
   return axiosClient.post('admin/createEventFromInstagram/', formData, {
-    // A many-slide carousel takes real time server-side (mirror every slide,
-    // one vision call over all of them). The client default of 30s aborted
-    // requests that were still succeeding, so the owner saw an error for an
-    // add that actually worked - then retried and made duplicates.
-    timeout: 120000,
     headers: {
       ...getHeader(),
       'Content-Type': 'multipart/form-data',
     },
+    // A many-slide carousel takes real time server-side (mirror every slide,
+    // one vision call over all of them). The client default of 30s would abort
+    // requests that are still succeeding, so the owner would see an error for
+    // an add that actually worked - then retry and make duplicates. This
+    // generous override already existed; do not add a second `timeout` key
+    // (duplicate object keys fail the production type check).
     timeout: 1000000,
   });
 }
