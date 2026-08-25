@@ -504,6 +504,11 @@ def create_event_from_instagram_link(request):
             poster=owner_username, real_slide_indexes=real_slide_indexes)
 
         payloads = [p for p in payloads if p.get("isEvent")]
+        for p in payloads:
+            # Human-initiated refresh: re-pasting a URL means "update this
+            # event with what the post says now" (owner-resolution fields
+            # excepted). The nightly path never sets this.
+            p["refresh"] = True
 
         logger.info("[CAROUSEL_MANUAL] shortcode=%r post_type=%s extracted=%d kept=%d",
                     shortcode, extraction.post_type, len(extraction.events), len(payloads))

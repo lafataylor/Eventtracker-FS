@@ -181,9 +181,10 @@ def _price_within(price_text, low, high):
     #   - ages:        18+, 21 +
     cleaned = re.sub(r'\b\d{1,2}(?::\d{2})?\s*(?:am|pm)\b', ' ', text, flags=re.IGNORECASE)
     # \b anchors are required: without them "MXN 250 + service fee" matched the
-    # "50 +" inside 250 and left "MXN 2", so a 250-peso event answered a $0-50
-    # filter.
-    cleaned = re.sub(r'\b\d{1,2}\s*\+', ' ', cleaned)
+    # "50 +" inside 250 and left "MXN 2". And only REAL age values (16-21)
+    # count as age barriers — a generic \d{1,2}+ also deleted prices like
+    # "$50+" and made those events unmatchable by every price filter.
+    cleaned = re.sub(r'\b(1[6-9]|2[01])\s*\+', ' ', cleaned)
     # Check numeric tiers: a tiered price ("Free before 11pm, $150 after",
     # "$150, $200, $300") matches if ANY listed price is in range (599 of 4,267
     # production prices list more than one).
@@ -432,7 +433,8 @@ class AdminEvent(APIView):
                 # Upsert instead of the previous blind create(), which let every
                 # re-scrape insert another row (23,355 surplus rows in prod).
                 event_obj, _action = upsert_event(
-                    Event, source_key, shortcode, slide_index, event_defaults)
+                    Event, source_key, shortcode, slide_index, event_defaults,
+                    overwrite=bool(event.get("refresh")))
                 saved_events.append(event_obj.id)
 
             logger.debug("Event created successfully.\n\n\n")
@@ -782,11 +784,12 @@ def filter_events(request):
             values = _filter.get("values") or []
             use_or = str(_filter.get("conjugation") or "and").lower() == "or"
 
-            # An unrecognised type (the admin UI also offers "run") must not
-            # silently pass through, or the response would be an unfiltered
-            # page of events reported as success.
+            # An unrecognised type (the admin UI also offers "run", which has
+            # no server handler) must not be silently dropped: combined with
+            # other filters that produces plausible-looking, silently-wrong
+            # results. Reject so the caller knows the constraint didn't apply.
             if _type not in POSSIBLE_FILTER_TYPES:
-                continue
+                return InvalidParameters()
 
             clause = None
             if _type == "date":
@@ -809,6 +812,12 @@ def filter_events(request):
                     return InvalidParameters()
 
             elif _type == "price":
+                if use_or:
+                    # Price is matched in Python after the SQL pass and is
+                    # always ANDed; honoring "Or" here is not implemented.
+                    # Rejecting beats returning the intersection labelled
+                    # success when the user asked for a union.
+                    return InvalidParameters()
                 bounds = _parse_price_bounds(condition, values)
                 if bounds is None:
                     return InvalidParameters()
@@ -858,7 +867,11 @@ def filter_events(request):
         # needs Python-side parsing of a free-text field. Cap the id list to the
         # result limit so the final IN clause stays small.
         for low, high in price_bounds:
-            ids = [e.id for e in queryset.only('id', 'price')[:PRICE_SCAN_LIMIT]
+            # order_by makes the scan window deterministic (newest first); an
+            # unordered slice let SQLite pick an arbitrary 5,000 rows once the
+            # candidate set outgrows the cap.
+            ids = [e.id for e in queryset.only('id', 'price')
+                   .order_by('-timestamp')[:PRICE_SCAN_LIMIT]
                    if _price_within(e.price, low, high)][:SEARCH_RESULT_LIMIT]
             queryset = queryset.filter(id__in=ids)
 
@@ -968,15 +981,25 @@ def get_duplicate_events(request):
     """
     try:
         limit = min(int(request.GET.get("limit", 200)), 500)
+        offset = max(0, int(request.GET.get("offset", 0)))
     except (TypeError, ValueError):
-        limit = 200
+        limit, offset = 200, 0
     try:
-        duplicate_events = (Event.objects
-                            .filter(Q(is_duplicate=True) | Q(suppressed=True))
-                            .select_related('venue', 'poster')
-                            .order_by('-created_at')[:limit])
+        # canonical IS NULL scopes the list to rows hidden WITHOUT a surviving
+        # counterpart — the old scraper's flags and manual marks, i.e. the ones
+        # a human might actually want back. Proper collapses (canonical set)
+        # have a live twin and are reviewable through the pairs view; including
+        # them would bury the ~2k restorable rows under ~23k re-scrape husks.
+        base = (Event.objects
+                .filter(Q(is_duplicate=True) | Q(suppressed=True))
+                .filter(canonical__isnull=True)
+                .select_related('venue', 'poster')
+                .order_by('-created_at'))
+        total = base.count()
+        duplicate_events = base[offset:offset + limit]
         event_serializer = EventSerializer(duplicate_events, many=True)
-        return Success({"status": "success", "duplicate_events": event_serializer.data})
+        return Success({"status": "success", "total": total, "offset": offset,
+                        "duplicate_events": event_serializer.data})
     except Exception as e:
         logger.error(f"Error retrieving duplicate events: {e}")
         return ServerProcessingError(message="Error retrieving duplicate events: "+str(e))

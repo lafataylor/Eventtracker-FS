@@ -102,7 +102,15 @@ class Command(BaseCommand):
                 # distinct events (317 rows on the production dataset).
                 # Auto-suppress only when the pair is also textually the same
                 # event; otherwise queue it for human review.
-                if not same_post_is_redundant(canonical_sig, event_signature(row)):
+                row_sig = event_signature(row)
+                both_keyed_nameless = (row.source_key and canonical.source_key
+                                       and not canonical_sig['name']
+                                       and not row_sig['name'])
+                # Two KEYED nameless rows are ambiguous by construction: the
+                # legacy per-slide path writes N keys for ONE event, while the
+                # structured path writes N keys for N DISTINCT events. Without
+                # a title there is no way to tell which case this is — queue it.
+                if both_keyed_nameless or not same_post_is_redundant(canonical_sig, row_sig):
                     if not dry:
                         EventMatch.objects.get_or_create(
                             event_a_id=lo, event_b_id=hi,

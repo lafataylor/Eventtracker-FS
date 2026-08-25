@@ -47,23 +47,39 @@ const Index = () => {
   // wrongly hidden by the old logic can be restored (the new pairs view only
   // covers EventMatch rows, which the old scraper never created).
   const [flagged, setFlagged] = useState<Event[]>([]);
+  const [flaggedTotal, setFlaggedTotal] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState(false);
   // A set, not a scalar: resolving two cards at once must keep both disabled
   // independently (a scalar re-enabled the first card mid-flight).
   const [busyIds, setBusyIds] = useState<Set<number>>(new Set());
 
-  const notify = (message: string, isError = false) =>
-    dispatch({ type: SHOW_INFO_OVERLAY, payload: { message, isError } });
+  const notify = (message: unknown, isError = false) =>
+    dispatch({
+      type: SHOW_INFO_OVERLAY,
+      // InfoOverlay renders the message as a React child; an Error object here
+      // throws "Objects are not valid as a React child" and white-screens the
+      // page. Coerce anything non-string (axios rejections are strings, but
+      // requestMiddleware and runtime errors are Error objects).
+      payload: {
+        message:
+          typeof message === 'string'
+            ? message
+            : (message as any)?.message || 'Something went wrong.',
+        isError,
+      },
+    });
 
-  const fetchFlagged = async () => {
+  const fetchFlagged = async (loadMoreOffset: number = 0) => {
     if (!(await requestMiddleware(dispatch))) return;
     setIsLoading(true);
     setLoadError(false);
     try {
-      const res = await readAdminDuplicates();
+      const res = await readAdminDuplicates(loadMoreOffset);
       if (res.status === 200) {
-        setFlagged(res.data?.duplicate_events || []);
+        const page = res.data?.duplicate_events || [];
+        setFlagged((prev) => (loadMoreOffset > 0 ? [...prev, ...page] : page));
+        setFlaggedTotal(res.data?.total ?? page.length);
       } else {
         setLoadError(true);
       }
@@ -286,6 +302,16 @@ const Index = () => {
                     </button>
                   </div>
                 ))}
+                {flagged.length < flaggedTotal && (
+                  <div className="w-full flex justify-center py-4">
+                    <button
+                      className="py-2 px-6 rounded-lg border border-stone-gray text-off-white hover:border-beaming-orange"
+                      onClick={() => fetchFlagged(flagged.length)}
+                    >
+                      Load more ({flagged.length} of {flaggedTotal})
+                    </button>
+                  </div>
+                )}
               </div>
             )
           ) : matches.length === 0 ? (

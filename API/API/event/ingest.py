@@ -155,7 +155,8 @@ def _coalesce_into(instance, defaults):
     return changed
 
 
-def upsert_event(event_model, source_key, shortcode, slide_index, defaults):
+def upsert_event(event_model, source_key, shortcode, slide_index, defaults,
+                 overwrite=False):
     """Create or update a row keyed on source_key. Returns (event, action).
 
     action is 'created' | 'updated'. Without a source_key, falls back to a plain
@@ -186,6 +187,20 @@ def upsert_event(event_model, source_key, shortcode, slide_index, defaults):
 
     if created:
         return obj, 'created'
+
+    if overwrite:
+        # Human-initiated refresh (manual re-paste): the new extraction wins
+        # over stale scraped values. Owner-resolution fields stay protected.
+        changed = False
+        for field, value in defaults.items():
+            if field in _OWNER_RESOLUTION_FIELDS:
+                continue
+            if getattr(obj, field, None) != value and value not in (None, ''):
+                setattr(obj, field, value)
+                changed = True
+        if changed:
+            obj.save()
+        return obj, 'updated'
 
     # Only fill identity fields, never blank them: a re-ingest that omits the
     # shortcode must not wipe the stored one that dedupe relies on.

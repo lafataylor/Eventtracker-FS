@@ -103,6 +103,12 @@ def same_post_is_redundant(a, b):
     if a['name'] and b['name']:
         if fuzz.token_set_ratio(a['name'], b['name']) < MIN_TITLE_SIM:
             return False        # two different named events in one post
+    elif (a['name'] or b['name']) and a['date'] and b['date'] \
+            and a['date'] != b['date']:
+        # Only one side has a name AND the dates differ: plausibly a roundup
+        # where extraction named one slide and not the other (72% of rows are
+        # nameless). Not enough certainty to auto-hide — queue for review.
+        return False
     if a['date'] and b['date'] and abs((a['date'] - b['date']).days) > 1:
         return False            # same post, different dates -> distinct dates
     return True

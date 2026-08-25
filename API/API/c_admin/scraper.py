@@ -2022,6 +2022,7 @@ def clean_label_and_save_structured(account: str, exec_id: str, output_file_path
 
     events = []
     processed_links = []
+    post_errors = 0
     for shortcode, slides in posts.items():
         try:
             post_link = None
@@ -2069,9 +2070,18 @@ def clean_label_and_save_structured(account: str, exec_id: str, output_file_path
             if post_link:
                 processed_links.append(post_link)
         except Exception as exc:  # one bad post must not kill the account
+            post_errors += 1
             log_step_failed(f"[STRUCTURED] {shortcode} failed: {exc}\n{traceback.format_exc()}")
 
     if not events:
+        if post_errors and post_errors == len(posts):
+            # EVERY post errored (OpenAI outage, unreadable context file...).
+            # Advancing the watermark here would permanently skip the whole
+            # night with no retry — the same data loss the save-failure branch
+            # below guards against. Leave LastRun so tomorrow retries.
+            log_step_failed(f"[STRUCTURED] all {post_errors} posts failed for "
+                            f"{account}; NOT advancing LastRun")
+            return 0
         log_step_progressed(f"[STRUCTURED] no events to save for {account}")
         # A successfully-processed-but-empty night still advances LastRun; the
         # legacy path always did, and skipping it re-downloads and re-bills the
