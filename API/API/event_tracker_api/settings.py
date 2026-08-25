@@ -134,6 +134,11 @@ AUTH_PASSWORD_VALIDATORS = [
 # backupCount=0 means RotatingFileHandler NEVER rotates (CPython's doRollover
 # only rolls when backupCount > 0), so the file grew without bound — 16.5 GB
 # in production. INFO + real rotation caps total logging at ~800 MB.
+# The file handler below cannot create its own directory: if logs/ is missing,
+# dictConfig raises "Unable to configure handler 'file'" and the entire app
+# fails to boot with no usable error. Create it here instead.
+os.makedirs(BASE_DIR / 'logs', exist_ok=True)
+
 LOGGING = {
     'version': 1,
     'disable_existing_loggers': False,
