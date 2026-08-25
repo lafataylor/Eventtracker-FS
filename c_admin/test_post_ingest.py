@@ -126,28 +126,43 @@ class ShortcodeFromUrlTests(SimpleTestCase):
 class MirrorSlideTests(SimpleTestCase):
     def test_all_slides_mirrored(self):
         seen = []
-        mirrored, originals = mirror_slides(
+        mirrored, real_indexes = mirror_slides(
             ["u0", "u1", "u2"], exec_id="-1", user="acct", output_file_path="p",
             downloader=lambda url, path: seen.append(url),
-            uploader=lambda e, u, f, p, link: f"hosted/{link}")
+            uploader=lambda e, u, f, p, link: f"http://hosted/{link}")
         self.assertEqual(seen, ["u0", "u1", "u2"])
-        self.assertEqual(mirrored, ["hosted/u0", "hosted/u1", "hosted/u2"])
-        self.assertEqual(originals, ["u0", "u1", "u2"])
+        self.assertEqual(mirrored,
+                         ["http://hosted/u0", "http://hosted/u1", "http://hosted/u2"])
+        self.assertEqual(real_indexes, [0, 1, 2])
 
-    def test_one_bad_slide_does_not_kill_the_post(self):
+    def test_one_bad_slide_does_not_kill_the_post_and_indexes_stay_real(self):
         def flaky(url, path):
             if url == "u1":
                 raise IOError("CDN hiccup")
-        mirrored, _ = mirror_slides(
+        mirrored, real_indexes = mirror_slides(
             ["u0", "u1", "u2"], exec_id="-1", user="a", output_file_path="p",
-            downloader=flaky, uploader=lambda e, u, f, p, link: f"h/{link}")
-        self.assertEqual(mirrored, ["h/u0", "h/u2"])
+            downloader=flaky, uploader=lambda e, u, f, p, link: f"http://h/{link}")
+        self.assertEqual(mirrored, ["http://h/u0", "http://h/u2"])
+        # The surviving slides keep their ORIGINAL numbers — this is what lets
+        # callers remap the model's shown-index back before building source_key.
+        self.assertEqual(real_indexes, [0, 2])
+
+    def test_error_body_from_uploader_is_rejected(self):
+        # saveImage returns the HTTP response body, truthy even for an error
+        # page. A non-URL return must be skipped, not treated as a hosted URL.
+        def uploader(e, u, f, p, link):
+            return "Error: could not handle the request" if link == "u1" else f"http://h/{link}"
+        mirrored, real_indexes = mirror_slides(
+            ["u0", "u1", "u2"], exec_id="-1", user="a", output_file_path="p",
+            downloader=lambda u, p: None, uploader=uploader)
+        self.assertEqual(mirrored, ["http://h/u0", "http://h/u2"])
+        self.assertEqual(real_indexes, [0, 2])
 
     def test_carousel_capped_at_20(self):
         mirrored, _ = mirror_slides(
             [f"u{i}" for i in range(30)], exec_id="-1", user="a",
             output_file_path="p", downloader=lambda u, p: None,
-            uploader=lambda e, u, f, p, link: link)
+            uploader=lambda e, u, f, p, link: f"http://x/{link}")
         self.assertEqual(len(mirrored), 20)
 
 

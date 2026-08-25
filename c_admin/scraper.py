@@ -73,7 +73,7 @@ client = OpenAI()
 
 # Ticket 2: parse the post identity out of the per-image key so the batch
 # path can upsert. post_ingest deliberately imports nothing from scraper.
-from .post_ingest import split_child_shortcode
+from .post_ingest import accept_hosted_url, split_child_shortcode
 
 def check_for_prerequisites():
     prerequisites = ["instatouch"]
@@ -641,24 +641,6 @@ def scrape_using_instatouch(account: str, session_id: str, output_file_name: str
     return True
 
 
-def is_similar(event1, event2, threshold=80):
-    name_threshold = 40
-    address_threshold = 40
-    date_threshold = 90
-    artist_threshold = 40
-
-    name_similarity = fuzz.ratio(event1[0], event2[0])
-    address_similarity = fuzz.ratio(event1[1], event2[1])
-    date_similarity = fuzz.ratio(event1[2], event2[2])
-    artist_similarity = fuzz.ratio(event1[3], event2[3])
-
-    is_name_similar = name_similarity >= name_threshold
-    is_address_similar = address_similarity >= address_threshold
-    is_date_similar = date_similarity >= date_threshold
-    is_artist_similar = artist_similarity >= artist_threshold
-
-    # Return True if the any of the similarities meets or exceeds the threshold
-    return is_name_similar or is_address_similar or is_date_similar or is_artist_similar
 
 """
 def is_similar(event1, event2, threshold=60):
@@ -1791,221 +1773,9 @@ def save_events_from_dashboard(headers: dict, events, exec_id, accounts):
         logger.debug("\n Error during saving of events: "+str(exception))
         raise exception
 
-def forced_label_and_save_with_instagram_data(account: str, exec_id: str, output_file_path: str, image_path: str, image_url: str, caption: str, owner_full_name: str, instagram_url: str, headers: dict, for_location: str = None):
-    try:
-        # Check if the image URL is blacklisted
-        if is_link_blacklisted(image_url):
-            log_step_completed(f"Skipping blacklisted image: {image_url}")
-            return []
-            
-        user = account
-        timestamp = timezone.now()
-            
-        events = []
-
-        eventData = None
-
-        # Use the Instagram data we scraped
-        biography = owner_full_name
-        externalUrl = instagram_url
-
-        uploaded_image_url = saveImage(exec_id, user, output_file_path, image_path, image_url)
-
-        response = label_using_gpt4(uploaded_image_url, caption, biography, externalUrl)
-
-        extractedData = response.choices[0].message.content
-
-        extractedData = re.sub(r'```', '', extractedData)
-
-        extractedData = re.sub(r'json||\n', '', extractedData)
-
-        eventData = json.loads(extractedData)
-
-        newEvent = {
-            "exec_id": None,
-            "poster": user,
-            "venue": {
-                "name": None,
-                "address": None,
-                "city": None,
-                "state": None,
-                "country": None
-            },
-            "name": None,
-            "artist": None,
-            "opener": "",
-            "host": "",
-            "promoter": "",
-            "timestamp": (timezone.now() + timedelta(days=1)).strftime("%m-%d-%Y"),
-            "startDate": (timezone.now() + timedelta(days=1)).strftime("%m-%d-%Y"),
-            "startTime": None,
-            "endDate": None,
-            "endTime": None,
-            "offering": "",
-            "price": None,
-            "ticket_link": instagram_url,  # Set the original Instagram URL as ticket link
-            "is_age_restricted": False,
-            "orig_link": instagram_url,
-            "orig_thumb": uploaded_image_url,
-            "isEvent": False,
-            "ageBarrier": None,
-            "late": None,
-            "linkInBio": False,
-            "rsvpRequired": False,
-            "numEvents": 1,
-            "genres": None,
-            "is_duplicate": False,
-            "forLocation": for_location
-        }
-
-        missingFields = 0
-        missingDataThreshold = 11
-        hasEnoughData = False
-
-        if eventData is not None:
-            print("Event details WERE NOT None")
-            logger.debug("\n Successfully labelled event...")
-
-            try:
-                newEvent["isEvent"] = True
-
-                if eventData["venue"] is not None:
-                    newEvent["venue"]["name"] = eventData["venue"] 
-
-                if eventData["overallAddress"] is not None:
-                    newEvent["venue"]["address"] = eventData["overallAddress"] 
-                else:
-                    missingFields += 1
-
-                if eventData["city"] is not None:
-                    newEvent["venue"]["city"] = eventData["city"] 
-                else:
-                    missingFields += 1
-
-                if eventData["state"] is not None:
-                    newEvent["venue"]["state"] = eventData["state"] 
-                else:
-                    missingFields += 1
-
-                if eventData["country"] is not None:
-                    newEvent["venue"]["country"] = eventData["country"] 
-                else:
-                    missingFields += 1
-
-                if eventData["eventName"] is not None:
-                    newEvent["name"] = eventData["eventName"].lstrip('$')
-                else:
-                    missingFields += 1
-
-                if eventData["artist"] is not None and len(eventData["artist"]) > 0:
-                    newEvent["artist"] = eventData["artist"][0]
-                else:
-                    missingFields += 1
-
-                if eventData["openers"] is not None and len(eventData["openers"]) > 0:
-                    newEvent["opener"] = eventData["openers"][0]
-                else:
-                    missingFields += 1 
-
-                if eventData["hosts"] is not None and len(eventData["hosts"]) > 0:
-                    newEvent["host"] = eventData["hosts"][0]
-                else:
-                    missingFields += 1
-
-                if eventData["promoters"] is not None and len(eventData["promoters"]) > 0:
-                    newEvent["promoter"] = eventData["promoters"][0]
-                else:
-                    missingFields += 1
-
-                if eventData["offerings"] is not None and len(eventData["offerings"]) > 0:
-                    newEvent["offering"] = eventData["offerings"][0]
-                else:
-                    missingFields += 1
-
-                if eventData["startDate"] is not None:
-                    newEvent["startDate"] = eventData["startDate"]
-                else:
-                    missingFields += 1
-
-                if eventData["startDate"] is not None:
-                    newEvent["timestamp"] = eventData["startDate"]
-
-                if eventData["endDate"] is not None:
-                    newEvent["endDate"] = eventData["endDate"]
-
-                if eventData["startTime"] is not None:
-                    newEvent["startTime"] = eventData["startTime"]
-                else:
-                    missingFields += 1
-
-                if eventData["endTime"] is not None:
-                    newEvent["endTime"] = eventData["endTime"]
-
-                if eventData["ageBarrier"] is not None:
-                    newEvent["ageBarrier"] = eventData["ageBarrier"]
-
-                if eventData["late"] is not None:
-                    newEvent["late"] = eventData["late"]
-
-                if eventData["linkInBio"] is not None:
-                    newEvent["linkInBio"] = eventData["linkInBio"]
-
-                if eventData["rsvpRequired"] is not None:
-                    newEvent["rsvpRequired"] = eventData["rsvpRequired"]
-
-                if eventData["numEvents"] is not None:
-                    newEvent["numEvents"] = eventData["numEvents"]
-
-                if eventData["price"] is not None:
-                    newEvent["price"] = eventData["price"]
-                else:
-                    missingFields += 1
-
-                if eventData["genres"] is not None:
-                    newEvent["genres"] = eventData["genres"]
-
-                # Check if we have a ticket link from the event data, otherwise use Instagram URL
-                if eventData.get("ticketLink") is not None:
-                    newEvent["ticket_link"] = eventData["ticketLink"]
-
-                hasEnoughData = True
-
-            except Exception as e:
-                print("Error extracting details: ",str(e))
-                logger.debug("\n\n\n Error during details extraction: "+str(e))
-                raise e
-        else:
-            print("Event details WERE None. Total events so far: ",len(events))
-            
-            logger.debug("\n Event details were NONE")
-
-        logger.debug("An event found!")
-        events.append(newEvent)
-
-        try:
-            eventsObj = {
-                "events": events
-            }
-
-            try:
-                saved_events = save_events_from_dashboard(headers, eventsObj, exec_id, [account])
-                #update_last_run(account)
-
-                return saved_events
-
-            except Exception as e:
-                logger.debug("\n\n\n\nError saving events: "+str(e)+"\n\n\n\n")
-                raise e
-
-        except Exception as e:
-            print("An error occurred persisting the events: ",str(e))
-            logger.debug("\n Events not persisted appropriately: "+str(e))
-            raise e
-
-    except Exception as e:
-        print("An error occurred persisting the events!!: ",str(e))
-        logger.debug("\n Events not persisted appropriately: "+str(e))
-        raise e
+# (forced_label_and_save_with_instagram_data removed - dead code. The old inline dedupe was replaced by the
+#  detect_duplicates command + EventMatch review; the old manual-add labeler
+#  was replaced by extraction.extract_events + post_ingest.build_payloads.)
 
 def forced_label_and_save(account: str, exec_id: str, output_file_path: str, image_url: str, headers: dict, for_location: str = None):
     try:
@@ -2219,7 +1989,163 @@ def forced_label_and_save(account: str, exec_id: str, output_file_path: str, ima
         logger.debug("\n Events not persisted appropriately: "+str(e))
         raise e
 
+# Ticket 2: post-level extraction for the NIGHTLY path.
+#
+# clean_label_and_save labels one image at a time, so a slide listing several
+# events collapses into one and one event spread across slides can become
+# several. This variant groups a post's slides back together and runs the same
+# structured-output extraction the manual add-by-URL path uses, which returns
+# an ARRAY of events plus a post_type classification.
+#
+# Gated OFF by default. The nightly run is the site's only source of events, so
+# this ships dark and is enabled with STRUCTURED_BATCH_EXTRACTION=True only
+# after validation against real posts.
+STRUCTURED_BATCH_EXTRACTION = os.getenv(
+    'STRUCTURED_BATCH_EXTRACTION', 'False').lower() in ('1', 'true', 'yes')
+
+
+def clean_label_and_save_structured(account: str, exec_id: str, output_file_path: str,
+                                    images_to_upload: dict, headers: dict,
+                                    for_location: str = None):
+    """One extraction per POST instead of per image. Returns events saved."""
+    from .extraction import extract_events
+    from .post_ingest import build_payloads, group_slides_by_post
+
+    user = account
+    per_account = (images_to_upload or {}).get('users', {}).get(account, {}) or {}
+    posts = group_slides_by_post(dict(per_account))
+    log_step_progressed(
+        f"[STRUCTURED] {account}: {len(per_account)} images -> {len(posts)} posts")
+
+    # Parse the account scrape file ONCE; the loop below only does dict lookups.
+    context_by_shortcode = _load_post_contexts(output_file_path)
+
+    events = []
+    processed_links = []
+    post_errors = 0
+    for shortcode, slides in posts.items():
+        try:
+            post_link = None
+            hosted_urls = []
+            real_slides = []          # real slide index per hosted url
+            for filename, image, slide in slides:
+                post_link = post_link or image.get('link')
+                if is_link_blacklisted(image.get('link')):
+                    continue
+                hosted = saveImage(exec_id, user, filename, image.get('path'),
+                                   image.get('link'))
+                accepted = accept_hosted_url(hosted)
+                if accepted:
+                    hosted_urls.append(accepted)
+                    real_slides.append(slide)
+                else:
+                    logger.warning("[STRUCTURED] upload failed for %s (%r)",
+                                   filename, str(hosted)[:120])
+
+            if not hosted_urls:
+                log_step_progressed(f"[STRUCTURED] no usable slides for {shortcode}")
+                continue
+
+            caption, biography, external_url = context_by_shortcode.get(
+                shortcode, ("", "", ""))
+
+            extraction = extract_events(
+                client, hosted_urls, caption=caption, biography=biography,
+                external_url=external_url)
+
+            payloads = build_payloads(
+                extraction, shortcode=shortcode,
+                post_link=post_link or f"https://www.instagram.com/p/{shortcode}/",
+                slide_urls=hosted_urls, for_location=for_location,
+                poster=account, real_slide_indexes=real_slides)
+            for payload in payloads:
+                payload['exec_id'] = exec_id
+
+            logger.info(
+                "[STRUCTURED] account=%r shortcode=%r slides=%d post_type=%r events=%d",
+                account, shortcode, len(hosted_urls), extraction.post_type, len(payloads))
+            # Keep non-event payloads too: the legacy path stored them, and a
+            # post with no row is never recorded as processed.
+            events.extend(payloads)
+            if post_link:
+                processed_links.append(post_link)
+        except Exception as exc:  # one bad post must not kill the account
+            post_errors += 1
+            log_step_failed(f"[STRUCTURED] {shortcode} failed: {exc}\n{traceback.format_exc()}")
+
+    if not events:
+        if post_errors and post_errors == len(posts):
+            # EVERY post errored (OpenAI outage, unreadable context file...).
+            # Advancing the watermark here would permanently skip the whole
+            # night with no retry — the same data loss the save-failure branch
+            # below guards against. Leave LastRun so tomorrow retries.
+            log_step_failed(f"[STRUCTURED] all {post_errors} posts failed for "
+                            f"{account}; NOT advancing LastRun")
+            return 0
+        log_step_progressed(f"[STRUCTURED] no events to save for {account}")
+        # A successfully-processed-but-empty night still advances LastRun; the
+        # legacy path always did, and skipping it re-downloads and re-bills the
+        # same posts to OpenAI every night.
+        update_last_run(account)
+        return 0
+    try:
+        saved = save_events(headers, {"events": events}, exec_id, [account])
+    except Exception as exc:
+        # Save FAILED: do NOT advance LastRun and do NOT mark the posts as
+        # processed — the legacy path retried these next night, and advancing
+        # here would silently lose the whole night with no retry.
+        logger.error(f"[STRUCTURED] error saving events for {account}: {exc}")
+        return 0
+
+    update_last_run(account)
+    # Mark posts processed in the same ledger the legacy path uses
+    # (blacklist_link doubles as the "already seen" marker that
+    # is_link_blacklisted checks). Without this, running structured for a
+    # while and switching back would re-upload and re-bill every post.
+    for link in processed_links:
+        try:
+            blacklist_link(link)
+        except Exception:
+            logger.warning("[STRUCTURED] could not mark %s processed", link)
+    return saved
+
+
+def _load_post_contexts(output_file_path):
+    """{shortcode: (caption, biography, external_url)} from the scrape file.
+
+    Parsed once per account. The caption drives post_type classification and
+    date resolution, so a missing scrape file degrades a whole night's
+    extraction — log it loudly rather than returning silently.
+    """
+    contexts = {}
+    try:
+        with open(output_file_path, "r") as handle:
+            for item in json.loads(handle.read()):
+                code = item.get("shortcode")
+                if code and code not in contexts:
+                    contexts[code] = (item.get("caption") or "",
+                                      item.get("biography") or "",
+                                      item.get("externalUrl") or "")
+                # Child slides "SC__0" must also resolve for parent "SC".
+                parent = item.get("parent_shortcode")
+                if parent and parent not in contexts:
+                    contexts[parent] = (item.get("caption") or "",
+                                        item.get("biography") or "",
+                                        item.get("externalUrl") or "")
+    except Exception as exc:
+        logger.warning("[STRUCTURED] could not read post contexts from %s: %s",
+                       output_file_path, exc)
+    return contexts
+
+
 def clean_label_and_save(account: str, exec_id: str, output_file_path: str, images_to_upload: list, headers: dict, for_location: str = None):
+    # Ticket 2: post-level extraction, off unless explicitly enabled. See
+    # clean_label_and_save_structured for why this ships dark.
+    if STRUCTURED_BATCH_EXTRACTION:
+        return clean_label_and_save_structured(
+            account, exec_id, output_file_path, images_to_upload, headers,
+            for_location)
+
     user = account
     timestamp = timezone.now()
     events = []
@@ -2862,44 +2788,6 @@ def blacklist_link(link):
     except Exception as e:
         logger.error(f"Error blacklisting link: {str(e)}")
 
-def is_event_duplicate_in_db(event):
-    """
-    Check if an event is a duplicate of any recent event in the database
-    
-    Args:
-        event (dict): The new event to check
-        
-    Returns:
-        tuple: (is_duplicate, duplicate_event_id or None)
-    """
-    try:
-        # Get 7 days ago
-        last_week = timezone.now().date() - timedelta(days=7)
-        
-        # Query events from 7 days ago onwards
-        recent_events = Event.objects.filter(start_date__gte=last_week)
-        
-        for db_event in recent_events:
-            # Create comparable tuples
-            new_event_tuple = (
-                event["name"] or "", 
-                event["venue"]["address"] or "", 
-                event["startDate"] or "", 
-                event["artist"] or ""
-            )
-            
-            db_event_tuple = (
-                db_event.name or "",
-                db_event.address or "",
-                db_event.start_date.strftime("%m-%d-%Y") if db_event.start_date else "",
-                db_event.artist or ""
-            )
-            
-            # Use the existing similarity function
-            if is_similar(new_event_tuple, db_event_tuple):
-                return True, db_event.id
-                
-        return False, None
-    except Exception as e:
-        logger.error(f"Error checking for duplicate events in DB: {str(e)}")
-        return False, None
+# (is_event_duplicate_in_db removed - dead code. The old inline dedupe was replaced by the
+#  detect_duplicates command + EventMatch review; the old manual-add labeler
+#  was replaced by extraction.extract_events + post_ingest.build_payloads.)

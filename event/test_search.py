@@ -49,6 +49,16 @@ class PriceMatchingTests(TestCase):
         # "18+" is an age restriction, not an $18 price.
         self.assertFalse(_price_within("18+", 10, 30))
 
+    def test_price_with_plus_suffix_still_matches(self):
+        # "$50+" is a price, not an age barrier. A generic digit+plus stripper
+        # deleted it and made the event unmatchable by every price filter.
+        self.assertTrue(_price_within("$50+", 0, 100))
+        self.assertTrue(_price_within("MXN 90 + fees", 50, 100))
+        self.assertFalse(_price_within("$50+", 100, 200))
+        # Real age barriers are still ignored.
+        self.assertFalse(_price_within("18+", 10, 30))
+        self.assertFalse(_price_within("21 +", 15, 30))
+
     def test_age_stripping_does_not_eat_price_digits(self):
         # The age regex must be \b-anchored: unanchored, "MXN 250 + service fee"
         # matched the "50 +" inside 250 and left "MXN 2", so a 250-peso event
@@ -125,12 +135,15 @@ class SearchVisibilityTests(TestCase):
         self.by_venue.is_duplicate = True
         self.by_venue.save(update_fields=['suppressed', 'is_duplicate'])
 
-        # These two endpoints sit behind the auth middleware.
-        import jwt
+        # These two endpoints sit behind the auth middleware. Mint the token
+        # through the app's own helper so the signing key lives in exactly one
+        # place (c_auth.authentication) and key rotation can't strand a copy
+        # here.
+        from c_auth.authentication import create_jwt_token
         from c_auth.models import User
         user = User.objects.create(email='t@t.co', password='x')
-        auth = {'HTTP_AUTHORIZATION': 'Token ' + jwt.encode({'id': user.id}, 'secret',
-                                                            algorithm='HS256')}
+        token, _refresh = create_jwt_token(user.id, 60)
+        auth = {'HTTP_AUTHORIZATION': 'Token ' + token}
 
         listed = self.client.get('/v1/event/getDuplicateEvents/', **auth)
         ids = [e['id'] for e in listed.json()['duplicate_events']]
@@ -161,13 +174,28 @@ class FilterEventsTests(TestCase):
         self.assertEqual(res.status_code, 200)
         return [e['id'] for e in res.json()['data']]
 
-    def test_unknown_filter_type_returns_empty_not_500_and_not_everything(self):
-        # "run" is offered by the admin UI but has no server handler. It used to
-        # NameError -> 500. It must not swing the other way either and return a
-        # page of arbitrary events labelled success.
-        ids = self._filter([{"type": "run", "condition": "equal",
-                             "values": ["anything"]}])
-        self.assertEqual(ids, [])
+    def test_unknown_filter_type_is_rejected(self):
+        # "run" is offered by the admin UI but has no server handler. Combined
+        # with other filters, silently dropping it produced plausible-looking,
+        # wrong results; rejecting tells the caller the constraint didn't apply.
+        res = self.client.post('/v1/event/filter/',
+                               {'filters': [{"type": "run", "condition": "equal",
+                                             "values": ["x"]}]},
+                               content_type='application/json')
+        self.assertNotEqual(res.status_code, 200)
+
+    def test_price_or_conjunction_is_rejected(self):
+        # Price is Python-matched post-SQL and always ANDs; honoring "Or" is
+        # unimplemented, and returning an intersection labelled success when
+        # the user asked for a union is worse than a clean error.
+        res = self.client.post('/v1/event/filter/',
+                               {'filters': [
+                                   {"type": "artist", "condition": "equal",
+                                    "values": ["DJ One"]},
+                                   {"type": "price", "condition": "between",
+                                    "values": ["0", "100"], "conjugation": "or"}]},
+                               content_type='application/json')
+        self.assertNotEqual(res.status_code, 200)
 
     def test_known_account_filter_still_works(self):
         ids = self._filter([{"type": "account", "condition": "equal",
@@ -276,3 +304,27 @@ class SamePostRedundancyTests(TestCase):
         self.assertFalse(same_post_is_redundant(
             self._sig('weekly session', date(2026, 9, 1)),
             self._sig('weekly session', date(2026, 9, 8))))
+
+
+class SamePostAsymmetryTests(TestCase):
+    """A nameless row next to a named one on a DIFFERENT day must queue for
+    review, not auto-hide — plausibly a roundup with one unnamed slide."""
+
+    def _sig(self, name, day):
+        from datetime import date
+        return {'id': 0, 'name': (name or ''), 'artist': '', 'venue': '',
+                'date': day}
+
+    def test_nameless_vs_named_different_day_queues(self):
+        from datetime import date
+        from event.dedupe import same_post_is_redundant
+        self.assertFalse(same_post_is_redundant(
+            self._sig('fri rave', date(2026, 9, 4)),
+            self._sig('', date(2026, 9, 5))))
+
+    def test_nameless_vs_named_same_day_is_rescrape(self):
+        from datetime import date
+        from event.dedupe import same_post_is_redundant
+        self.assertTrue(same_post_is_redundant(
+            self._sig('fri rave', date(2026, 9, 4)),
+            self._sig('', date(2026, 9, 4))))

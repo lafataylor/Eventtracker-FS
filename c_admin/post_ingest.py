@@ -29,6 +29,15 @@ logger = logging.getLogger('django')
 SLIDE_DOWNLOAD_TIMEOUT = 8
 
 
+def accept_hosted_url(value):
+    """The uploader (saveImage / the Firebase fn) returns the HTTP response
+    BODY, which is truthy even for an error page. Only a URL-shaped string may
+    be treated as a hosted image URL — anything else would be sent to the
+    vision API as an image or stored as orig_thumb. One rule, used by every
+    upload loop, so the two ingestion paths can't drift."""
+    return value.strip() if isinstance(value, str) and value.strip().startswith('http') else None
+
+
 def fast_download(url, save_path, timeout=SLIDE_DOWNLOAD_TIMEOUT):
     """Single-attempt slide download, bounded so a request can't hang.
 
@@ -157,16 +166,21 @@ def mirror_slides(urls, *, exec_id, user, output_file_path, downloader, uploader
     import uuid
     run_id = uuid.uuid4().hex[:8]
 
-    durable, originals = [], []
+    durable, real_indexes = [], []
     for index, url in enumerate(urls[:limit]):
         local_path = f"/tmp/{output_file_path}_{run_id}_{index}.jpg"
         try:
             downloader(url, local_path)
             hosted = uploader(exec_id, user, f"{output_file_path}_{run_id}_{index}",
                               local_path, url)
-            if hosted:
-                durable.append(hosted)
-                originals.append(url)
+            accepted = accept_hosted_url(hosted)
+            if accepted:
+                durable.append(accepted)
+                real_indexes.append(index)
+            else:
+                logger.warning("[CAROUSEL] upload for slide %s of %s returned "
+                               "non-URL (%r)", index, output_file_path,
+                               str(hosted)[:120])
         except Exception as exc:  # noqa: BLE001 — one bad slide must not kill the post
             logger.warning("[CAROUSEL] slide %s mirror failed for %s: %s",
                            index, output_file_path, exc)
@@ -176,31 +190,57 @@ def mirror_slides(urls, *, exec_id, user, output_file_path, downloader, uploader
                     os.remove(local_path)
             except OSError:
                 pass
-    return durable, originals
+    # real_indexes[i] is the ORIGINAL slide number of durable[i]. Callers must
+    # remap the model's shown-index back through it before persisting, or a
+    # single failed slide shifts every source_key and re-ingest duplicates.
+    return durable, real_indexes
 
 
 def build_payloads(extraction, *, shortcode, post_link, slide_urls,
-                   for_location=None, poster=None):
+                   for_location=None, poster=None, real_slide_indexes=None):
     """Map a PostExtraction to AdminEvent.post payloads, one per event.
 
     Each payload carries shortcode + sourceSlideIndex; AdminEvent.post derives
     the positional source_key from those and upserts, so re-scrapes update in
     place instead of inserting duplicates.
+
+    real_slide_indexes: mirror_slides' second return value. The model indexes
+    the images it was SHOWN; a slide that failed to mirror is absent from that
+    list, so the shown-index must be translated back to the true slide number
+    BEFORE it is folded into source_key — otherwise one flaky upload shifts
+    every key and the next ingest of the post inserts duplicates. The remap
+    lives HERE, not in callers: a caller-side copy already diverged once and
+    broke the manual add path with a NameError.
     """
     from .extraction import expand_recurring, to_api_payload
 
     # Recurring series become one event per date (product owner's requirement).
+    #
+    # The ordinal is assigned HERE, per slide, before any caller filters the
+    # list. It is part of source_key ({shortcode}__{slide}__{ordinal}), so it
+    # must be identical no matter which path ingests the post — the manual
+    # path drops non-event payloads before POSTing while the nightly path
+    # keeps them, and a server-side arrival-order counter would give the same
+    # event two different keys across those paths.
     payloads = []
-    for ordinal, event in enumerate(expand_recurring(extraction.events)):
+    per_slide_counter = {}
+    for event in expand_recurring(extraction.events):
         slide = event.source_slide_index
+        slide_key = 0 if slide is None else int(slide)
+        ordinal = per_slide_counter.get(slide_key, 0)
+        per_slide_counter[slide_key] = ordinal + 1
         if slide is not None and 0 <= slide < len(slide_urls):
             image_url = slide_urls[slide]
         else:
             image_url = slide_urls[0] if slide_urls else None
+        real_slide = slide
+        if (real_slide_indexes is not None and slide is not None
+                and 0 <= slide < len(real_slide_indexes)):
+            real_slide = real_slide_indexes[slide]
         payloads.append(to_api_payload(
             event,
             shortcode=shortcode,
-            slide_index=slide,
+            slide_index=real_slide,
             ordinal=ordinal,
             post_link=post_link,
             image_url=image_url,
@@ -208,3 +248,35 @@ def build_payloads(extraction, *, shortcode, post_link, slide_urls,
             poster=poster,
         ))
     return payloads
+
+
+def group_slides_by_post(images_for_account):
+    """Group an account's scraped images back into posts.
+
+    The batch scraper flattens a post's carousel into separate entries keyed
+    "{shortcode}__{idx}" and then labels each one independently — which is why
+    a slide listing several events collapses into one, and why one event shown
+    across several slides can become several events.
+
+    Grouping prefers the entry's `link`, which process_post sets to the real
+    parent post URL. Filename parsing is only the fallback: an Instagram
+    shortcode may itself end in "__<digits>" (the alphabet includes digits and
+    underscores), and splitting on that would merge two unrelated posts into a
+    single vision call.
+
+    Returns {shortcode: [(filename, image_dict, slide_index), ...]} with each
+    post's slides in slide order, so the caller can run ONE extraction over the
+    whole post the way the manual add-by-URL path does.
+    """
+    grouped = {}
+    for filename, image in (images_for_account or {}).items():
+        parsed, slide = split_child_shortcode(filename)
+        from_link = shortcode_from_url((image or {}).get('link'))
+        shortcode = from_link or parsed
+        if not shortcode:
+            continue
+        grouped.setdefault(shortcode, []).append((filename, image, slide))
+    for slides in grouped.values():
+        # None (single-image post) sorts before real slide indexes.
+        slides.sort(key=lambda entry: (entry[2] is not None, entry[2] or 0))
+    return grouped

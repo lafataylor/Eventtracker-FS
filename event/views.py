@@ -181,9 +181,10 @@ def _price_within(price_text, low, high):
     #   - ages:        18+, 21 +
     cleaned = re.sub(r'\b\d{1,2}(?::\d{2})?\s*(?:am|pm)\b', ' ', text, flags=re.IGNORECASE)
     # \b anchors are required: without them "MXN 250 + service fee" matched the
-    # "50 +" inside 250 and left "MXN 2", so a 250-peso event answered a $0-50
-    # filter.
-    cleaned = re.sub(r'\b\d{1,2}\s*\+', ' ', cleaned)
+    # "50 +" inside 250 and left "MXN 2". And only REAL age values (16-21)
+    # count as age barriers — a generic \d{1,2}+ also deleted prices like
+    # "$50+" and made those events unmatchable by every price filter.
+    cleaned = re.sub(r'\b(1[6-9]|2[01])\s*\+', ' ', cleaned)
     # Check numeric tiers: a tiered price ("Free before 11pm, $150 after",
     # "$150, $200, $300") matches if ANY listed price is in range (599 of 4,267
     # production prices list more than one).
@@ -262,10 +263,16 @@ class AdminEvent(APIView):
             # so neither can overwrite the other — critical because 72% of events
             # have no name to distinguish them by.
             slide_ordinals = {}
+            # A nightly batch is one account and one execution repeated across
+            # hundreds of events; re-querying them per event added ~3 queries x
+            # batch size on the write-locked SQLite. Memoize per request.
+            _exec_cache, _poster_cache, _details_cache, _venue_cache = {}, {}, {}, {}
             for event in events:
                 exec_id = event.get("exec_id")
                 if exec_id:
-                    exec_id = Execution.objects.get(pk=exec_id)
+                    if exec_id not in _exec_cache:
+                        _exec_cache[exec_id] = Execution.objects.get(pk=exec_id)
+                    exec_id = _exec_cache[exec_id]
 
                 # Poster account — initialised to None so a poster-less event does
                 # not NameError, and so later events don't silently inherit the
@@ -276,12 +283,16 @@ class AdminEvent(APIView):
                 # dict, each run wrapping the previous one.
                 poster_name = normalize_poster_name(event.get("poster"))
                 if poster_name:
-                    try:
-                        poster = Account.objects.filter(user=poster_name).first() or \
-                            Account.objects.create(
-                                user=poster_name, is_personal=True, created_by="Admin")
-                    except Exception as e:
-                        logger.debug("Error while creating poster: " + str(e) + "\n\n\n")
+                    if poster_name in _poster_cache:
+                        poster = _poster_cache[poster_name]
+                    else:
+                        try:
+                            poster = Account.objects.filter(user=poster_name).first() or \
+                                Account.objects.create(
+                                    user=poster_name, is_personal=True, created_by="Admin")
+                        except Exception as e:
+                            logger.debug("Error while creating poster: " + str(e) + "\n\n\n")
+                        _poster_cache[poster_name] = poster
 
                 # Resolve account detail overrides (enforce / fallback) — non-fatal.
                 venue_overrides = {}
@@ -289,7 +300,10 @@ class AdminEvent(APIView):
                 try:
                     if poster and hasattr(poster, 'pk'):
                         raw_venue = event.get('venue') or {}
-                        for detail in AccountDetail.objects.filter(account=poster):
+                        if poster.pk not in _details_cache:
+                            _details_cache[poster.pk] = list(
+                                AccountDetail.objects.filter(account=poster))
+                        for detail in _details_cache[poster.pk]:
                             fn, val, mode = detail.field_name, detail.value, detail.mode
                             if fn.startswith('venue_'):
                                 vkey = fn[6:]  # name/city/state/country/address
@@ -315,7 +329,15 @@ class AdminEvent(APIView):
                 # rewrite the venue for every other event that reuses it.
                 venue_data = dict(event.get("venue") or {})
                 venue_data.update(venue_overrides)
-                venue = resolve_venue(Venue, venue_data)
+                # Nightly batches repeat the same venue for most events; without
+                # this cache each event full-scans the 73k-row unindexed Venue
+                # table inside the request.
+                _vkey = tuple(sorted((k, v) for k, v in venue_data.items() if v))
+                if _vkey in _venue_cache:
+                    venue = _venue_cache[_vkey]
+                else:
+                    venue = resolve_venue(Venue, venue_data)
+                    _venue_cache[_vkey] = venue
 
                 def _ev(key, raw_key=None):
                     """Return event_overrides value if present, else fall back to event dict."""
@@ -361,6 +383,12 @@ class AdminEvent(APIView):
                 shortcode = event.get("shortcode")
                 slide_index = event.get("sourceSlideIndex")
                 source_key = event.get("source_key")
+                supplied_ordinal = event.get("sourceOrdinal")
+                if not source_key and shortcode and supplied_ordinal is not None:
+                    # Extractor-assigned ordinal: authoritative, identical
+                    # across ingestion paths regardless of payload filtering.
+                    source_key = build_source_key(
+                        shortcode, slide_index, supplied_ordinal)
                 if not source_key and shortcode:
                     # Key the counter on the SAME coerced slide value the key
                     # builder uses, so a None-slide and a 0-slide event of one
@@ -405,7 +433,8 @@ class AdminEvent(APIView):
                 # Upsert instead of the previous blind create(), which let every
                 # re-scrape insert another row (23,355 surplus rows in prod).
                 event_obj, _action = upsert_event(
-                    Event, source_key, shortcode, slide_index, event_defaults)
+                    Event, source_key, shortcode, slide_index, event_defaults,
+                    overwrite=bool(event.get("refresh")))
                 saved_events.append(event_obj.id)
 
             logger.debug("Event created successfully.\n\n\n")
@@ -621,8 +650,7 @@ def search_events(request):
                                & Q(is_duplicate=False) & Q(suppressed=False)
                                & ~Q(is_event=False))
                        .select_related('venue', 'poster')
-                       .order_by('-timestamp')
-                       .distinct()[:SEARCH_RESULT_LIMIT])
+                       .order_by('-timestamp')[:SEARCH_RESULT_LIMIT])
 
         events_serializer = EventSerializer(user_events, many=True)
         return Success(events_serializer.data, status=True)
@@ -742,9 +770,11 @@ def filter_events(request):
         # The UI attaches a conjugation ("and"/"or") to each filter. It was
         # ignored, so an "Or" combination silently returned the intersection.
         # AND-filters narrow the queryset; OR-filters accumulate into one Q.
-        or_q = Q()
-        and_clauses = []
-        has_or = False
+        # The UI chains filters: each filter's conjugation joins it to the one
+        # BEFORE it ("A and B or C"). Consecutive OR-linked filters form a
+        # group; groups AND together. So "date AND (artistA OR artistB)" keeps
+        # the date constraint — a flat union would silently discard it.
+        clause_groups = []         # list of Q objects, ANDed at the end
         price_bounds = []          # evaluated last; needs Python-side parsing
         applied = 0
 
@@ -754,11 +784,12 @@ def filter_events(request):
             values = _filter.get("values") or []
             use_or = str(_filter.get("conjugation") or "and").lower() == "or"
 
-            # An unrecognised type (the admin UI also offers "run") must not
-            # silently pass through, or the response would be an unfiltered
-            # page of events reported as success.
+            # An unrecognised type (the admin UI also offers "run", which has
+            # no server handler) must not be silently dropped: combined with
+            # other filters that produces plausible-looking, silently-wrong
+            # results. Reject so the caller knows the constraint didn't apply.
             if _type not in POSSIBLE_FILTER_TYPES:
-                continue
+                return InvalidParameters()
 
             clause = None
             if _type == "date":
@@ -781,6 +812,12 @@ def filter_events(request):
                     return InvalidParameters()
 
             elif _type == "price":
+                if use_or:
+                    # Price is matched in Python after the SQL pass and is
+                    # always ANDed; honoring "Or" here is not implemented.
+                    # Rejecting beats returning the intersection labelled
+                    # success when the user asked for a union.
+                    return InvalidParameters()
                 bounds = _parse_price_bounds(condition, values)
                 if bounds is None:
                     return InvalidParameters()
@@ -813,42 +850,36 @@ def filter_events(request):
             if clause is None:
                 continue
             applied += 1
-            and_clauses.append(clause)
-            if use_or:
-                has_or = True
+            if use_or and clause_groups:
+                clause_groups[-1] = clause_groups[-1] | clause   # extend group
+            else:
+                clause_groups.append(clause)                     # new AND group
 
         if not applied:
             # Nothing recognised: return no results rather than a page of
             # arbitrary events labelled "success".
             return Success([], status=True)
 
-        # The UI only renders the conjugation dropdown from the SECOND filter
-        # onward, so filter 0 is always sent as "and". ANDing it before applying
-        # or_q made "Artist is A Or B" return the intersection (i.e. nothing).
-        # When any filter says OR, the whole set is unioned; otherwise ANDed.
-        if has_or:
-            # Any "Or" makes the whole selection a union. The UI attaches the
-            # conjugation to filter N to join it to the ones before, and never
-            # offers the dropdown on filter 0 — so unioning only the OR-marked
-            # clauses dropped filter 0 entirely and "DJ One Or DJ Two" returned
-            # just DJ Two.
-            for clause in and_clauses:
-                or_q |= clause
-            queryset = queryset.filter(or_q)
-        else:
-            for clause in and_clauses:
-                queryset = queryset.filter(clause)
+        for group in clause_groups:
+            queryset = queryset.filter(group)
 
         # Price is applied last and only to the already-narrowed set, because it
         # needs Python-side parsing of a free-text field. Cap the id list to the
         # result limit so the final IN clause stays small.
         for low, high in price_bounds:
-            ids = [e.id for e in queryset.only('id', 'price')[:PRICE_SCAN_LIMIT]
+            # order_by makes the scan window deterministic (newest first); an
+            # unordered slice let SQLite pick an arbitrary 5,000 rows once the
+            # candidate set outgrows the cap.
+            ids = [e.id for e in queryset.only('id', 'price')
+                   .order_by('-timestamp')[:PRICE_SCAN_LIMIT]
                    if _price_within(e.price, low, high)][:SEARCH_RESULT_LIMIT]
             queryset = queryset.filter(id__in=ids)
 
+        # No .distinct(): every join here is a single-valued FK, so rows are
+        # already unique — DISTINCT just forced SQLite to dedupe the full match
+        # set before applying the limit.
         events = (queryset.select_related('venue', 'poster')
-                  .order_by('-timestamp').distinct()[:SEARCH_RESULT_LIMIT])
+                  .order_by('-timestamp')[:SEARCH_RESULT_LIMIT])
         return Success(EventSerializer(events, many=True).data, status=True)
     except Exception as e:
         logger.error(f"An error occurred during event filtering: {e}")
@@ -950,15 +981,25 @@ def get_duplicate_events(request):
     """
     try:
         limit = min(int(request.GET.get("limit", 200)), 500)
+        offset = max(0, int(request.GET.get("offset", 0)))
     except (TypeError, ValueError):
-        limit = 200
+        limit, offset = 200, 0
     try:
-        duplicate_events = (Event.objects
-                            .filter(Q(is_duplicate=True) | Q(suppressed=True))
-                            .select_related('venue', 'poster')
-                            .order_by('-created_at')[:limit])
+        # canonical IS NULL scopes the list to rows hidden WITHOUT a surviving
+        # counterpart — the old scraper's flags and manual marks, i.e. the ones
+        # a human might actually want back. Proper collapses (canonical set)
+        # have a live twin and are reviewable through the pairs view; including
+        # them would bury the ~2k restorable rows under ~23k re-scrape husks.
+        base = (Event.objects
+                .filter(Q(is_duplicate=True) | Q(suppressed=True))
+                .filter(canonical__isnull=True)
+                .select_related('venue', 'poster')
+                .order_by('-created_at'))
+        total = base.count()
+        duplicate_events = base[offset:offset + limit]
         event_serializer = EventSerializer(duplicate_events, many=True)
-        return Success({"status": "success", "duplicate_events": event_serializer.data})
+        return Success({"status": "success", "total": total, "offset": offset,
+                        "duplicate_events": event_serializer.data})
     except Exception as e:
         logger.error(f"Error retrieving duplicate events: {e}")
         return ServerProcessingError(message="Error retrieving duplicate events: "+str(e))
@@ -982,9 +1023,12 @@ def get_event_matches(request):
         # Exclude pairs whose events are already suppressed. With chained pairs
         # (A,B) then (B,C), keeping B in the second pair would clear its
         # suppression and resurrect a duplicate the owner had already hidden.
-        matches = (EventMatch.objects.filter(status=status)
+        # One base queryset for both the page and the count, so the "N pairs to
+        # review" header can never disagree with the list under it.
+        visible = (EventMatch.objects
                    .exclude(event_a__suppressed=True)
-                   .exclude(event_b__suppressed=True)
+                   .exclude(event_b__suppressed=True))
+        matches = (visible.filter(status=status)
                    .select_related('event_a', 'event_a__venue', 'event_a__poster',
                                    'event_b', 'event_b__venue', 'event_b__poster')
                    .order_by('-score', '-id')[:limit])
@@ -995,9 +1039,7 @@ def get_event_matches(request):
             "event_a": EventSerializer(m.event_a).data,
             "event_b": EventSerializer(m.event_b).data,
         } for m in matches]
-        pending_total = (EventMatch.objects.filter(status='pending')
-                         .exclude(event_a__suppressed=True)
-                         .exclude(event_b__suppressed=True).count())
+        pending_total = visible.filter(status='pending').count()
         return Success({"matches": data, "pending_total": pending_total})
     except Exception as e:
         logger.error(f"Error retrieving event matches: {e}")

@@ -129,21 +129,34 @@ _OWNER_RESOLUTION_FIELDS = frozenset(
 
 
 def _coalesce_into(instance, defaults):
-    """Copy only non-empty incoming values onto instance. Returns True if any
-    field changed. A sparse re-scrape (flaky extraction often returns nulls)
-    must not clobber previously-good name/venue/price with None, nor overwrite
-    the owner's duplicate-resolution decisions."""
+    """Fill only EMPTY fields on instance. Returns True if any field changed.
+
+    Two protections in one rule:
+      * a sparse re-scrape (flaky extraction returns nulls) must not clobber
+        previously-good values with None, and
+      * a re-scrape must not overwrite the owner's manual corrections. The
+        dashboard edit flow writes straight to these rows, and the old blind
+        INSERT never touched an existing row — so "scraper wins over the
+        owner" would be a regression, not a feature. Identity and dedupe need
+        the upsert; enrichment fills gaps only.
+
+    Owner-resolution fields (suppressed/canonical/is_duplicate/...) are never
+    written here at all."""
     changed = False
     for field, value in defaults.items():
         if value in (None, '') or field in _OWNER_RESOLUTION_FIELDS:
             continue
-        if getattr(instance, field, None) != value:
+        current = getattr(instance, field, None)
+        if current not in (None, ''):
+            continue          # occupied -> owner/state wins over re-scrape
+        if current != value:
             setattr(instance, field, value)
             changed = True
     return changed
 
 
-def upsert_event(event_model, source_key, shortcode, slide_index, defaults):
+def upsert_event(event_model, source_key, shortcode, slide_index, defaults,
+                 overwrite=False):
     """Create or update a row keyed on source_key. Returns (event, action).
 
     action is 'created' | 'updated'. Without a source_key, falls back to a plain
@@ -174,6 +187,20 @@ def upsert_event(event_model, source_key, shortcode, slide_index, defaults):
 
     if created:
         return obj, 'created'
+
+    if overwrite:
+        # Human-initiated refresh (manual re-paste): the new extraction wins
+        # over stale scraped values. Owner-resolution fields stay protected.
+        changed = False
+        for field, value in defaults.items():
+            if field in _OWNER_RESOLUTION_FIELDS:
+                continue
+            if getattr(obj, field, None) != value and value not in (None, ''):
+                setattr(obj, field, value)
+                changed = True
+        if changed:
+            obj.save()
+        return obj, 'updated'
 
     # Only fill identity fields, never blank them: a re-ingest that omits the
     # shortcode must not wipe the stored one that dedupe relies on.

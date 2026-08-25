@@ -17,8 +17,17 @@ CLIENT_TOKEN = "faa1485a2d9e765816556daba15434d0"
 ACCESS_TOKEN = "IGQVJVWWY1VC11dnhNN3hVZAXFqMXpKM3o1Uk9pSGc1X1d3S1NtT1h3eFJmU01zNzVMQ25DSXc2M05mYmR0SEtSM2VORnE5eTAxLXJkaDljdmRSNDdEcWg2dWk0elBXRExRNmhNNHdzanNMcVoyMkYtVwZDZD"
 
 # endpoints
-HOST = "http://18.222.54.144/"
-# HOST = "http://127.0.0.1:8000/"
+# The scraper and the manual add-by-URL path save events by calling this API
+# over HTTP (legacy design). On the production server the API calls itself, so
+# the default stays the prod domain. Locally this MUST be overridden to the
+# local API (EVENT_API_HOST in .env) or a dev machine will write into the
+# production database.
+import os as _os
+# The trailing slash is normalised on purpose (same convention as
+# FE/services/apiClient.tsx): endpoints below concatenate HOST + VERSION, so
+# HOST must end in exactly one '/'. Without this, EVENT_API_HOST set without a
+# trailing slash would build 'http://127.0.0.1:8009v1/...'.
+HOST = _os.getenv("EVENT_API_HOST", "https://eventtrackerapi.lafaslist.com/").rstrip("/") + "/"
 VERSION = "v1"
 SAVE_LOGS_ENDPOINT = HOST + VERSION + "/admin/system/logs/save/"
 CREATE_EXECUTION_ENDPOINT = HOST + VERSION + "/admin/execution/"

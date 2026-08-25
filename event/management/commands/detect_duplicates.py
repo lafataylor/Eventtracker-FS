@@ -53,34 +53,39 @@ class Command(BaseCommand):
         if dry:
             self.stdout.write(self.style.WARNING('DRY RUN — no writes.\n'))
 
+        # One transaction per pass: on the production SQLite every individual
+        # write is an fsync holding the global write lock, so ~23k autocommit
+        # writes would stall live traffic for minutes. One commit each instead.
         if opts['exact']:
-            self._exact(dry, opts['limit'])
+            with transaction.atomic():
+                self._exact(dry, opts['limit'])
         if opts['fuzzy']:
-            self._fuzzy(dry, opts['limit'])
+            with transaction.atomic():
+                self._fuzzy(dry, opts['limit'])
 
     # --- pass 1: exact re-scrapes sharing a shortcode ---------------------
     def _exact(self, dry, limit):
-        # Only legacy rows (source_key NULL) are collapsed by shortcode.
-        #
-        # Ticket 2 deliberately writes N events for one roundup carousel, all
-        # sharing that post's shortcode — those are DISTINCT events, not
-        # duplicates, and they are exactly the rows that carry a source_key.
-        # Collapsing by shortcode alone would suppress N-1 real events.
-        legacy = Event.objects.filter(shortcode__isnull=False, suppressed=False,
-                                      source_key__isnull=True)
-        groups = (legacy.values('shortcode').annotate(n=Count('id'))
+        # ALL same-shortcode rows are considered, keyed or not. Roundup rows
+        # (distinct events sharing one post, written by the structured path)
+        # are protected by the same_post_is_redundant gate below — different
+        # titles or dates always queue for review, never auto-hide. Restricting
+        # to source_key IS NULL left a hole: the legacy per-slide nightly path
+        # also writes source_keys now, so a 5-slide single-event carousel it
+        # ingests as 5 keyed rows would have been permanently uncollapsible.
+        candidates = Event.objects.filter(shortcode__isnull=False,
+                                          suppressed=False)
+        groups = (candidates.values('shortcode').annotate(n=Count('id'))
                   .filter(n__gt=1).order_by('-n'))
         if limit:
             groups = groups[:limit]
         groups = list(groups)
-        self.stdout.write(f'[exact] {len(groups)} shortcode groups with duplicates '
-                          f'(legacy rows only; source_key rows are left alone)')
+        self.stdout.write(f'[exact] {len(groups)} shortcode groups with duplicates')
 
         suppressed = queued = pairs = 0
         for g in groups:
             rows = list(Event.objects.filter(
-                shortcode=g['shortcode'], suppressed=False,
-                source_key__isnull=True).select_related('venue'))
+                shortcode=g['shortcode'],
+                suppressed=False).select_related('venue'))
             if len(rows) < 2:
                 continue
             canonical = max(rows, key=completeness)
@@ -97,7 +102,15 @@ class Command(BaseCommand):
                 # distinct events (317 rows on the production dataset).
                 # Auto-suppress only when the pair is also textually the same
                 # event; otherwise queue it for human review.
-                if not same_post_is_redundant(canonical_sig, event_signature(row)):
+                row_sig = event_signature(row)
+                both_keyed_nameless = (row.source_key and canonical.source_key
+                                       and not canonical_sig['name']
+                                       and not row_sig['name'])
+                # Two KEYED nameless rows are ambiguous by construction: the
+                # legacy per-slide path writes N keys for ONE event, while the
+                # structured path writes N keys for N DISTINCT events. Without
+                # a title there is no way to tell which case this is — queue it.
+                if both_keyed_nameless or not same_post_is_redundant(canonical_sig, row_sig):
                     if not dry:
                         EventMatch.objects.get_or_create(
                             event_a_id=lo, event_b_id=hi,
@@ -108,18 +121,24 @@ class Command(BaseCommand):
                     continue
 
                 if not dry:
-                    with transaction.atomic():
-                        row.suppressed = True
-                        row.canonical = canonical
-                        # Also set is_duplicate so existing read paths hide it.
-                        row.is_duplicate = True
-                        row.duplicate_link = canonical.orig_link or f"event_{canonical.id}"
-                        row.save(update_fields=['suppressed', 'canonical',
-                                                'is_duplicate', 'duplicate_link'])
-                        EventMatch.objects.update_or_create(
-                            event_a_id=lo, event_b_id=hi,
-                            defaults=dict(score=100.0, match_type='exact_link',
-                                          status='confirmed'))
+                    # get_or_create, NOT update_or_create: if this pair was
+                    # already processed once, a re-run must not redo it —
+                    # the owner may have restored the event via the
+                    # "Previously flagged" tab, and re-suppressing it would
+                    # silently erase that decision.
+                    match, was_new = EventMatch.objects.get_or_create(
+                        event_a_id=lo, event_b_id=hi,
+                        defaults=dict(score=100.0, match_type='exact_link',
+                                      status='confirmed'))
+                    if not was_new:
+                        continue
+                    row.suppressed = True
+                    row.canonical = canonical
+                    # Also set is_duplicate so existing read paths hide it.
+                    row.is_duplicate = True
+                    row.duplicate_link = canonical.orig_link or f"event_{canonical.id}"
+                    row.save(update_fields=['suppressed', 'canonical',
+                                            'is_duplicate', 'duplicate_link'])
                 suppressed += 1
                 pairs += 1
         verb = 'would suppress' if dry else 'suppressed'

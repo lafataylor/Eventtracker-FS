@@ -477,7 +477,7 @@ def create_event_from_instagram_link(request):
 
         # Mirror every slide to durable storage (Instagram CDN URLs expire, and
         # the stored orig_thumb has to keep working).
-        hosted_urls, _originals = mirror_slides(
+        hosted_urls, real_slide_indexes = mirror_slides(
             slide_urls, exec_id=exec_id, user=account,
             output_file_path=output_file_path,
             downloader=fast_download, uploader=saveImage)
@@ -501,8 +501,14 @@ def create_event_from_instagram_link(request):
         payloads = build_payloads(
             extraction, shortcode=shortcode, post_link=instagram_url,
             slide_urls=hosted_urls, for_location=for_location,
-            poster=owner_username)
+            poster=owner_username, real_slide_indexes=real_slide_indexes)
+
         payloads = [p for p in payloads if p.get("isEvent")]
+        for p in payloads:
+            # Human-initiated refresh: re-pasting a URL means "update this
+            # event with what the post says now" (owner-resolution fields
+            # excepted). The nightly path never sets this.
+            p["refresh"] = True
 
         logger.info("[CAROUSEL_MANUAL] shortcode=%r post_type=%s extracted=%d kept=%d",
                     shortcode, extraction.post_type, len(extraction.events), len(payloads))

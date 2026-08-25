@@ -99,9 +99,9 @@ per date). Set recurrence_until only if the post states an end date.
 per-slide, use the slide that best depicts each, else null.
 
 Date rules (apply strictly):
-- The current year is 2026.
+- Today's date is {current_date}. Resolve relative and year-less dates against it.
 - NEVER default to October. If no date is found, return null for start_date. The \
-only acceptable forced fallback is 01-01-2026.
+only acceptable forced fallback is January 1 of the current year.
 - Spanish months: enero=Jan, febrero=Feb, marzo=Mar, abril=Apr, mayo=May, junio=Jun, \
 julio=Jul, agosto=Aug, septiembre/setiembre=Sep, octubre=Oct, noviembre=Nov, \
 diciembre=Dec. "9 de abril" = April 9.
@@ -125,9 +125,16 @@ Instagram bio:
 
 def build_messages(image_urls, caption, biography, external_url):
     """One vision message containing the prompt and every slide image."""
+    from datetime import date
+
     content = [{
         "type": "text",
+        # The date is interpolated at call time. A hardcoded "current year is
+        # 2026" would rot exactly the way the previous prompt's 2025 constant
+        # did - the 3,319-row Jan-1 sentinel cluster in production is the
+        # fossil record of that rot.
         "text": PROMPT.format(
+            current_date=date.today().strftime("%B %d, %Y"),
             caption=caption or "",
             biography=biography or "",
             external_url=external_url or ""),
@@ -182,10 +189,12 @@ def expand_recurring(events, max_occurrences=MAX_OCCURRENCES):
     """
     from datetime import datetime, timedelta
 
+    from dateutil.relativedelta import relativedelta
+
     expanded = []
     for event in events:
-        step = RECURRENCE_STEPS.get((event.recurrence or '').lower())
-        if not step or not event.start_date:
+        recurrence = (event.recurrence or '').lower()
+        if recurrence not in RECURRENCE_STEPS or not event.start_date:
             expanded.append(event)
             continue
         try:
@@ -193,6 +202,15 @@ def expand_recurring(events, max_occurrences=MAX_OCCURRENCES):
         except ValueError:
             expanded.append(event)
             continue
+
+        # A cross-midnight event carries a real end_date; each occurrence keeps
+        # the same start->end span rather than discarding it.
+        end_delta = None
+        if event.end_date:
+            try:
+                end_delta = datetime.strptime(event.end_date, '%m-%d-%Y') - start
+            except ValueError:
+                end_delta = None
 
         until = None
         if event.recurrence_until:
@@ -209,14 +227,18 @@ def expand_recurring(events, max_occurrences=MAX_OCCURRENCES):
             continue
 
         for n in range(max_occurrences):
-            occurrence = start + timedelta(days=step * n)
+            if recurrence == 'monthly':
+                # Calendar months, not 30-day hops: a Jan 31 series must not
+                # drift to Mar 2 / Apr 1. relativedelta clamps to month end.
+                occurrence = start + relativedelta(months=n)
+            else:
+                occurrence = start + timedelta(days=RECURRENCE_STEPS[recurrence] * n)
             if until and occurrence > until:
                 break
-            # Each occurrence is its own event, dated to that day. Only
-            # start_date changes; everything else is copied.
             expanded.append(event.model_copy(update={
                 'start_date': occurrence.strftime('%m-%d-%Y'),
-                'end_date': None,
+                'end_date': ((occurrence + end_delta).strftime('%m-%d-%Y')
+                             if end_delta is not None else None),
             }))
     return expanded
 
@@ -284,6 +306,9 @@ def to_api_payload(event: ExtractedEvent, *, shortcode, slide_index, ordinal,
         "orig_thumb": image_url,
         "shortcode": shortcode,
         "sourceSlideIndex": slide,
+        # Part of source_key. Assigned at build time (per slide, pre-filter) so
+        # both ingestion paths derive identical keys for the same event.
+        "sourceOrdinal": ordinal,
         "forLocation": for_location,
         "poster": poster,
     }
