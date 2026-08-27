@@ -27,9 +27,43 @@ from event.dedupe import (event_signature, find_fuzzy_pairs,
 COMPLETENESS_FIELDS = ('name', 'artist', 'start_date', 'start_time', 'price',
                        'genres', 'ticket_link', 'orig_thumb', 'venue_id')
 
+# A title and a date IDENTIFY an event; the other fields only describe it.
+IDENTIFYING_FIELDS = ('name', 'start_date')
+
+# Everything the extractor can put on a review card as text. Excludes
+# ticket_link and orig_thumb on purpose: every row has a thumbnail and most
+# carry the post URL, so their presence says nothing about whether the row
+# is a real listing.
+TEXT_FIELDS = ('name', 'start_date', 'start_time', 'artist', 'genres',
+               'price', 'venue_id')
+
+
+def has_extracted_text(event):
+    return any(getattr(event, f, None) for f in TEXT_FIELDS)
+
 
 def completeness(event):
-    return sum(1 for f in COMPLETENESS_FIELDS if getattr(event, f, None))
+    """Sort key for choosing a group's keeper, in strict tiers:
+
+      1. identifying fields (title, date) — a row with more always wins;
+      2. other extracted text (time, artist, genre, price, venue);
+      3. thumbnail / post link — present on nearly every row, so only a
+         last-resort tie-break.
+
+    A flat count let an undated, untitled row with several descriptive
+    fields beat the post's only dated row — verified on production
+    (2026-08-26): 5 of 25,192 collapses did exactly that. Tier 3 is kept
+    below tier 2 so a row that is only a thumbnail can never outrank a row
+    carrying real extracted text (the same rule has_extracted_text() applies
+    when deciding whether a pair is reviewable). Remaining ties fall to the
+    caller, which orders rows by id so the oldest row wins deterministically.
+    """
+    identifying = sum(1 for f in IDENTIFYING_FIELDS if getattr(event, f, None))
+    text = sum(1 for f in TEXT_FIELDS
+               if f not in IDENTIFYING_FIELDS and getattr(event, f, None))
+    media = sum(1 for f in COMPLETENESS_FIELDS
+                if f not in TEXT_FIELDS and getattr(event, f, None))
+    return (identifying, text, media)
 
 
 class Command(BaseCommand):
@@ -83,9 +117,11 @@ class Command(BaseCommand):
 
         suppressed = queued = pairs = 0
         for g in groups:
+            # order_by('id') makes completeness() ties deterministic: the
+            # oldest row wins, so a re-run picks the same keeper.
             rows = list(Event.objects.filter(
                 shortcode=g['shortcode'],
-                suppressed=False).select_related('venue'))
+                suppressed=False).select_related('venue').order_by('id'))
             if len(rows) < 2:
                 continue
             canonical = max(rows, key=completeness)
@@ -103,14 +139,28 @@ class Command(BaseCommand):
                 # Auto-suppress only when the pair is also textually the same
                 # event; otherwise queue it for human review.
                 row_sig = event_signature(row)
-                both_keyed_nameless = (row.source_key and canonical.source_key
-                                       and not canonical_sig['name']
-                                       and not row_sig['name'])
-                # Two KEYED nameless rows are ambiguous by construction: the
-                # legacy per-slide path writes N keys for ONE event, while the
-                # structured path writes N keys for N DISTINCT events. Without
-                # a title there is no way to tell which case this is — queue it.
-                if both_keyed_nameless or not same_post_is_redundant(canonical_sig, row_sig):
+                # Two nameless rows of one post are ambiguous: the legacy
+                # per-slide path writes N rows for ONE event, while the
+                # structured path writes N rows for N DISTINCT events, and
+                # same_post_is_redundant only knows names and dates. So when
+                # BOTH sides carry some extracted text (time, artist, genre,
+                # price or venue) a human has something to compare — queue.
+                # This applies whether the rows are keyed or legacy: a legacy
+                # row next to a new keyed one is the common case while 33k
+                # legacy posts remain. When one side has NO extracted text at
+                # all it is not a listing (it cannot appear in the date feed
+                # or match a search), so it is not a distinct event a reviewer
+                # could rescue: collapse it behind its post-mate. It stays
+                # restorable. Thumbnail and post link are deliberately not
+                # signal: every slide of one post has a different thumbnail
+                # and the same link, so they tell slides apart, not events.
+                # Measured 2026-08-27: 69 of 191 pending pairs had a textless
+                # side, growing ~80 per night; the 122 with text on both
+                # sides (102 titled) keep going to review.
+                ambiguous_pair = (
+                    not canonical_sig['name'] and not row_sig['name']
+                    and has_extracted_text(row) and has_extracted_text(canonical))
+                if ambiguous_pair or not same_post_is_redundant(canonical_sig, row_sig):
                     if not dry:
                         EventMatch.objects.get_or_create(
                             event_a_id=lo, event_b_id=hi,
