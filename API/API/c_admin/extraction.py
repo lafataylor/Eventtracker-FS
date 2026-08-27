@@ -253,7 +253,8 @@ def _today_mmddyyyy():
 
 
 def to_api_payload(event: ExtractedEvent, *, shortcode, slide_index, ordinal,
-                   post_link, image_url, for_location=None, poster=None):
+                   post_link, image_url, for_location=None, poster=None,
+                   source_key=None):
     """Map one ExtractedEvent to the dict AdminEvent.post consumes.
 
     Replaces the ~60-line GPT->event mapping that was copy-pasted into four
@@ -309,6 +310,10 @@ def to_api_payload(event: ExtractedEvent, *, shortcode, slide_index, ordinal,
         # Part of source_key. Assigned at build time (per slide, pre-filter) so
         # both ingestion paths derive identical keys for the same event.
         "sourceOrdinal": ordinal,
+        # Content-derived identity for multi-event posts (see
+        # post_ingest.build_payloads). When present, AdminEvent.post uses it
+        # verbatim instead of deriving the positional key.
+        **({"source_key": source_key} if source_key else {}),
         "forLocation": for_location,
         "poster": poster,
     }

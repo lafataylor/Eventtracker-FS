@@ -17,8 +17,51 @@ from django.test import TestCase
 
 from c_admin.extraction import (ExtractedEvent, PostExtraction, extract_events,
                                 to_api_payload)
-from event.ingest import build_source_key, coerce_int, upsert_event
+from event.ingest import (build_source_key, coerce_int, content_source_key,
+                          upsert_event)
 from event.models import Event
+
+
+class ContentSourceKeyTests(TestCase):
+    def test_normalises_case_and_accents(self):
+        self.assertEqual(content_source_key("abc", "Café Klubnacht", "08-27-2026"),
+                         content_source_key("abc", "cafe KLUBNACHT", "08-27-2026"))
+
+    def test_date_is_part_of_identity(self):
+        self.assertNotEqual(content_source_key("abc", "Klubnacht", "08-27-2026"),
+                            content_source_key("abc", "Klubnacht", "08-28-2026"))
+
+    def test_none_without_title_or_shortcode(self):
+        self.assertIsNone(content_source_key("abc", None, "08-27-2026"))
+        self.assertIsNone(content_source_key("abc", "  ", "08-27-2026"))
+        self.assertIsNone(content_source_key(None, "Klubnacht", "08-27-2026"))
+
+    def test_cannot_collide_with_positional_keys(self):
+        # positional keys are {shortcode}__{int}__{int}; content keys carry a
+        # non-numeric marker so the two namespaces can never overlap.
+        self.assertTrue(content_source_key("abc", "X", None).startswith("abc__e"))
+
+    def test_refresh_replay_never_overwrites_a_different_event(self):
+        """The incident, end to end at the upsert layer: run 2 returns a subset
+        in another order; with content keys each upsert lands on its own row
+        and the manual refresh (overwrite=True) only ever touches the same
+        event."""
+        run1 = [("GARDEN hosted by Remoto Rec", "08-26-2026", "6:00 PM"),
+                ("GREEN hosted by Remoto Rec", "08-26-2026", "10:00 PM"),
+                ("RED hosted by Franz Scala", "08-28-2026", None)]
+        for name, day, t in run1:
+            upsert_event(Event, content_source_key("RENATE", name, day), "RENATE", 0,
+                         dict(name=name, start_time=t, is_duplicate=False))
+        run2 = [("Red hosted by Franz Scala", "08-28-2026", "11:00 PM"),
+                ("Garden hosted by Remoto Rec", "08-26-2026", "6:00 PM")]
+        for name, day, t in run2:
+            upsert_event(Event, content_source_key("RENATE", name, day), "RENATE", 1,
+                         dict(name=name, start_time=t, is_duplicate=False), overwrite=True)
+        self.assertEqual(Event.objects.filter(shortcode="RENATE").count(), 3)
+        green = Event.objects.get(name="GREEN hosted by Remoto Rec")
+        self.assertEqual(green.start_time, "10:00 PM")          # untouched by run 2
+        red = Event.objects.get(source_key=content_source_key("RENATE", "RED hosted by Franz Scala", "08-28-2026"))
+        self.assertEqual(red.start_time, "11:00 PM")            # refreshed in place
 
 
 def mk_event(**over):
