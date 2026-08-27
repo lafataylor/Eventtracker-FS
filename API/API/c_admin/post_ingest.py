@@ -222,9 +222,25 @@ def build_payloads(extraction, *, shortcode, post_link, slide_urls,
     # path drops non-event payloads before POSTing while the nightly path
     # keeps them, and a server-side arrival-order counter would give the same
     # event two different keys across those paths.
+    from event.ingest import content_source_key
+
     payloads = []
     per_slide_counter = {}
-    for event in expand_recurring(extraction.events):
+    expanded = list(expand_recurring(extraction.events))
+    # Identity for MULTI-event posts is content-derived (normalised title +
+    # date), not positional. The extractor does not return a roundup's events
+    # in a stable order or count: re-extracting "This week at RENATE" gave 4
+    # of 9 events, renamed, on a different slide, so ordinal 0 pointed at a
+    # different event and the manual refresh overwrote one event with another
+    # (2026-08-27). Single-event posts and nameless events keep the positional
+    # key, which is stable for them and the only identity they have. So does a
+    # single RECURRING series: its per-date rows are expanded deterministically
+    # in code from one seed event, so their ordinals never vary — and keying
+    # them on the model-inferred anchor date would turn a one-day drift into
+    # N duplicate rows. Hence the decision is made on the EXTRACTED events,
+    # not the expanded list.
+    multi_event = len(extraction.events) > 1
+    for event in expanded:
         slide = event.source_slide_index
         slide_key = 0 if slide is None else int(slide)
         ordinal = per_slide_counter.get(slide_key, 0)
@@ -246,6 +262,9 @@ def build_payloads(extraction, *, shortcode, post_link, slide_urls,
             image_url=image_url,
             for_location=for_location,
             poster=poster,
+            source_key=(content_source_key(shortcode, event.event_name,
+                                           event.start_date, event.start_time)
+                        if multi_event else None),
         ))
     return payloads
 

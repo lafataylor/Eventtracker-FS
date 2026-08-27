@@ -193,3 +193,73 @@ class BuildPayloadTests(SimpleTestCase):
         payloads = build_payloads(extraction, shortcode="abc", post_link="L",
                                   slide_urls=[])
         self.assertIsNone(payloads[0]["orig_thumb"])
+
+
+class ContentIdentityTests(SimpleTestCase):
+    """Multi-event posts must key each event on WHAT it is, not WHERE the
+    extractor listed it. Replays the 2026-08-27 incident: re-extracting a
+    roundup returned a subset, reordered, on a different slide, and the
+    positional key made a different event overwrite an existing row."""
+
+    def _payloads(self, events):
+        return build_payloads(PostExtraction(post_type="roundup", events=events),
+                              shortcode="RENATE", post_link="L",
+                              slide_urls=["s0", "s1"])
+
+    def test_multi_event_post_gets_content_keys(self):
+        p = self._payloads([
+            mk_event(event_name="GARDEN hosted by Remoto Rec", start_date="08-26-2026", source_slide_index=0),
+            mk_event(event_name="GREEN hosted by Remoto Rec", start_date="08-26-2026", source_slide_index=0)])
+        self.assertTrue(p[0]["source_key"].startswith("RENATE__e"))
+        self.assertNotEqual(p[0]["source_key"], p[1]["source_key"])
+
+    def test_reordered_subset_on_other_slide_keeps_same_keys(self):
+        run1 = self._payloads([
+            mk_event(event_name="GARDEN hosted by Remoto Rec", start_date="08-26-2026", source_slide_index=0),
+            mk_event(event_name="GREEN hosted by Remoto Rec", start_date="08-26-2026", source_slide_index=0),
+            mk_event(event_name="RED hosted by Franz Scala", start_date="08-28-2026", source_slide_index=0)])
+        run2 = self._payloads([                      # subset, reversed, slide 1
+            mk_event(event_name="red hosted by FRANZ SCALA", start_date="08-28-2026", source_slide_index=1),
+            mk_event(event_name="Garden hosted by Remoto Rec", start_date="08-26-2026", source_slide_index=1)])
+        keys1 = {x["name"].lower(): x["source_key"] for x in run1}
+        keys2 = {x["name"].lower(): x["source_key"] for x in run2}
+        self.assertEqual(keys2["red hosted by franz scala"], keys1["red hosted by franz scala"])
+        self.assertEqual(keys2["garden hosted by remoto rec"], keys1["garden hosted by remoto rec"])
+
+    def test_same_title_different_dates_are_different_events(self):
+        p = self._payloads([
+            mk_event(event_name="Klubnacht", start_date="08-27-2026"),
+            mk_event(event_name="Klubnacht", start_date="08-28-2026")])
+        self.assertNotEqual(p[0]["source_key"], p[1]["source_key"])
+
+    def test_nameless_event_in_multi_post_keeps_positional_identity(self):
+        p = self._payloads([
+            mk_event(event_name="Named", start_date="08-27-2026", source_slide_index=0),
+            mk_event(event_name=None, source_slide_index=0)])
+        self.assertNotIn("source_key", p[1])          # server derives __0__1
+        self.assertEqual(p[1]["sourceOrdinal"], 1)
+
+    def test_single_recurring_series_stays_positional(self):
+        # One seed event expanded to several dates in code: the expansion is
+        # deterministic, so positional keys are stable and preferable to
+        # hashing a model-inferred anchor date that may drift a day.
+        p = build_payloads(PostExtraction(post_type="recurring", events=[
+            mk_event(event_name="Klubnacht", start_date="08-27-2026",
+                     recurrence="weekly", recurrence_until="09-10-2026")]),
+            shortcode="abc", post_link="L", slide_urls=["s0"])
+        self.assertGreater(len(p), 1)
+        self.assertTrue(all("source_key" not in x for x in p))
+        self.assertEqual([x["sourceOrdinal"] for x in p], list(range(len(p))))
+
+    def test_same_name_same_date_different_time_are_distinct(self):
+        p = self._payloads([
+            mk_event(event_name="Late Set", start_date="08-27-2026", start_time="10:00 PM"),
+            mk_event(event_name="Late Set", start_date="08-27-2026", start_time="2:00 AM")])
+        self.assertNotEqual(p[0]["source_key"], p[1]["source_key"])
+
+    def test_single_event_post_stays_positional(self):
+        p = build_payloads(PostExtraction(post_type="single", events=[
+            mk_event(event_name="Only one", start_date="08-27-2026")]),
+            shortcode="abc", post_link="L", slide_urls=["s0"])
+        self.assertNotIn("source_key", p[0])
+        self.assertEqual(p[0]["sourceOrdinal"], 0)
