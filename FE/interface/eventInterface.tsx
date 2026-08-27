@@ -1,4 +1,3 @@
-import { CancelToken } from 'axios';
 import { Event } from './objects/simpleObject';
 
 export interface GetEventByIDRequest {
@@ -24,7 +23,6 @@ export interface GetEventByFilterRequest {
 
 export interface GetEventsBySearchTermRequest {
   query: string;
-  cancelToken?: CancelToken;
 }
 
 export interface AddFeedbackRequest {

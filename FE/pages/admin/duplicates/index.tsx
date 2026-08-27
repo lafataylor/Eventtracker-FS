@@ -1,335 +1,401 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import AdminSideBar from '../../../components/Admin/AdminSideBar';
 import { useStore } from '../../../store/store';
-import { Constants } from '../../../utils/constants';
-import DeleteRowsOverlay from '../../../components/Admin/DeleteRowsOverlay';
-import EventCard from '../../../components/Dashboard/EventCard';
 import LoadingDialog from '../../../components/overlay/LoadingDialog';
 import ActionDialog from '../../../components/overlay/ActionDialog';
+import EventCard from '../../../components/Dashboard/EventCard';
+import Spinner from '../../../components/Spinner';
+import InfoOverlay from '../../../components/Admin/InfoOverlay';
+import EventDetails from '../../../components/Dashboard/EventDetails';
 import {
-  hideLoadingDialog,
-  hideSpinner,
-  showLoadingDialog,
-  showSpinner,
-} from '../../../store/actions/loadingState';
-import {
-  deleteEvents,
-  readAdminEvents,
   requestMiddleware,
+  readEventMatches,
+  resolveEventMatch,
   readAdminDuplicates,
   recoverDuplicate,
-  addDuplicate,
+  deleteEvents,
 } from '../../../services/lib/admin';
-
-import {
-  addToDeletedStack,
-  resetSelections,
-  setSelectedEvents,
-} from '../../../store/actions/selections';
-import DeletionConfirmationOverlay from '../../../components/Admin/DeletionConfirmationOverlay';
-import InfoOverlay from '../../../components/Admin/InfoOverlay';
-import {
-  HIDE_INFO_OVERLAY,
-  SHOW_INFO_OVERLAY,
-} from '../../../store/actions/type';
-import Spinner from '../../../components/Spinner';
+import { HIDE_INFO_OVERLAY, SHOW_INFO_OVERLAY } from '../../../store/actions/type';
 import { Event } from '../../../interface/objects/simpleObject';
-import EventDetails from '../../../components/Dashboard/EventDetails';
+
+interface Match {
+  match_id: number;
+  score: number;
+  match_type: string;
+  event_a: Event;
+  event_b: Event;
+}
+
+type ViewMode = 'pairs' | 'flagged';
+
+const MATCH_LABEL: Record<string, string> = {
+  fuzzy: 'Similar event',
+  exact_link: 'Same Instagram post',
+  phash: 'Similar flyer',
+};
 
 const Index = () => {
   const [state, dispatch] = useStore();
-  const {
-    selections,
-    loader,
-    filter,
-    search,
-    actionDialog,
-    hiddenColumns,
-    auth,
-    eventDetailsDialog,
-  } = state;
+  const { loader, actionDialog, auth } = state;
   const { overlay } = auth;
 
-  const [duplicateEvents, setDuplicateEvents] = useState<Event[]>([]);
+  const [view, setView] = useState<ViewMode>('pairs');
+  const [matches, setMatches] = useState<Match[]>([]);
+  const [pendingTotal, setPendingTotal] = useState(0);
+  // "Previously flagged": single events the OLD scraper hid via is_duplicate
+  // before that auto-flagging was retired. Kept as a recovery path so an event
+  // wrongly hidden by the old logic can be restored (the new pairs view only
+  // covers EventMatch rows, which the old scraper never created).
+  const [flagged, setFlagged] = useState<Event[]>([]);
+  const [flaggedTotal, setFlaggedTotal] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
-  
-  const [deletionResult, setDeletionResult] = useState({
-    success: false,
-    count: 0,
-    error: null,
-  });
+  const [loadError, setLoadError] = useState(false);
+  // A set, not a scalar: resolving two cards at once must keep both disabled
+  // independently (a scalar re-enabled the first card mid-flight).
+  const [busyIds, setBusyIds] = useState<Set<number>>(new Set());
 
-  const [eventIdToMark, setEventIdToMark] = useState('');
-  const [markingInProgress, setMarkingInProgress] = useState(false);
-
-  const clearDeletionResult = () => {
-    setDeletionResult({
-      success: false,
-      count: 0,
-      error: null,
+  const notify = (message: unknown, isError = false) =>
+    dispatch({
+      type: SHOW_INFO_OVERLAY,
+      // InfoOverlay renders the message as a React child; an Error object here
+      // throws "Objects are not valid as a React child" and white-screens the
+      // page. Coerce anything non-string (axios rejections are strings, but
+      // requestMiddleware and runtime errors are Error objects).
+      payload: {
+        message:
+          typeof message === 'string'
+            ? message
+            : (message as any)?.message || 'Something went wrong.',
+        isError,
+      },
     });
+
+  const fetchFlagged = async (loadMoreOffset: number = 0) => {
+    if (!(await requestMiddleware(dispatch))) return;
+    setIsLoading(true);
+    setLoadError(false);
+    try {
+      const res = await readAdminDuplicates(loadMoreOffset);
+      if (res.status === 200) {
+        const page = res.data?.duplicate_events || [];
+        setFlagged((prev) => (loadMoreOffset > 0 ? [...prev, ...page] : page));
+        setFlaggedTotal(res.data?.total ?? page.length);
+      } else {
+        setLoadError(true);
+      }
+    } catch (error) {
+      setLoadError(true);
+      notify((error as string) || 'Error loading flagged events', true);
+    } finally {
+      setIsLoading(false);
+    }
   };
 
-  const fetchDuplicates = async () => {
-    if (await requestMiddleware(dispatch)) {
-      showLoadingDialog()(dispatch);
-      setIsLoading(true);
-      
-      try {
-        const res = await readAdminDuplicates();
-        if (res.status === 200) {
-          const duplicates: Event[] = res.data?.duplicate_events || [];
-          //console.log('duplicates', duplicates);
-          setDuplicateEvents(duplicates);
-        }
-      } catch (error) {
-        const message = error || 'Error fetching duplicate events';
-        dispatch({
-          type: SHOW_INFO_OVERLAY,
-          payload: { message, isError: true },
-        });
-      } finally {
-        hideLoadingDialog()(dispatch);
-        setIsLoading(false);
+  const restore = async (eventId: number) => {
+    if (!(await requestMiddleware(dispatch))) return;
+    setBusyIds((prev) => new Set(prev).add(eventId));
+    try {
+      await recoverDuplicate(String(eventId));
+      setFlagged((prev) => prev.filter((e) => e.id !== eventId));
+      notify('Event restored to the site.', false);
+    } catch (error) {
+      notify('Could not restore the event. Please try again.', true);
+    } finally {
+      setBusyIds((prev) => {
+        const next = new Set(prev);
+        next.delete(eventId);
+        return next;
+      });
+    }
+  };
+
+  // The old duplicates page let the owner permanently delete junk (spam or
+  // broken rows that should never go live). Restore-only left those with no
+  // exit: past-dated rows never appear on /admin/events either.
+  const removeForever = async (eventId: number) => {
+    if (!window.confirm('Delete this event permanently? This cannot be undone.')) {
+      return;
+    }
+    if (!(await requestMiddleware(dispatch))) return;
+    setBusyIds((prev) => new Set(prev).add(eventId));
+    try {
+      await deleteEvents({ events: [String(eventId)] });
+      setFlagged((prev) => prev.filter((e) => e.id !== eventId));
+      notify('Event deleted.', false);
+    } catch (error) {
+      notify('Could not delete the event. Please try again.', true);
+    } finally {
+      setBusyIds((prev) => {
+        const next = new Set(prev);
+        next.delete(eventId);
+        return next;
+      });
+    }
+  };
+
+  const fetchMatches = async () => {
+    if (!(await requestMiddleware(dispatch))) return;
+    setIsLoading(true);
+    setLoadError(false);
+    try {
+      const res = await readEventMatches('pending', 50);
+      if (res.status === 200) {
+        setMatches(res.data?.matches || []);
+        setPendingTotal(res.data?.pending_total || 0);
+      } else {
+        // Not thrown by the interceptor but not success either — surface it
+        // rather than silently render an empty "all caught up" screen.
+        setLoadError(true);
+        notify('Could not load duplicates. Please refresh.', true);
       }
+    } catch (error) {
+      setLoadError(true);
+      notify((error as string) || 'Error loading duplicates', true);
+    } finally {
+      setIsLoading(false);
     }
   };
 
   useEffect(() => {
-    fetchDuplicates();
-  }, []);
+    // Clear any in-flight busy state from the other view so a stale id can't
+    // disable a button here (the two views key busy state on different ids).
+    setBusyIds(new Set());
+    if (view === 'pairs') fetchMatches();
+    else fetchFlagged();
+  }, [view]);
 
-  const deleteSelectedEvents = async () => {
-    if (Object.keys(selections.events).length === 0) return;
-    
-    const eventsToDelete = Object.keys(selections.events);
-    showSpinner()(dispatch);
-
-    if (await requestMiddleware(dispatch)) {
-      try {
-        await deleteEvents({ events: eventsToDelete });
-        addToDeletedStack(selections.events)(dispatch);
-        hideSpinner()(dispatch);
-        resetSelections()(dispatch);
-        setDeletionResult({
-          success: true,
-          count: eventsToDelete.length,
-          error: null,
-        });
-
-        // Remove deleted events from the list
-        setDuplicateEvents(prev => 
-          prev.filter(event => !eventsToDelete.includes(event.id.toString()))
-        );
-      } catch (error) {
-        hideSpinner()(dispatch);
-        //console.log('Deletion error: ', error);
-        dispatch({
-          type: SHOW_INFO_OVERLAY,
-          payload: { message: 'Failed to delete events', isError: true },
-        });
-      }
+  // Refetch the next page when the current batch of 50 empties but more remain
+  // server-side. Done as an effect on committed state (not inside resolve)
+  // so concurrent resolutions can't read a stale snapshot and show a false
+  // "all caught up".
+  useEffect(() => {
+    if (view === 'pairs' && !isLoading && !loadError
+        && matches.length === 0 && pendingTotal > 0) {
+      fetchMatches();
     }
-  };
+  }, [view, matches.length, pendingTotal, isLoading, loadError]);
 
-  const handleRecoverEvent = async (eventId: number) => {
-    if (await requestMiddleware(dispatch)) {
-      showSpinner()(dispatch);
-      try {
-        await recoverDuplicate(eventId.toString());
-        
-        // Remove the recovered event from duplicates
-        setDuplicateEvents(prev => 
-          prev.filter(event => event.id !== eventId)
-        );
-        
-        dispatch({
-          type: SHOW_INFO_OVERLAY,
-          payload: { message: 'Event recovered successfully', isError: false },
-        });
-      } catch (error) {
-        dispatch({
-          type: SHOW_INFO_OVERLAY,
-          payload: { message: 'Failed to recover event', isError: true },
-        });
-      } finally {
-        hideSpinner()(dispatch);
-      }
-    }
-  };
-
-  const handleSelectEvent = (event: Event, isSelected: boolean) => {
-    const updatedSelections = {...selections.events};
-    
-    if (isSelected) {
-      updatedSelections[event.id] = true;
-    } else {
-      delete updatedSelections[event.id];
-    }
-    
-    setSelectedEvents(updatedSelections)(dispatch);
-  };
-
-  const handleMarkAsDuplicate = async () => {
-    if (!eventIdToMark || eventIdToMark.trim() === '') {
-      dispatch({
-        type: SHOW_INFO_OVERLAY,
-        payload: { message: 'Please enter a valid event ID', isError: true },
+  const resolve = async (match: Match, action: 'keep_a' | 'keep_b' | 'not_duplicate') => {
+    if (!(await requestMiddleware(dispatch))) return;
+    setBusyIds((prev) => new Set(prev).add(match.match_id));
+    try {
+      await resolveEventMatch(match.match_id, action);
+      // The event that got suppressed by this verdict (none for not_duplicate).
+      const suppressedId =
+        action === 'keep_a' ? match.event_b.id
+        : action === 'keep_b' ? match.event_a.id
+        : null;
+      // Drop the resolved pair AND any other pending pair that references the
+      // now-suppressed event — otherwise a sibling pair would still offer to
+      // "keep" it and silently un-hide it.
+      //
+      // Kept pure: React may invoke state updaters more than once (StrictMode
+      // does), so no side effects are allowed inside them — an earlier version
+      // decremented pendingTotal inside the updater and double-counted.
+      const keepPair = (m: Match) =>
+        m.match_id !== match.match_id &&
+        (suppressedId == null ||
+          (m.event_a.id !== suppressedId && m.event_b.id !== suppressedId));
+      // One filter pass; both state updates derive from it. Updaters stay
+      // pure (StrictMode re-invokes them), and pendingTotal is an optimistic
+      // display value that self-heals on the next fetch; the empty-batch
+      // refetch is handled by the effect above, on committed state.
+      const next = matches.filter(keepPair);
+      setMatches(next);
+      setPendingTotal((n) => Math.max(0, n - (matches.length - next.length)));
+      notify(
+        action === 'not_duplicate'
+          ? 'Marked as not duplicates — both kept.'
+          : 'Duplicate hidden. You can restore it later.',
+        false
+      );
+    } catch (error) {
+      notify('Could not save your choice. Please try again.', true);
+    } finally {
+      setBusyIds((prev) => {
+        const next = new Set(prev);
+        next.delete(match.match_id);
+        return next;
       });
-      return;
-    }
-
-    if (await requestMiddleware(dispatch)) {
-      setMarkingInProgress(true);
-      showSpinner()(dispatch);
-      
-      try {
-        await addDuplicate(eventIdToMark.trim());
-        dispatch({
-          type: SHOW_INFO_OVERLAY,
-          payload: { message: 'Event marked as duplicate successfully', isError: false },
-        });
-        
-        // Refresh the duplicates list to show the newly marked duplicate
-        await fetchDuplicates();
-        
-        // Clear the input
-        setEventIdToMark('');
-      } catch (error) {
-        dispatch({
-          type: SHOW_INFO_OVERLAY,
-          payload: { message: 'Failed to mark event as duplicate', isError: true },
-        });
-      } finally {
-        hideSpinner()(dispatch);
-        setMarkingInProgress(false);
-      }
     }
   };
 
   return (
     <div className="w-full flex h-full font-montserrat">
       <AdminSideBar currentPage="duplicates" />
-      <div
-        className="px-8 pt-8 h-full font-montserrat flex flex-col w-full text-off-white overflow-x-auto"
-        onClick={() => {}}
-      >
-        <nav className="border-b-4 border-beaming-orange flex justify-start items-center flex pb-3 gap-4">
+      <div className="px-8 pt-8 h-full flex flex-col w-full text-off-white overflow-x-auto">
+        <nav className="border-b-4 border-beaming-orange flex justify-start items-center pb-3 gap-4">
           <div className="text-5xl font-bold px-3">Duplicates</div>
+          {!isLoading && view === 'pairs' && (
+            <div className="text-lg text-stone-gray self-end pb-1">
+              {pendingTotal} pair{pendingTotal === 1 ? '' : 's'} to review
+            </div>
+          )}
         </nav>
 
-        {/*<div className="my-6 p-4 bg-stone-gray bg-opacity-20 rounded-xl">
-          <h3 className="text-xl font-bold mb-4 text-beaming-orange">
-            Mark an Event as Duplicate
-          </h3>
-          <div className="flex flex-wrap gap-4 items-end">
-            <div className="flex flex-col">
-              <label className="text-sm mb-1 text-beaming-orange">Event ID</label>
-              <input
-                type="text"
-                value={eventIdToMark}
-                onChange={(e) => setEventIdToMark(e.target.value)}
-                className="py-2 px-4 bg-midnight border border-beaming-orange rounded-lg text-off-white focus:outline-none focus:ring-2 focus:ring-beaming-orange"
-                placeholder="Enter event ID"
-                disabled={markingInProgress}
-              />
-            </div>
+        <div className="flex gap-2 mt-4 px-3">
+          {(['pairs', 'flagged'] as ViewMode[]).map((v) => (
             <button
-              className="py-2 px-6 bg-beaming-orange text-black font-medium rounded-lg disabled:opacity-50"
-              onClick={handleMarkAsDuplicate}
-              disabled={markingInProgress}
+              key={v}
+              onClick={() => setView(v)}
+              className={`py-2 px-4 rounded-lg font-medium ${
+                view === v
+                  ? 'bg-beaming-orange text-black'
+                  : 'border border-stone-gray text-off-white'
+              }`}
             >
-              {markingInProgress ? (
-                <div className="flex items-center gap-2">
-                  <Spinner colorClass="text-black" size={16} />
-                  <span>Processing...</span>
-                </div>
-              ) : (
-                'Mark as Duplicate'
-              )}
+              {v === 'pairs' ? 'Duplicate pairs' : 'Previously flagged'}
             </button>
-          </div>
-        </div>*/}
+          ))}
+        </div>
 
-        <div className="flex-1 w-full overflow-x-auto overflow-y-auto py-8">
+        <p className="mt-4 px-3 text-stone-gray max-w-3xl">
+          {view === 'pairs'
+            ? 'These look like the same event posted twice. Compare them, then keep the better one — the other is hidden from the site (and can be restored).'
+            : 'Events currently hidden as duplicates by the automatic scraper. If any is a real event that should be live, restore it.'}
+        </p>
+
+        <div className="flex-1 w-full overflow-y-auto py-8">
           {isLoading ? (
             <div className="w-full h-64 flex items-center justify-center">
               <Spinner colorClass="text-beaming-orange" size={48} />
             </div>
-          ) : duplicateEvents.length === 0 ? (
-            <div className="w-full h-64 flex items-center justify-center text-xl">
-              No duplicate events found
+          ) : loadError ? (
+            <div className="w-full h-64 flex flex-col items-center justify-center gap-3">
+              <div className="text-xl">Couldn’t load duplicates.</div>
+              <button
+                className="py-2 px-6 rounded-lg bg-beaming-orange text-black font-semibold"
+                onClick={() => (view === 'pairs' ? fetchMatches() : fetchFlagged())}
+              >
+                Try again
+              </button>
             </div>
-          ) : (
-            <div className="flex flex-wrap gap-6">
-              {duplicateEvents.map((event) => (
-                <div key={`event-${event.id}`} className="relative p-4 bg-stone-gray bg-opacity-20 rounded-xl">
-                  <div className="mb-2">
-                    <label className="custom_checkbox relative rounded-full">
-                      <input
-                        type="checkbox"
-                        className="rounded-full"
-                        checked={!!selections.events[event.id]}
-                        onChange={(e) => handleSelectEvent(event, e.target.checked)}
-                      />
-                      <span className="custom_checkbox_mark"></span>
-                    </label>
-                  </div>
-                  
-                  <div className="w-64">
-                    <EventCard
-                      event={event}
-                      disabled={false}
-                      isFavorite={false}
-                    />
-                  </div>
-                  
-                  {event.duplicate_link && (
-                    <div className="mt-2 mb-2">
-                      <a 
-                        href={event.duplicate_link} 
-                        target="_blank" 
-                        rel="noopener noreferrer"
-                        className="text-beaming-orange hover:underline"
-                      >
-                        View Original Post
-                      </a>
+          ) : view === 'flagged' ? (
+            flagged.length === 0 ? (
+              <div className="w-full h-64 flex flex-col items-center justify-center gap-2">
+                <div className="text-2xl font-bold">Nothing flagged 🎉</div>
+                <div className="text-stone-gray">No previously-hidden events to review.</div>
+              </div>
+            ) : (
+              <div className="flex flex-wrap gap-6">
+                {flagged.map((event) => (
+                  <div
+                    key={`flagged-${event.id}`}
+                    className="p-4 bg-stone-gray bg-opacity-20 rounded-2xl flex flex-col items-center gap-3"
+                  >
+                    <div className="w-64">
+                      <EventCard event={event} disabled={false} isFavorite={false} />
                     </div>
-                  )}
-                  
-                  <div className="flex mt-2 gap-2">
                     <button
-                      className="py-2 px-4 w-full flex items-center justify-center gap-2 rounded-lg border-beaming-orange border-[1px] bg-beaming-orange text-black font-medium"
-                      onClick={() => handleRecoverEvent(event.id)}
+                      className="py-2 px-4 w-64 rounded-lg bg-beaming-orange text-black font-semibold disabled:opacity-50"
+                      onClick={() => restore(event.id)}
+                      disabled={busyIds.has(event.id)}
                     >
-                      Recover
+                      Restore to site
+                    </button>
+                    <button
+                      className="py-2 px-4 w-64 rounded-lg border border-stone-gray text-off-white hover:border-red-500 hover:text-red-400 disabled:opacity-50"
+                      onClick={() => removeForever(event.id)}
+                      disabled={busyIds.has(event.id)}
+                    >
+                      Delete permanently
                     </button>
                   </div>
-                </div>
-              ))}
+                ))}
+                {flagged.length < flaggedTotal && (
+                  <div className="w-full flex justify-center py-4">
+                    <button
+                      className="py-2 px-6 rounded-lg border border-stone-gray text-off-white hover:border-beaming-orange"
+                      onClick={() => fetchFlagged(flagged.length)}
+                    >
+                      Load more ({flagged.length} of {flaggedTotal})
+                    </button>
+                  </div>
+                )}
+              </div>
+            )
+          ) : matches.length === 0 ? (
+            <div className="w-full h-64 flex flex-col items-center justify-center gap-2">
+              <div className="text-2xl font-bold">All caught up 🎉</div>
+              <div className="text-stone-gray">No duplicates left to review.</div>
+            </div>
+          ) : (
+            <div className="flex flex-col gap-8 max-w-5xl">
+              {matches.map((m) => {
+                const busy = busyIds.has(m.match_id);
+                return (
+                  <div
+                    key={m.match_id}
+                    className="p-6 bg-stone-gray bg-opacity-20 rounded-2xl"
+                  >
+                    <div className="flex items-center gap-3 mb-4">
+                      <span className="text-beaming-orange font-bold uppercase text-sm tracking-wide">
+                        {MATCH_LABEL[m.match_type] || 'Possible duplicate'}
+                      </span>
+                      <span className="text-stone-gray text-sm">
+                        {Math.round(m.score)}% match
+                      </span>
+                    </div>
+
+                    <div className="flex flex-col md:flex-row items-stretch gap-4">
+                      {/* Event A */}
+                      <div className="flex-1 flex flex-col items-center gap-3">
+                        <div className="w-64">
+                          <EventCard event={m.event_a} disabled={false} isFavorite={false} />
+                        </div>
+                        <button
+                          className="py-2 px-4 w-64 rounded-lg bg-beaming-orange text-black font-semibold disabled:opacity-50"
+                          onClick={() => resolve(m, 'keep_a')}
+                          disabled={busy}
+                        >
+                          Keep this one
+                        </button>
+                      </div>
+
+                      {/* Middle divider / not-a-duplicate */}
+                      <div className="flex md:flex-col items-center justify-center gap-3 px-2">
+                        <span className="text-stone-gray font-bold">vs</span>
+                        <button
+                          className="py-2 px-4 rounded-lg border border-stone-gray text-off-white hover:border-beaming-orange disabled:opacity-50 whitespace-nowrap"
+                          onClick={() => resolve(m, 'not_duplicate')}
+                          disabled={busy}
+                        >
+                          Not duplicates
+                        </button>
+                      </div>
+
+                      {/* Event B */}
+                      <div className="flex-1 flex flex-col items-center gap-3">
+                        <div className="w-64">
+                          <EventCard event={m.event_b} disabled={false} isFavorite={false} />
+                        </div>
+                        <button
+                          className="py-2 px-4 w-64 rounded-lg bg-beaming-orange text-black font-semibold disabled:opacity-50"
+                          onClick={() => resolve(m, 'keep_b')}
+                          disabled={busy}
+                        >
+                          Keep this one
+                        </button>
+                      </div>
+                    </div>
+
+                    {busy && (
+                      <div className="flex justify-center mt-3">
+                        <Spinner colorClass="text-beaming-orange" size={20} />
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           )}
         </div>
-
-        {Object.keys(selections.events).length > 0 && (
-          <DeleteRowsOverlay
-            isAccounts={false}
-            deleteItems={deleteSelectedEvents}
-          />
-        )}
 
         <EventDetails isEdit={true} />
       </div>
 
       {loader.isVisible && <LoadingDialog />}
       {actionDialog.dialog != null && <ActionDialog />}
-      {(deletionResult.success || deletionResult.error) && (
-        <DeletionConfirmationOverlay
-          itemType="Event"
-          result={deletionResult}
-          onClose={clearDeletionResult}
-        />
-      )}
       {overlay.isVisible && (
         <InfoOverlay
           message={overlay.message}

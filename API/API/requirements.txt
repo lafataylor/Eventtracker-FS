@@ -11,7 +11,9 @@ Pyrebase4
 tenacity
 imageio[ffmpeg]
 apify_client
-openai
+openai==1.54.4
 celery
 fuzzywuzzy[speedup]
-django-dbbackuppython-dotenv
+django-dbbackup
+python-dotenv
+rapidfuzz

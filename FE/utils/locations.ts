@@ -1,8 +1,12 @@
 import { extractLocationsFromEvents } from './utils';
 
-const getApiBase = () =>
-  process.env.NEXT_PUBLIC_API_BASE_URL ||
-  'https://eventtrackerapi.lafaslist.com/v1';
+// Single source of truth for the API base URL. The trailing slash is
+// stripped because utils build `${base}/path` while the axios client appends
+// its own '/' — a doubled slash turns into '/v1//...' which the auth
+// middleware rejects with 403.
+export const getApiBase = () =>
+  (process.env.NEXT_PUBLIC_API_BASE_URL ||
+    'https://eventtrackerapi.lafaslist.com/v1').replace(/\/+$/, '');
 
 const formatTodayForApi = () => {
   const now = new Date();

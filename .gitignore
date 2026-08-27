@@ -43,3 +43,13 @@ Thumbs.db
 
 # Local scraper artifacts
 API/ImagesFetcher/scraper/posters/
+
+# Local database copies (never commit — may contain production data)
+*.sqlite3
+*.sqlite3-journal
+*.db
+
+# Databases must never be committed (a 548 MB prod copy nearly was)
+db.sqlite3
+*.db
+*.sqlite3

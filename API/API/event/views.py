@@ -1,9 +1,13 @@
 from rest_framework.decorators import api_view
 from rest_framework.views import APIView
 
-from .models import Event, Venue, Execution, Feedback, FavoritesData, BlacklistedLink
+from .models import Event, Venue, Execution, Feedback, FavoritesData, BlacklistedLink, EventMatch
 from .serializers import EventSerializer, FeedbackSerializer
+from .ingest import (build_source_key, coerce_int, normalize_poster_name,
+                     resolve_venue, upsert_event)
+from django.db import transaction
 from django.db.models import Q
+from django.utils import timezone
 
 from c_admin.models import Account, AccountDetail
 
@@ -22,6 +26,19 @@ import logging
 logger = logging.getLogger('django')
 
 EVENT_CUTOFF_TIME = timedelta(hours=25)
+
+# Events with no extracted start_date are still real events (2,534 of them in
+# production). They are included in search when recently scraped rather than
+# excluded outright, which is what made them permanently unfindable.
+UNDATED_EVENT_WINDOW_DAYS = 45
+
+# Search returned every match unpaginated. Bound it so one broad query cannot
+# serialize tens of thousands of rows.
+SEARCH_RESULT_LIMIT = 500
+
+# Price lives in a free-text CharField, so range filtering has to parse each
+# value in Python. Cap how many rows that scan touches per request.
+PRICE_SCAN_LIMIT = 5000
 
 @api_view(["GET"])
 def event(request):
@@ -126,6 +143,64 @@ def get_favorites(request):
         return ServerProcessingError(message="Error retrieving favorites: "+str(e))
 
 
+def _parse_price_bounds(condition, values):
+    """(low, high) for a price filter, or None if the input is unusable."""
+    try:
+        if condition == "between" and len(values) >= 2:
+            return float(values[0]), float(values[1])
+        if condition == "equal" and values:
+            exact = float(values[0])
+            return exact, exact
+    except (TypeError, ValueError):
+        return None
+    return None
+
+
+def _price_within(price_text, low, high):
+    """Is a free-text price inside [low, high]?
+
+    Prices are strings the extractor produced: "$200", "MXN 150", "150 pesos",
+    "Free", and tiered values like "$150, $200, $300". Matching only the FIRST
+    number misses tiers (599 of 4,267 non-empty production prices contain more
+    than one), so ANY number in range counts as a match.
+
+    "Free"/"no cover" is treated as 0. A free-text price is inherently fuzzy;
+    this errs toward including an event rather than hiding it, which is the
+    behaviour the ticket asks for.
+    """
+    import re
+
+    if price_text is None:
+        return False
+    text = str(price_text).strip()
+    if not text:
+        return False
+    # Drop tokens that are numbers but not prices, so "Free before 11pm, $150
+    # after" does not match on the "11" of "11pm" and "18+" is not read as $18:
+    #   - clock times: 11pm, 10:30 PM
+    #   - ages:        18+, 21 +
+    cleaned = re.sub(r'\b\d{1,2}(?::\d{2})?\s*(?:am|pm)\b', ' ', text, flags=re.IGNORECASE)
+    # \b anchors are required: without them "MXN 250 + service fee" matched the
+    # "50 +" inside 250 and left "MXN 2". And only REAL age values (16-21)
+    # count as age barriers — a generic \d{1,2}+ also deleted prices like
+    # "$50+" and made those events unmatchable by every price filter.
+    cleaned = re.sub(r'\b(1[6-9]|2[01])\s*\+', ' ', cleaned)
+    # Check numeric tiers: a tiered price ("Free before 11pm, $150 after",
+    # "$150, $200, $300") matches if ANY listed price is in range (599 of 4,267
+    # production prices list more than one).
+    for raw in re.findall(r'\d+(?:\.\d+)?', cleaned.replace(',', '')):
+        try:
+            if low <= float(raw) <= high:
+                return True
+        except ValueError:
+            continue
+    # No price number matched: a free/no-cover event is a 0-price match.
+    if re.search(r'\b(free|gratis|no cover|sin costo|entrada libre)\b',
+                 text, re.IGNORECASE):
+        return low <= 0 <= high
+    return False
+
+
 def convert_date_format(date_str):
     if date_str is None:
         return None
@@ -183,77 +258,86 @@ class AdminEvent(APIView):
 
         try:
             saved_events = []
+            # Per-batch ordinal counter, keyed by (shortcode, slide). Two events
+            # extracted from the same carousel slide get distinct positional keys
+            # so neither can overwrite the other — critical because 72% of events
+            # have no name to distinguish them by.
+            slide_ordinals = {}
+            # A nightly batch is one account and one execution repeated across
+            # hundreds of events; re-querying them per event added ~3 queries x
+            # batch size on the write-locked SQLite. Memoize per request.
+            _exec_cache, _poster_cache, _details_cache, _venue_cache = {}, {}, {}, {}
             for event in events:
-                venue = event.get("venue")
-                if venue:
-                    venue_obj = Venue.objects.create(
-                        name=venue.get("name"),
-                        city=venue.get("city"),
-                        state=venue.get("state"),
-                        country=venue.get("country"),
-                        address=venue.get("address"),
-                    )
-                    venue_obj.save()
-                    venue = venue_obj
-
                 exec_id = event.get("exec_id")
                 if exec_id:
-                    exec_id = Execution.objects.get(pk=exec_id)
+                    if exec_id not in _exec_cache:
+                        _exec_cache[exec_id] = Execution.objects.get(pk=exec_id)
+                    exec_id = _exec_cache[exec_id]
 
-                poster_name = event.get("poster")
+                # Poster account — initialised to None so a poster-less event does
+                # not NameError, and so later events don't silently inherit the
+                # previous event's account (both were live bugs).
+                poster = None
+                # Reject serialized-Account blobs: creating an Account named
+                # after one is what produced 37 rows whose username is a nested
+                # dict, each run wrapping the previous one.
+                poster_name = normalize_poster_name(event.get("poster"))
                 if poster_name:
-                    try:
-                        poster = Account.objects.filter(user=poster_name)
-                        if poster.exists():
-                            poster = poster[0]
-                        else:
-                            poster_obj = Account.objects.create(
-                                user=poster_name,
-                                is_personal=True,
-                                created_by = "Admin"
-                            )
-                            poster_obj.save()
-                            poster = poster_obj
-                            #return ServerProcessingError()
-                    except Exception as e:
-                        logger.debug("Error while creating poster: "+str(e)+"\n\n\n")
-                        
-                        #return ServerProcessingError()
+                    if poster_name in _poster_cache:
+                        poster = _poster_cache[poster_name]
+                    else:
+                        try:
+                            poster = Account.objects.filter(user=poster_name).first() or \
+                                Account.objects.create(
+                                    user=poster_name, is_personal=True, created_by="Admin")
+                        except Exception as e:
+                            logger.debug("Error while creating poster: " + str(e) + "\n\n\n")
+                        _poster_cache[poster_name] = poster
 
-                # Resolve account detail overrides (enforce / fallback) — non-fatal
+                # Resolve account detail overrides (enforce / fallback) — non-fatal.
                 venue_overrides = {}
                 event_overrides = {}
                 try:
                     if poster and hasattr(poster, 'pk'):
-                        account_details = AccountDetail.objects.filter(account=poster)
                         raw_venue = event.get('venue') or {}
-                        for detail in account_details:
-                            fn = detail.field_name
-                            val = detail.value
-                            mode = detail.mode
+                        if poster.pk not in _details_cache:
+                            _details_cache[poster.pk] = list(
+                                AccountDetail.objects.filter(account=poster))
+                        for detail in _details_cache[poster.pk]:
+                            fn, val, mode = detail.field_name, detail.value, detail.mode
                             if fn.startswith('venue_'):
-                                vkey = fn[6:]  # strip 'venue_' prefix → name/city/state/country/address
-                                current_venue_val = raw_venue.get(vkey) if isinstance(raw_venue, dict) else None
-                                if mode == 'enforce' or (mode == 'fallback' and not current_venue_val):
+                                vkey = fn[6:]  # name/city/state/country/address
+                                current = raw_venue.get(vkey) if isinstance(raw_venue, dict) else None
+                                if mode == 'enforce' or (mode == 'fallback' and not current):
                                     venue_overrides[vkey] = val
                             else:
-                                current_event_val = event.get(fn)
-                                if mode == 'enforce' or (mode == 'fallback' and not current_event_val):
+                                # AccountDetail field_names are snake_case but a
+                                # few event JSON keys are camelCase; without this
+                                # alias, fallback never sees the real value and so
+                                # always overrides (behaving like enforce).
+                                json_key = {'age_barrier': 'ageBarrier'}.get(fn, fn)
+                                current = event.get(json_key)
+                                if mode == 'enforce' or (mode == 'fallback' and not current):
                                     event_overrides[fn] = val
                 except Exception as _detail_exc:
                     logger.warning(f"AccountDetail override skipped (non-fatal): {_detail_exc}")
-                    venue_overrides = {}
-                    event_overrides = {}
+                    venue_overrides, event_overrides = {}, {}
 
-                # Apply venue overrides
-                if venue_overrides and isinstance(venue, Venue):
-                    try:
-                        for _vk, _vv in venue_overrides.items():
-                            if hasattr(venue, _vk):
-                                setattr(venue, _vk, _vv)
-                        venue.save()
-                    except Exception as _ve:
-                        logger.warning(f"Venue override save failed (non-fatal): {_ve}")
+                # Fold venue overrides into the lookup values BEFORE resolving, so
+                # an identical venue is reused only when it matches the final
+                # values. Never mutate/save a shared venue row — doing so would
+                # rewrite the venue for every other event that reuses it.
+                venue_data = dict(event.get("venue") or {})
+                venue_data.update(venue_overrides)
+                # Nightly batches repeat the same venue for most events; without
+                # this cache each event full-scans the 73k-row unindexed Venue
+                # table inside the request.
+                _vkey = tuple(sorted((k, v) for k, v in venue_data.items() if v))
+                if _vkey in _venue_cache:
+                    venue = _venue_cache[_vkey]
+                else:
+                    venue = resolve_venue(Venue, venue_data)
+                    _venue_cache[_vkey] = venue
 
                 def _ev(key, raw_key=None):
                     """Return event_overrides value if present, else fall back to event dict."""
@@ -282,11 +366,40 @@ class AdminEvent(APIView):
                 rsvp_required = event.get("rsvpRequired")
                 num_events = event.get("numEvents")
                 genres = _ev("genres")
-                is_duplicate = event.get("is_duplicate")
+                # Coerce at the source: is_duplicate is null=True, and every
+                # read path filters is_duplicate=False, which never matches NULL
+                # in SQL. Any caller that omits the key would otherwise save an
+                # event that is invisible site-wide. Default to visible.
+                is_duplicate = bool(event.get("is_duplicate") or False)
                 forLocation = _ev("forLocation")
 
 
-                event_obj = Event.objects.create(
+                # Post identity for idempotent ingestion (Tickets 1 & 2).
+                # Positional key {shortcode}__{slide}__{ordinal}: collision-free
+                # even when the name is null, so distinct events never overwrite
+                # each other. Callers with no shortcode fall back to a plain
+                # create (previous behaviour), so nothing regresses until the
+                # extractor starts supplying post identity.
+                shortcode = event.get("shortcode")
+                slide_index = event.get("sourceSlideIndex")
+                source_key = event.get("source_key")
+                supplied_ordinal = event.get("sourceOrdinal")
+                if not source_key and shortcode and supplied_ordinal is not None:
+                    # Extractor-assigned ordinal: authoritative, identical
+                    # across ingestion paths regardless of payload filtering.
+                    source_key = build_source_key(
+                        shortcode, slide_index, supplied_ordinal)
+                if not source_key and shortcode:
+                    # Key the counter on the SAME coerced slide value the key
+                    # builder uses, so a None-slide and a 0-slide event of one
+                    # post don't each start at ordinal 0 and collide on
+                    # "{shortcode}__0__0".
+                    okey = (shortcode, coerce_int(slide_index))
+                    ordinal = slide_ordinals.get(okey, 0)
+                    slide_ordinals[okey] = ordinal + 1
+                    source_key = build_source_key(shortcode, slide_index, ordinal)
+
+                event_defaults = dict(
                     exec=exec_id,
                     venue=venue,
                     poster=poster,
@@ -314,9 +427,14 @@ class AdminEvent(APIView):
                     num_events=num_events,
                     genres=genres,
                     is_duplicate=is_duplicate,
-                    forLocation=forLocation
+                    forLocation=forLocation,
                 )
-                event_obj.save()
+
+                # Upsert instead of the previous blind create(), which let every
+                # re-scrape insert another row (23,355 surplus rows in prod).
+                event_obj, _action = upsert_event(
+                    Event, source_key, shortcode, slide_index, event_defaults,
+                    overwrite=bool(event.get("refresh")))
                 saved_events.append(event_obj.id)
 
             logger.debug("Event created successfully.\n\n\n")
@@ -347,21 +465,25 @@ class AdminEvent(APIView):
                 updated_event.name = event.get("name")
             if "venue" in event:
                 event_venue = event['venue']
+                current_venue = Venue.objects.get(id=event_venue['id'])
 
-                updated_event_venue = Venue.objects.get(id=event_venue['id'])
-
-                if "name" in event_venue:
-                    updated_event_venue.name = event_venue['name']
-                if "address" in event_venue:
-                    updated_event_venue.address = event_venue['address']
-                if "city" in event_venue:
-                    updated_event_venue.city = event_venue['city']
-                if "state" in event_venue:
-                    updated_event_venue.state = event_venue['state']
-                if "country" in event_venue:
-                    updated_event_venue.country = event_venue['country']
-
-                updated_event_venue.save()
+                # Venues are now shared between events (resolve_venue reuses an
+                # identical row instead of creating one per event), so editing
+                # in place would silently rewrite the venue for every other
+                # event pointing at it. Build the new values, then reuse or
+                # create a matching row and repoint only THIS event at it.
+                values = {
+                    field: event_venue.get(field, getattr(current_venue, field))
+                    for field in ('name', 'address', 'city', 'state', 'country')
+                }
+                shared = Event.objects.filter(venue=current_venue).exclude(
+                    id=updated_event.id).exists()
+                if shared:
+                    updated_event.venue = resolve_venue(Venue, values)
+                else:
+                    for field, value in values.items():
+                        setattr(current_venue, field, value)
+                    current_venue.save()
 
             if "artist" in event:
                 updated_event.artist = event.get("artist")
@@ -493,31 +615,49 @@ def search_events(request):
         return MissingInformation()
 
     try:
-        venues = Venue.objects.filter(Q(address__icontains=query) | Q(
-            city__icontains=query) | Q(state__icontains=query) | Q(country__icontains=query)).all()
+        # venue NAME was previously not searched, only address/city/state/country.
+        # 6,738 venues have a name that does not appear in their address, so
+        # searching for those venues by name returned nothing.
+        venues = Venue.objects.filter(
+            Q(name__icontains=query) | Q(address__icontains=query)
+            | Q(city__icontains=query) | Q(state__icontains=query)
+            | Q(country__icontains=query))
 
-        try:
-            # Get current date and time
-            current_time = datetime.now()
-            # Calculate the cutoff time for events older than 48 hours
-            cutoff_time = current_time - EVENT_CUTOFF_TIME
+        current_time = datetime.now()
+        cutoff_date = (current_time - EVENT_CUTOFF_TIME).date()
+        # Undated events are kept only if they were scraped recently, so the
+        # backlog of old undated rows does not flood results.
+        undated_cutoff = current_time - timedelta(days=UNDATED_EVENT_WINDOW_DAYS)
 
-            cutoff_date = cutoff_time.date()
+        matches_text = (
+            Q(venue__in=venues) | Q(name__icontains=query)
+            | Q(artist__icontains=query) | Q(offering__icontains=query)
+            | Q(genres__icontains=query) | Q(opener__icontains=query)
+            | Q(host__icontains=query) | Q(promoter__icontains=query)
+            | Q(forLocation__icontains=query))
 
-            user_events = Event.objects.filter(
-                ((Q(venue__in=venues) | Q(name__icontains=query)) | Q(artist__icontains=query) | Q(offering__icontains=query) 
-                | Q(genres__icontains=query) | Q(opener__icontains=query) | Q(host__icontains=query))
-                & Q(start_date__gte=cutoff_date) 
-                & Q(is_duplicate=False)
-            ).order_by('-timestamp').all()
-        except:
-            user_events = []
+        # start_date IS NULL previously excluded the event outright, hiding
+        # 2,534 real events from search permanently. Include them when recent.
+        in_window = (Q(start_date__gte=cutoff_date)
+                     | (Q(start_date__isnull=True)
+                        & Q(created_at__gte=undated_cutoff)))
+
+        # Exclude only KNOWN non-events. is_event is null=True; filtering
+        # is_event=True would also drop NULL rows (unknown classification),
+        # which were previously searchable and have no admin control to flip.
+        user_events = (Event.objects
+                       .filter(matches_text & in_window
+                               & Q(is_duplicate=False) & Q(suppressed=False)
+                               & ~Q(is_event=False))
+                       .select_related('venue', 'poster')
+                       .order_by('-timestamp')[:SEARCH_RESULT_LIMIT])
 
         events_serializer = EventSerializer(user_events, many=True)
-
-        response_data = events_serializer.data
-        return Success(response_data, status=True)
-    except:
+        return Success(events_serializer.data, status=True)
+    except Exception as e:
+        # Was a bare `except: user_events = []`, which turned any query error
+        # into a silent "no results" and made real failures undiagnosable.
+        logger.error(f"Error searching events for {query!r}: {e}")
         return ServerProcessingError()
 
 
@@ -614,132 +754,135 @@ def filter_events(request):
     except:
         return InvalidParameters()
 
-    POSSIBLE_FILTER_TYPES = ["date", "price", "artist", "location"]
+    POSSIBLE_FILTER_TYPES = ["date", "price", "artist", "location", "account"]
 
     try:
-        response_data = []
-
-        # Get current date and time
         current_time = datetime.now()
-        # Calculate the cutoff time for events older than 48 hours
-        cutoff_time = current_time - EVENT_CUTOFF_TIME
+        cutoff_date = (current_time - EVENT_CUTOFF_TIME).date()
 
-        cutoff_date = cutoff_time.date()
+        # Base scope: upcoming, visible events. The date cutoff belongs here,
+        # not inside the date branch — otherwise a price/artist/location filter
+        # searches the whole 53k-row history instead of upcoming events.
+        queryset = (Event.objects
+                    .filter(is_duplicate=False, suppressed=False)
+                    .filter(start_date__gte=cutoff_date))
 
-        for filter in filters:
-            _type = filter.get("type")
-            condition = filter.get("condition")
-            values = filter.get("values")
+        # The UI attaches a conjugation ("and"/"or") to each filter. It was
+        # ignored, so an "Or" combination silently returned the intersection.
+        # AND-filters narrow the queryset; OR-filters accumulate into one Q.
+        # The UI chains filters: each filter's conjugation joins it to the one
+        # BEFORE it ("A and B or C"). Consecutive OR-linked filters form a
+        # group; groups AND together. So "date AND (artistA OR artistB)" keeps
+        # the date constraint — a flat union would silently discard it.
+        clause_groups = []         # list of Q objects, ANDed at the end
+        price_bounds = []          # evaluated last; needs Python-side parsing
+        applied = 0
 
-            logger.debug("Running for filter: "+str(_type)+"\n\n\n\n")
+        for _filter in filters:
+            _type = _filter.get("type")
+            condition = _filter.get("condition")
+            values = _filter.get("values") or []
+            use_or = str(_filter.get("conjugation") or "and").lower() == "or"
 
+            # An unrecognised type (the admin UI also offers "run", which has
+            # no server handler) must not be silently dropped: combined with
+            # other filters that produces plausible-looking, silently-wrong
+            # results. Reject so the caller knows the constraint didn't apply.
             if _type not in POSSIBLE_FILTER_TYPES:
+                return InvalidParameters()
+
+            clause = None
+            if _type == "date":
+                if condition == "between" and len(values) >= 2:
+                    try:
+                        start = datetime.strptime(values[0], '%m/%d/%Y').date()
+                        end = datetime.strptime(values[1], '%m/%d/%Y').date()
+                    except (ValueError, TypeError):
+                        return InvalidParameters()
+                    clause = Q(start_date__range=[start, end])
+                elif condition == "equal" and values:
+                    try:
+                        day = datetime.strptime(values[0], '%m/%d/%Y').date()
+                    except (ValueError, TypeError):
+                        return InvalidParameters()
+                    clause = Q(start_date__date=day)
+                else:
+                    # Malformed date filter: reject rather than quietly
+                    # returning everything.
+                    return InvalidParameters()
+
+            elif _type == "price":
+                if use_or:
+                    # Price is matched in Python after the SQL pass and is
+                    # always ANDed; honoring "Or" here is not implemented.
+                    # Rejecting beats returning the intersection labelled
+                    # success when the user asked for a union.
+                    return InvalidParameters()
+                bounds = _parse_price_bounds(condition, values)
+                if bounds is None:
+                    return InvalidParameters()
+                # Price needs Python-side parsing of a free-text field, so it is
+                # always ANDed (its conjugation is not honoured — noted here so a
+                # reader does not assume OR-price works).
+                price_bounds.append(bounds)
+                applied += 1
                 continue
 
-            filtered_events = []
+            elif _type == "artist":
+                if condition != "equal" or not values:
+                    return InvalidParameters()
+                clause = Q(artist__icontains=str(values[0]))
 
-            if _type == "date":
-                if condition == "between":
-                    try:
-                        intial_date = datetime.strptime(
-                            values[0], '%m/%d/%Y').date()
-                        final_date = datetime.strptime(
-                            values[1], '%m/%d/%Y').date()
-                    except:
-                        return InvalidParameters()
+            elif _type == "location":
+                if condition != "equal" or not values:
+                    return InvalidParameters()
+                location = str(values[0])
+                clause = (Q(venue__address__icontains=location)
+                          | Q(venue__name__icontains=location)
+                          | Q(venue__city__icontains=location)
+                          | Q(forLocation__icontains=location))
 
-                    filtered_events = Event.objects.filter(
-                        start_date__range=[intial_date, final_date],
-                        start_date__gte=cutoff_date,
-                        is_duplicate=False
-                    )
+            elif _type == "account":
+                if condition != "equal" or not values:
+                    return InvalidParameters()
+                clause = Q(poster__user__in=[str(v) for v in values])
 
-                if condition == "equal":
-                    try:
-                        date = datetime.strptime(values[0], '%m/%d/%Y').date()
-                    except:
-                        return InvalidParameters()
-                    filtered_events = Event.objects.filter(
-                        start_date__date=date,
-                        start_date__gte=cutoff_date,
-                        is_duplicate=False
-                    ).all()
+            if clause is None:
+                continue
+            applied += 1
+            if use_or and clause_groups:
+                clause_groups[-1] = clause_groups[-1] | clause   # extend group
+            else:
+                clause_groups.append(clause)                     # new AND group
 
-            if _type == "price":
-                if condition == "between":
-                    try:
-                        initial_price = int(float(values[0]))
-                        final_price = int(float(values[1]))
-                    except:
-                        return InvalidParameters()
+        if not applied:
+            # Nothing recognised: return no results rather than a page of
+            # arbitrary events labelled "success".
+            return Success([], status=True)
 
-                    #TODO: migrate price to be float instead of string
-                    prices = []
-                    current_price = initial_price
-                    while current_price <= final_price:
-                        prices.append(str(current_price))
-                        
-                        prices.append(str(current_price + 0.5))
-                        
-                        prices.append(str(current_price + 0.99))
-                    
-                        current_price += 1
+        for group in clause_groups:
+            queryset = queryset.filter(group)
 
-                    filtered_events = Event.objects.filter(
-                        price__in=prices,
-                        start_date__gte=cutoff_date,
-                        is_duplicate=False
-                    )
+        # Price is applied last and only to the already-narrowed set, because it
+        # needs Python-side parsing of a free-text field. Cap the id list to the
+        # result limit so the final IN clause stays small.
+        for low, high in price_bounds:
+            # order_by makes the scan window deterministic (newest first); an
+            # unordered slice let SQLite pick an arbitrary 5,000 rows once the
+            # candidate set outgrows the cap.
+            ids = [e.id for e in queryset.only('id', 'price')
+                   .order_by('-timestamp')[:PRICE_SCAN_LIMIT]
+                   if _price_within(e.price, low, high)][:SEARCH_RESULT_LIMIT]
+            queryset = queryset.filter(id__in=ids)
 
-                if condition == "equal":
-                    try:
-                        price = int(float(values[0]))
-                    except:
-                        return InvalidParameters()
-
-                    filtered_events = Event.objects.filter(
-                        price=str(price),
-                        start_date__gte=cutoff_date,
-                        is_duplicate=False
-                    ).all()
-
-            if _type == "artist":
-                if condition == "equal":
-                    try:
-                        artist = str(values[0])
-                    except:
-                        return InvalidParameters()
-
-                    logger.debug("Running for artist filter: "+str(artist)+"\n\n\n\n")
-
-                    filtered_events = Event.objects.filter(
-                        artist__startswith=artist,
-                        start_date__gte=cutoff_date,
-                        is_duplicate=False
-                    ).all()
-
-            if _type == "location":
-                if condition == "equal":
-                    try:
-                        location = str(values[0])
-                    except:
-                        return InvalidParameters()
-
-                    filtered_venues = Venue.objects.filter(address__startswith=location).all()
-
-                    for venue in filtered_venues:
-                        filtered_events += Event.objects.filter(
-                            venue=venue,
-                            start_date__gte=cutoff_date,
-                            is_duplicate=False
-                        ).all()
-
-        events_serializer = EventSerializer(filtered_events, many=True)
-        response_data = events_serializer.data
-
-        return Success(response_data, status=True)
+        # No .distinct(): every join here is a single-valued FK, so rows are
+        # already unique — DISTINCT just forced SQLite to dedupe the full match
+        # set before applying the limit.
+        events = (queryset.select_related('venue', 'poster')
+                  .order_by('-timestamp')[:SEARCH_RESULT_LIMIT])
+        return Success(EventSerializer(events, many=True).data, status=True)
     except Exception as e:
-        logger.debug("An error occurred during event filtering : "+str(e)+"\n\n\n\n")
+        logger.error(f"An error occurred during event filtering: {e}")
         return ServerProcessingError()
 
 
@@ -784,10 +927,17 @@ def remove_duplicate_label(request):
         if not event:
             return EventNotFound()
             
-        # Set duplicate status to False
+        # Clear BOTH hiding mechanisms. The review flow sets suppressed +
+        # canonical alongside is_duplicate, so clearing is_duplicate alone left
+        # the event hidden from search/filter and made the UI's "you can
+        # restore it later" untrue.
         event.is_duplicate = False
-        event.save()
-        
+        event.duplicate_link = None
+        event.suppressed = False
+        event.canonical = None
+        event.save(update_fields=['is_duplicate', 'duplicate_link',
+                                  'suppressed', 'canonical'])
+
         return Success({"status": "success", "message": "Duplicate label removed from event."})
     except Exception as e:
         logger.error(f"Error removing duplicate label: {e}")
@@ -819,24 +969,144 @@ def add_duplicate_label(request):
 
 @api_view(["GET"])
 def get_duplicate_events(request):
-    try:
-        # Get current date and time
-        current_time = datetime.now()
-        # Calculate the cutoff time for events older than 24 hours
-        cutoff_time = current_time - timedelta(hours=24)
-        cutoff_date = cutoff_time.date()
-        # Query events that are marked as duplicates and newer than the cutoff time
-        duplicate_events = Event.objects.filter(
-            is_duplicate=True,
-            start_date__gte=cutoff_date
-        ).order_by('-start_date')
+    """Every event currently hidden as a duplicate, for the recovery view.
 
+    Includes rows hidden by automated flagging AND by a confirmed pair review,
+    because the UI promises "you can restore it later" for both — excluding
+    suppressed rows left them with no way back. remove_duplicate_label clears
+    both flags, so anything listed here really is restorable.
+
+    No start_date floor: a wrongly-hidden event is usually past-dated, and a
+    24h window made most of them unreachable. Newest-flagged first, bounded.
+    """
+    try:
+        limit = min(int(request.GET.get("limit", 200)), 500)
+        offset = max(0, int(request.GET.get("offset", 0)))
+    except (TypeError, ValueError):
+        limit, offset = 200, 0
+    try:
+        # canonical IS NULL scopes the list to rows hidden WITHOUT a surviving
+        # counterpart — the old scraper's flags and manual marks, i.e. the ones
+        # a human might actually want back. Proper collapses (canonical set)
+        # have a live twin and are reviewable through the pairs view; including
+        # them would bury the ~2k restorable rows under ~23k re-scrape husks.
+        base = (Event.objects
+                .filter(Q(is_duplicate=True) | Q(suppressed=True))
+                .filter(canonical__isnull=True)
+                .select_related('venue', 'poster')
+                .order_by('-created_at'))
+        total = base.count()
+        duplicate_events = base[offset:offset + limit]
         event_serializer = EventSerializer(duplicate_events, many=True)
-        
-        return Success({"status": "success", "duplicate_events": event_serializer.data})
+        return Success({"status": "success", "total": total, "offset": offset,
+                        "duplicate_events": event_serializer.data})
     except Exception as e:
         logger.error(f"Error retrieving duplicate events: {e}")
         return ServerProcessingError(message="Error retrieving duplicate events: "+str(e))
+
+
+@api_view(["GET"])
+def get_event_matches(request):
+    """Ticket 1: candidate duplicate PAIRS for side-by-side review.
+
+    Unlike get_duplicate_events (which returns a flat list of flagged events and
+    a bare duplicate_link string), this returns both full events of each pair so
+    the owner can actually compare them. Ordered most-confident first.
+    """
+    status = request.GET.get("status", "pending")
+    try:
+        limit = max(1, min(int(request.GET.get("limit", 50)), 200))
+    except (TypeError, ValueError):
+        limit = 50
+
+    try:
+        # Exclude pairs whose events are already suppressed. With chained pairs
+        # (A,B) then (B,C), keeping B in the second pair would clear its
+        # suppression and resurrect a duplicate the owner had already hidden.
+        # One base queryset for both the page and the count, so the "N pairs to
+        # review" header can never disagree with the list under it.
+        visible = (EventMatch.objects
+                   .exclude(event_a__suppressed=True)
+                   .exclude(event_b__suppressed=True))
+        matches = (visible.filter(status=status)
+                   .select_related('event_a', 'event_a__venue', 'event_a__poster',
+                                   'event_b', 'event_b__venue', 'event_b__poster')
+                   .order_by('-score', '-id')[:limit])
+        data = [{
+            "match_id": m.id,
+            "score": m.score,
+            "match_type": m.match_type,
+            "event_a": EventSerializer(m.event_a).data,
+            "event_b": EventSerializer(m.event_b).data,
+        } for m in matches]
+        pending_total = visible.filter(status='pending').count()
+        return Success({"matches": data, "pending_total": pending_total})
+    except Exception as e:
+        logger.error(f"Error retrieving event matches: {e}")
+        return ServerProcessingError(message="Error retrieving event matches: " + str(e))
+
+
+@api_view(["POST"])
+def resolve_event_match(request):
+    """Ticket 1: the owner's verdict on a candidate pair.
+
+    action:
+      keep_a / keep_b  -> suppress the other event (recoverable: suppressed=True
+                          + canonical set, never deleted) and confirm the match
+      not_duplicate    -> reject the match, touch neither event
+    """
+    match_id = request.data.get("match_id")
+    action = request.data.get("action")
+
+    if validator.is_missing([match_id, action]):
+        return MissingInformation()
+    if action not in ("keep_a", "keep_b", "not_duplicate"):
+        return InvalidParameters()
+    try:
+        match_id = int(match_id)
+    except (TypeError, ValueError):
+        return InvalidParameters()
+
+    try:
+        match = EventMatch.objects.select_related('event_a', 'event_b').filter(id=match_id).first()
+        if not match:
+            return EventNotFound()
+
+        # All-or-nothing: keep/drop/match mutations must commit together, or a
+        # mid-way failure would leave one event mutated and the pair still
+        # pending. Re-resolving a pair is allowed (the owner may change their
+        # mind) and is idempotent.
+        with transaction.atomic():
+            if action == "not_duplicate":
+                match.status = "rejected"
+            else:
+                keep = match.event_a if action == "keep_a" else match.event_b
+                drop = match.event_b if action == "keep_a" else match.event_a
+                # The owner chose to keep this event, so it must be visible —
+                # clear any suppression AND any stale is_duplicate flag left by
+                # the old (broken) dedup, which over-flagged real events.
+                keep.suppressed = False
+                keep.canonical = None
+                keep.is_duplicate = False
+                keep.duplicate_link = None
+                keep.save(update_fields=['suppressed', 'canonical', 'is_duplicate', 'duplicate_link'])
+                # Set is_duplicate on the dropped event so the existing read
+                # paths (which filter is_duplicate=False) hide it immediately;
+                # suppressed carries the canonical link. (A later cleanup can
+                # migrate reads to `suppressed` and retire is_duplicate.)
+                drop.suppressed = True
+                drop.canonical = keep
+                drop.is_duplicate = True
+                drop.duplicate_link = keep.orig_link or f"event_{keep.id}"
+                drop.save(update_fields=['suppressed', 'canonical', 'is_duplicate', 'duplicate_link'])
+                match.status = "confirmed"
+
+            match.reviewed_at = timezone.now()
+            match.save(update_fields=['status', 'reviewed_at'])
+        return Success({"status": "success", "resolved": action})
+    except Exception as e:
+        logger.error(f"Error resolving event match: {e}")
+        return ServerProcessingError(message="Error resolving event match: " + str(e))
 
 
 @api_view(["GET"])

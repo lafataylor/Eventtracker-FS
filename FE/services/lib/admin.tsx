@@ -232,14 +232,29 @@ export async function refetchToken(dispatch: Dispatch<any>) {
 }
 
 
-export function readAdminDuplicates() {
-  return axiosClient.get('event/getDuplicateEvents/', {
+export function readAdminDuplicates(offset: number = 0) {
+  return axiosClient.get(`event/getDuplicateEvents/?offset=${offset}`, {
     headers: getHeader()
   });
 }
 
 export function recoverDuplicate(event_id: string) {
   return axiosClient.post('event/recoverDuplicate/', { event_id }, {
+    headers: getHeader()
+  });
+}
+
+// Ticket 1: candidate duplicate PAIRS for side-by-side review.
+export function readEventMatches(status: string = 'pending', limit: number = 50) {
+  return axiosClient.get(`event/matches/?status=${status}&limit=${limit}`, {
+    headers: getHeader()
+  });
+}
+
+// Ticket 1: record the owner's verdict on a pair.
+// action: 'keep_a' | 'keep_b' | 'not_duplicate'
+export function resolveEventMatch(match_id: number, action: string) {
+  return axiosClient.post('event/matches/resolve/', { match_id, action }, {
     headers: getHeader()
   });
 }
@@ -315,6 +330,12 @@ export async function createEventFromInstagram(data: CreateEventFromInstagramReq
       ...getHeader(),
       'Content-Type': 'multipart/form-data',
     },
+    // A many-slide carousel takes real time server-side (mirror every slide,
+    // one vision call over all of them). The client default of 30s would abort
+    // requests that are still succeeding, so the owner would see an error for
+    // an add that actually worked - then retry and make duplicates. This
+    // generous override already existed; do not add a second `timeout` key
+    // (duplicate object keys fail the production type check).
     timeout: 1000000,
   });
 }

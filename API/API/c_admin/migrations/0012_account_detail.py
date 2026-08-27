@@ -12,7 +12,12 @@ class Migration(migrations.Migration):
         migrations.CreateModel(
             name='AccountDetail',
             fields=[
-                ('id', models.AutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
+                # BigAutoField to match settings.DEFAULT_AUTO_FIELD, so the model
+                # state matches the models and `makemigrations --check` stays clean.
+                # Safe to edit in place: production already records 0012 as applied
+                # (Django tracks migrations by name, not content) and SQLite renders
+                # AutoField and BigAutoField identically as `integer`.
+                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
                 ('field_name', models.CharField(
                     choices=[
                         ('venue_name', 'Venue Name'),
