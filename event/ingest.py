@@ -25,6 +25,7 @@ duplicate-detection pass, which surfaces them as EventMatch pairs for review —
 never by silently mutating or deleting rows here.
 """
 
+import hashlib
 import re
 import unicodedata
 
@@ -97,6 +98,38 @@ def build_source_key(shortcode, slide_index=None, ordinal=0):
     if not shortcode:
         return None
     return f'{shortcode}__{coerce_int(slide_index)}__{coerce_int(ordinal)}'[:300]
+
+
+def content_source_key(shortcode, name, start_date, start_time=None):
+    """Compose a content-derived identity `{shortcode}__e{hash}` for one event
+    of a MULTI-event post (several DISTINCT events extracted from one post —
+    not a recurring series, whose per-date expansion is generated
+    deterministically in code and so keeps stable positional keys).
+
+    Positional keys ({shortcode}__{slide}__{ordinal}) are only stable when the
+    extractor returns the same events in the same order on every run. For a
+    roundup flyer it does not: re-extracting "This week at RENATE" returned 4
+    of 9 events, renamed, and on a different slide — so ordinal 0 pointed at a
+    different event and the manual refresh wrote one event's data over
+    another's (2026-08-27). Keying on what the event IS (normalised title +
+    date) makes a re-extraction land on the same row regardless of order,
+    count or slide. Wording drift between runs yields at worst a second row
+    for the review queue, never an overwrite of the wrong event.
+
+    start_time is part of the basis because a roundup can legitimately list
+    two events with the same name on the same night (two slots of one act);
+    without it they would share a key and the second would be silently
+    merged into the first under the nightly fill-empty upsert.
+
+    Returns None without a shortcode or a title: nameless events keep the
+    positional key, which is the only identity they have.
+    """
+    if not shortcode or not (name or '').strip():
+        return None
+    basis = '|'.join((normalize_text(name), (start_date or '').strip(),
+                      normalize_text(start_time or '')))
+    digest = hashlib.sha1(basis.encode('utf-8')).hexdigest()[:12]
+    return f'{shortcode}__e{digest}'[:300]
 
 
 def resolve_venue(venue_model, data):
