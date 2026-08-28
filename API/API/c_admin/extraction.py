@@ -307,8 +307,10 @@ def to_api_payload(event: ExtractedEvent, *, shortcode, slide_index, ordinal,
         "orig_thumb": image_url,
         "shortcode": shortcode,
         "sourceSlideIndex": slide,
-        # Part of source_key. Assigned at build time (per slide, pre-filter) so
-        # both ingestion paths derive identical keys for the same event.
+        # Part of the POSITIONAL source_key. Assigned at build time (per slide,
+        # pre-filter) so both ingestion paths derive identical keys for the
+        # same event. Ignored by the server when an explicit source_key below
+        # is present (named events of a multi-event post).
         "sourceOrdinal": ordinal,
         # Content-derived identity for multi-event posts (see
         # post_ingest.build_payloads). When present, AdminEvent.post uses it

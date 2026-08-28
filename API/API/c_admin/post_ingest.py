@@ -200,9 +200,12 @@ def build_payloads(extraction, *, shortcode, post_link, slide_urls,
                    for_location=None, poster=None, real_slide_indexes=None):
     """Map a PostExtraction to AdminEvent.post payloads, one per event.
 
-    Each payload carries shortcode + sourceSlideIndex; AdminEvent.post derives
-    the positional source_key from those and upserts, so re-scrapes update in
-    place instead of inserting duplicates.
+    Each payload carries shortcode + sourceSlideIndex + sourceOrdinal, from
+    which AdminEvent.post derives the positional source_key — except for the
+    named events of a multi-event post, which carry an explicit content-derived
+    source_key (see the loop below and event/ingest.py). Either way the server
+    upserts on that key, so re-scrapes update in place instead of inserting
+    duplicates.
 
     real_slide_indexes: mirror_slides' second return value. The model indexes
     the images it was SHOWN; a slide that failed to mirror is absent from that
@@ -262,9 +265,14 @@ def build_payloads(extraction, *, shortcode, post_link, slide_urls,
             image_url=image_url,
             for_location=for_location,
             poster=poster,
+            # A recurring series keeps positional keys even inside a roundup:
+            # its rows are expanded in code from one seed (recurrence is
+            # preserved on each copy), so their ordinals are stable and a
+            # date-hashed key would turn a one-day anchor drift into N rows.
             source_key=(content_source_key(shortcode, event.event_name,
-                                           event.start_date, event.start_time)
-                        if multi_event else None),
+                                           event.start_date, event.start_time,
+                                           ordinal=ordinal)
+                        if multi_event and not event.recurrence else None),
         ))
     return payloads
 

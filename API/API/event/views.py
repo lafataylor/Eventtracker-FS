@@ -375,11 +375,12 @@ class AdminEvent(APIView):
 
 
                 # Post identity for idempotent ingestion (Tickets 1 & 2).
-                # Positional key {shortcode}__{slide}__{ordinal}: collision-free
-                # even when the name is null, so distinct events never overwrite
-                # each other. Callers with no shortcode fall back to a plain
-                # create (previous behaviour), so nothing regresses until the
-                # extractor starts supplying post identity.
+                # A payload may carry an explicit source_key (content-derived,
+                # for the named events of a multi-event post — see
+                # event/ingest.py); otherwise the positional key
+                # {shortcode}__{slide}__{ordinal} is derived here, which is
+                # collision-free even when the name is null. Callers with no
+                # shortcode fall back to a plain create (previous behaviour).
                 shortcode = event.get("shortcode")
                 slide_index = event.get("sourceSlideIndex")
                 source_key = event.get("source_key")
