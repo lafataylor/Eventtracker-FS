@@ -251,6 +251,21 @@ class ContentIdentityTests(SimpleTestCase):
         self.assertTrue(all("source_key" not in x for x in p))
         self.assertEqual([x["sourceOrdinal"] for x in p], list(range(len(p))))
 
+    def test_recurring_series_inside_a_roundup_stays_positional(self):
+        # A roundup holding one recurring series plus one distinct event: the
+        # series' expanded rows keep positional keys (stable, code-generated),
+        # the distinct event gets a content key.
+        p = self._payloads([
+            mk_event(event_name="Weekly Jam", start_date="08-27-2026",
+                     recurrence="weekly", recurrence_until="09-10-2026"),
+            mk_event(event_name="One Off Gala", start_date="08-30-2026")])
+        series = [x for x in p if x["name"] == "Weekly Jam"]
+        gala = [x for x in p if x["name"] == "One Off Gala"]
+        self.assertGreater(len(series), 1)
+        self.assertTrue(all("source_key" not in x for x in series))
+        self.assertEqual(len(gala), 1)
+        self.assertTrue(gala[0]["source_key"].startswith("RENATE__e"))
+
     def test_same_name_same_date_different_time_are_distinct(self):
         p = self._payloads([
             mk_event(event_name="Late Set", start_date="08-27-2026", start_time="10:00 PM"),
