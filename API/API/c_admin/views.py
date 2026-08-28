@@ -496,7 +496,10 @@ def create_event_from_instagram_link(request):
         extraction = extract_events(
             openai_client, hosted_urls, caption=caption,
             biography=post_data.get("ownerFullName", ""),
-            external_url=instagram_url)
+            external_url=instagram_url,
+            # Anchor "this week"-style dates on when the post went up, not on
+            # today (a re-paste days later must not shift every date).
+            post_date=post_data.get("timestamp"))
 
         payloads = build_payloads(
             extraction, shortcode=shortcode, post_link=instagram_url,

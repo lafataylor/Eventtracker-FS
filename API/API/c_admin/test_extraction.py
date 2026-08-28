@@ -135,6 +135,41 @@ class ExtractionParseTests(TestCase):
         images = [c for c in kwargs["messages"][0]["content"] if c["type"] == "image_url"]
         self.assertEqual(len(images), 2)
 
+    def test_prompt_anchors_on_post_date_when_given(self):
+        # Weekday-only flyers ("Wed / Thu / Fri") resolved to different calendar
+        # dates run to run because the prompt anchored on TODAY. The post's
+        # publish date is the right anchor for "this week"-style wording.
+        from c_admin.extraction import build_messages
+        msgs = build_messages(["http://img/1.jpg"], "Wed: X / Thu: Y", "", "",
+                              post_date="2026-08-24")
+        text = msgs[-1]["content"][0]["text"]
+        # Long form, never ISO: an ISO anchor made the model emit ISO
+        # start_dates, which the server could not parse (stored as null).
+        self.assertIn("published on August 24, 2026", text)
+        self.assertNotIn("2026-08-24", text)
+        self.assertIn("relative to the PUBLISH date", text)
+        self.assertIn("MM-DD-YYYY regardless", text)
+
+    def test_prompt_survives_an_unparseable_post_date(self):
+        from c_admin.extraction import build_messages
+        text = build_messages(["http://img/1.jpg"], "x", "", "", post_date=1754500397)[-1]["content"][0]["text"]
+        self.assertIn("Today's date is", text)
+        self.assertNotIn("published on", text)
+
+    def test_prompt_falls_back_to_today_without_post_date(self):
+        from c_admin.extraction import build_messages
+        text = build_messages(["http://img/1.jpg"], "x", "", "")[-1]["content"][0]["text"]
+        self.assertNotIn("published on", text)
+        self.assertIn("Today's date is", text)
+
+    def test_extract_events_passes_post_date_through(self):
+        extraction = PostExtraction(post_type="single", events=[mk_event(event_name="X")])
+        client = mock_openai(extraction)
+        extract_events(client, ["http://a.jpg"], caption="c", post_date="2026-08-24T18:00:00.000Z")
+        _, kwargs = client.beta.chat.completions.parse.call_args
+        text = kwargs["messages"][0]["content"][0]["text"]
+        self.assertIn("published on August 24, 2026", text)   # ISO timestamp -> long-form date
+
     def test_payload_sets_visibility_fields(self):
         """Regression: omitting these saved the event but hid it from the site.
 
