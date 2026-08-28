@@ -200,9 +200,12 @@ def build_payloads(extraction, *, shortcode, post_link, slide_urls,
                    for_location=None, poster=None, real_slide_indexes=None):
     """Map a PostExtraction to AdminEvent.post payloads, one per event.
 
-    Each payload carries shortcode + sourceSlideIndex; AdminEvent.post derives
-    the positional source_key from those and upserts, so re-scrapes update in
-    place instead of inserting duplicates.
+    Each payload carries shortcode + sourceSlideIndex + sourceOrdinal, from
+    which AdminEvent.post derives the positional source_key — except for the
+    named events of a multi-event post, which carry an explicit content-derived
+    source_key (see the loop below and event/ingest.py). Either way the server
+    upserts on that key, so re-scrapes update in place instead of inserting
+    duplicates.
 
     real_slide_indexes: mirror_slides' second return value. The model indexes
     the images it was SHOWN; a slide that failed to mirror is absent from that
@@ -222,9 +225,25 @@ def build_payloads(extraction, *, shortcode, post_link, slide_urls,
     # path drops non-event payloads before POSTing while the nightly path
     # keeps them, and a server-side arrival-order counter would give the same
     # event two different keys across those paths.
+    from event.ingest import content_source_key
+
     payloads = []
     per_slide_counter = {}
-    for event in expand_recurring(extraction.events):
+    expanded = list(expand_recurring(extraction.events))
+    # Identity for MULTI-event posts is content-derived (normalised title +
+    # date), not positional. The extractor does not return a roundup's events
+    # in a stable order or count: re-extracting "This week at RENATE" gave 4
+    # of 9 events, renamed, on a different slide, so ordinal 0 pointed at a
+    # different event and the manual refresh overwrote one event with another
+    # (2026-08-27). Single-event posts and nameless events keep the positional
+    # key, which is stable for them and the only identity they have. So does a
+    # single RECURRING series: its per-date rows are expanded deterministically
+    # in code from one seed event, so their ordinals never vary — and keying
+    # them on the model-inferred anchor date would turn a one-day drift into
+    # N duplicate rows. Hence the decision is made on the EXTRACTED events,
+    # not the expanded list.
+    multi_event = len(extraction.events) > 1
+    for event in expanded:
         slide = event.source_slide_index
         slide_key = 0 if slide is None else int(slide)
         ordinal = per_slide_counter.get(slide_key, 0)
@@ -246,6 +265,14 @@ def build_payloads(extraction, *, shortcode, post_link, slide_urls,
             image_url=image_url,
             for_location=for_location,
             poster=poster,
+            # A recurring series keeps positional keys even inside a roundup:
+            # its rows are expanded in code from one seed (recurrence is
+            # preserved on each copy), so their ordinals are stable and a
+            # date-hashed key would turn a one-day anchor drift into N rows.
+            source_key=(content_source_key(shortcode, event.event_name,
+                                           event.start_date, event.start_time,
+                                           ordinal=ordinal)
+                        if multi_event and not event.recurrence else None),
         ))
     return payloads
 

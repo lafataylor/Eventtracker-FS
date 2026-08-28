@@ -99,7 +99,7 @@ per date). Set recurrence_until only if the post states an end date.
 per-slide, use the slide that best depicts each, else null.
 
 Date rules (apply strictly):
-- Today's date is {current_date}. Resolve relative and year-less dates against it.
+- {date_context}
 - NEVER default to October. If no date is found, return null for start_date. The \
 only acceptable forced fallback is January 1 of the current year.
 - Spanish months: enero=Jan, febrero=Feb, marzo=Mar, abril=Apr, mayo=May, junio=Jun, \
@@ -123,10 +123,46 @@ Instagram bio:
 """
 
 
-def build_messages(image_urls, caption, biography, external_url):
-    """One vision message containing the prompt and every slide image."""
-    from datetime import date
+def _date_context(post_date):
+    """The prompt's date anchor sentence.
 
+    Anchoring on TODAY made weekday-only flyers ("Wed / Thu / Fri") resolve to
+    different calendar dates on different runs: the same post extracted twice
+    on 2026-08-27 gave Aug 27-29 and then Aug 26-28. "This week" means the
+    week the post was PUBLISHED, so when the caller knows the publish date
+    (Apify's `timestamp`) it becomes the anchor; today is still supplied so
+    the model can tell past from future. Accepts an ISO string or datetime;
+    only the calendar date is used.
+    """
+    from datetime import date, datetime
+
+    today = date.today().strftime("%B %d, %Y")
+    if not post_date:
+        return f"Today's date is {today}. Resolve relative and year-less dates against it."
+    # Render the anchor in the SAME long form as "today", never ISO: when the
+    # prompt showed "published on 2026-08-26" the model mirrored that format
+    # for start_date ("2026-08-26" instead of MM-DD-YYYY), the server's date
+    # parse failed and every event of the post was stored undated
+    # (caught in the local replay, 2026-08-28).
+    try:
+        if isinstance(post_date, datetime):
+            published_day = post_date.date()
+        else:
+            published_day = date.fromisoformat(str(post_date).strip()[:10])
+        published = published_day.strftime("%B %d, %Y")
+    except ValueError:
+        # Unparseable anchor: fall back to today rather than feeding the
+        # model garbage.
+        return f"Today's date is {today}. Resolve relative and year-less dates against it."
+    return (f"This post was published on {published}; today is {today}. Resolve "
+            f"weekday names, 'this week', 'this weekend' and other relative or "
+            f"year-less dates relative to the PUBLISH date, not today. Output "
+            f"start_date and end_date as MM-DD-YYYY regardless of how dates "
+            f"appear here.")
+
+
+def build_messages(image_urls, caption, biography, external_url, post_date=None):
+    """One vision message containing the prompt and every slide image."""
     content = [{
         "type": "text",
         # The date is interpolated at call time. A hardcoded "current year is
@@ -134,7 +170,7 @@ def build_messages(image_urls, caption, biography, external_url):
         # did - the 3,319-row Jan-1 sentinel cluster in production is the
         # fossil record of that rot.
         "text": PROMPT.format(
-            current_date=date.today().strftime("%B %d, %Y"),
+            date_context=_date_context(post_date),
             caption=caption or "",
             biography=biography or "",
             external_url=external_url or ""),
@@ -145,15 +181,18 @@ def build_messages(image_urls, caption, biography, external_url):
 
 
 def extract_events(client, image_urls, caption="", biography="", external_url="",
-                   model=DEFAULT_MODEL):
+                   model=DEFAULT_MODEL, post_date=None):
     """Call OpenAI Structured Outputs and return a validated PostExtraction.
 
     `client` is injected so tests can mock it. Raises on API/parse failure so the
     caller decides how to handle it (the old code swallowed everything).
+    `post_date` (the post's publish date, ISO string or datetime) anchors
+    relative dates in the prompt; see _date_context.
     """
     completion = client.beta.chat.completions.parse(
         model=model,
-        messages=build_messages(image_urls, caption, biography, external_url),
+        messages=build_messages(image_urls, caption, biography, external_url,
+                                post_date=post_date),
         response_format=PostExtraction,
         max_tokens=MAX_OUTPUT_TOKENS,
     )
@@ -253,7 +292,8 @@ def _today_mmddyyyy():
 
 
 def to_api_payload(event: ExtractedEvent, *, shortcode, slide_index, ordinal,
-                   post_link, image_url, for_location=None, poster=None):
+                   post_link, image_url, for_location=None, poster=None,
+                   source_key=None):
     """Map one ExtractedEvent to the dict AdminEvent.post consumes.
 
     Replaces the ~60-line GPT->event mapping that was copy-pasted into four
@@ -306,9 +346,15 @@ def to_api_payload(event: ExtractedEvent, *, shortcode, slide_index, ordinal,
         "orig_thumb": image_url,
         "shortcode": shortcode,
         "sourceSlideIndex": slide,
-        # Part of source_key. Assigned at build time (per slide, pre-filter) so
-        # both ingestion paths derive identical keys for the same event.
+        # Part of the POSITIONAL source_key. Assigned at build time (per slide,
+        # pre-filter) so both ingestion paths derive identical keys for the
+        # same event. Ignored by the server when an explicit source_key below
+        # is present (named events of a multi-event post).
         "sourceOrdinal": ordinal,
+        # Content-derived identity for multi-event posts (see
+        # post_ingest.build_payloads). When present, AdminEvent.post uses it
+        # verbatim instead of deriving the positional key.
+        **({"source_key": source_key} if source_key else {}),
         "forLocation": for_location,
         "poster": poster,
     }

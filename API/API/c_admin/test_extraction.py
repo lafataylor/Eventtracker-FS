@@ -17,8 +17,64 @@ from django.test import TestCase
 
 from c_admin.extraction import (ExtractedEvent, PostExtraction, extract_events,
                                 to_api_payload)
-from event.ingest import build_source_key, coerce_int, upsert_event
+from event.ingest import (build_source_key, coerce_int, content_source_key,
+                          upsert_event)
 from event.models import Event
+
+
+class ContentSourceKeyTests(TestCase):
+    def test_normalises_case_and_accents(self):
+        self.assertEqual(content_source_key("abc", "Café Klubnacht", "08-27-2026"),
+                         content_source_key("abc", "cafe KLUBNACHT", "08-27-2026"))
+
+    def test_date_is_part_of_identity(self):
+        self.assertNotEqual(content_source_key("abc", "Klubnacht", "08-27-2026"),
+                            content_source_key("abc", "Klubnacht", "08-28-2026"))
+
+    def test_none_without_title_or_shortcode(self):
+        self.assertIsNone(content_source_key("abc", None, "08-27-2026"))
+        self.assertIsNone(content_source_key("abc", "  ", "08-27-2026"))
+        self.assertIsNone(content_source_key(None, "Klubnacht", "08-27-2026"))
+
+    def test_same_name_no_date_no_time_uses_ordinal_so_no_collision(self):
+        # Two "TBA" slots with the same title in one roundup must not share a
+        # key (a shared key would let one overwrite the other on refresh).
+        a = content_source_key("abc", "Secret Set", None, None, ordinal=0)
+        b = content_source_key("abc", "Secret Set", None, None, ordinal=1)
+        self.assertNotEqual(a, b)
+        # ...but the same undated event re-extracted at the same slot matches.
+        self.assertEqual(a, content_source_key("abc", "secret set", "", "", ordinal=0))
+
+    def test_ordinal_ignored_when_a_date_or_time_exists(self):
+        self.assertEqual(content_source_key("abc", "X", "08-27-2026", None, ordinal=0),
+                         content_source_key("abc", "X", "08-27-2026", None, ordinal=5))
+
+    def test_cannot_collide_with_positional_keys(self):
+        # positional keys are {shortcode}__{int}__{int}; content keys carry a
+        # non-numeric marker so the two namespaces can never overlap.
+        self.assertTrue(content_source_key("abc", "X", None).startswith("abc__e"))
+
+    def test_refresh_replay_never_overwrites_a_different_event(self):
+        """The incident, end to end at the upsert layer: run 2 returns a subset
+        in another order; with content keys each upsert lands on its own row
+        and the manual refresh (overwrite=True) only ever touches the same
+        event."""
+        run1 = [("GARDEN hosted by Remoto Rec", "08-26-2026", "6:00 PM"),
+                ("GREEN hosted by Remoto Rec", "08-26-2026", "10:00 PM"),
+                ("RED hosted by Franz Scala", "08-28-2026", None)]
+        for name, day, t in run1:
+            upsert_event(Event, content_source_key("RENATE", name, day), "RENATE", 0,
+                         dict(name=name, start_time=t, is_duplicate=False))
+        run2 = [("Red hosted by Franz Scala", "08-28-2026", "11:00 PM"),
+                ("Garden hosted by Remoto Rec", "08-26-2026", "6:00 PM")]
+        for name, day, t in run2:
+            upsert_event(Event, content_source_key("RENATE", name, day), "RENATE", 1,
+                         dict(name=name, start_time=t, is_duplicate=False), overwrite=True)
+        self.assertEqual(Event.objects.filter(shortcode="RENATE").count(), 3)
+        green = Event.objects.get(name="GREEN hosted by Remoto Rec")
+        self.assertEqual(green.start_time, "10:00 PM")          # untouched by run 2
+        red = Event.objects.get(source_key=content_source_key("RENATE", "RED hosted by Franz Scala", "08-28-2026"))
+        self.assertEqual(red.start_time, "11:00 PM")            # refreshed in place
 
 
 def mk_event(**over):
@@ -78,6 +134,41 @@ class ExtractionParseTests(TestCase):
         _, kwargs = client.beta.chat.completions.parse.call_args
         images = [c for c in kwargs["messages"][0]["content"] if c["type"] == "image_url"]
         self.assertEqual(len(images), 2)
+
+    def test_prompt_anchors_on_post_date_when_given(self):
+        # Weekday-only flyers ("Wed / Thu / Fri") resolved to different calendar
+        # dates run to run because the prompt anchored on TODAY. The post's
+        # publish date is the right anchor for "this week"-style wording.
+        from c_admin.extraction import build_messages
+        msgs = build_messages(["http://img/1.jpg"], "Wed: X / Thu: Y", "", "",
+                              post_date="2026-08-24")
+        text = msgs[-1]["content"][0]["text"]
+        # Long form, never ISO: an ISO anchor made the model emit ISO
+        # start_dates, which the server could not parse (stored as null).
+        self.assertIn("published on August 24, 2026", text)
+        self.assertNotIn("2026-08-24", text)
+        self.assertIn("relative to the PUBLISH date", text)
+        self.assertIn("MM-DD-YYYY regardless", text)
+
+    def test_prompt_survives_an_unparseable_post_date(self):
+        from c_admin.extraction import build_messages
+        text = build_messages(["http://img/1.jpg"], "x", "", "", post_date=1754500397)[-1]["content"][0]["text"]
+        self.assertIn("Today's date is", text)
+        self.assertNotIn("published on", text)
+
+    def test_prompt_falls_back_to_today_without_post_date(self):
+        from c_admin.extraction import build_messages
+        text = build_messages(["http://img/1.jpg"], "x", "", "")[-1]["content"][0]["text"]
+        self.assertNotIn("published on", text)
+        self.assertIn("Today's date is", text)
+
+    def test_extract_events_passes_post_date_through(self):
+        extraction = PostExtraction(post_type="single", events=[mk_event(event_name="X")])
+        client = mock_openai(extraction)
+        extract_events(client, ["http://a.jpg"], caption="c", post_date="2026-08-24T18:00:00.000Z")
+        _, kwargs = client.beta.chat.completions.parse.call_args
+        text = kwargs["messages"][0]["content"][0]["text"]
+        self.assertIn("published on August 24, 2026", text)   # ISO timestamp -> long-form date
 
     def test_payload_sets_visibility_fields(self):
         """Regression: omitting these saved the event but hid it from the site.

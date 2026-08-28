@@ -52,10 +52,14 @@ class Event(models.Model):
     forLocation = models.CharField(max_length=255, null=True, blank=True)
 
     # --- Ticket 2: stable source identity for carousel slides ---
-    # source_key is "{shortcode}__{slide_index}__{slug}" and is what ingestion
-    # upserts on, so re-scraping a post updates rows instead of inserting new
-    # ones. Nullable + unique: the 55,385 pre-existing rows have NULL here, and
-    # SQLite permits many NULLs in a unique index. Backfilled separately.
+    # source_key is what ingestion upserts on, so re-scraping a post updates
+    # rows instead of inserting new ones. Two shapes (see event/ingest.py):
+    #   "{shortcode}__{slide}__{ordinal}"  positional — single-event posts,
+    #                                       recurring series, nameless rows
+    #   "{shortcode}__e{hash}"             content-derived — each event of a
+    #                                       multi-event post (name+date+time)
+    # Nullable + unique: the 55,385 pre-existing rows have NULL here, and
+    # SQLite permits many NULLs in a unique index. Never backfilled.
     source_key = models.CharField(max_length=300, unique=True, null=True, blank=True)
     # Parent Instagram post shortcode. Distinct from source_key: every slide of
     # one carousel shares a shortcode but has its own source_key.

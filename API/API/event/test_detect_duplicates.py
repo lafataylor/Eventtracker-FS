@@ -1,4 +1,6 @@
 """Tests for the detect_duplicates management command (Ticket 1)."""
+from datetime import timedelta
+
 from django.core.management import call_command
 from django.test import TestCase
 from django.utils import timezone
@@ -117,3 +119,126 @@ class BlankPairGuardTests(TestCase):
                   orig_thumb='https://img/same.jpg')
         call_command('detect_duplicates', '--exact')
         self._assert_collapsed(expected_keeper=first)
+
+
+class RoundupClusterTests(TestCase):
+    """A post that yields several DISTINCT events must keep one row per
+    event, collapse drift twins WITHIN each event, and must not queue the
+    distinct events against each other. Replays the 2026-08-27 finding: with
+    one keeper per post, 3 of 4 drift twins were queued and every distinct
+    event became a 'same-post pair' for the owner."""
+
+    def _row(self, key, name, day, shortcode='RENATE', **kw):
+        base = dict(shortcode=shortcode, source_key=key, name=name,
+                    start_date=timezone.now() + timedelta(days=day),
+                    is_duplicate=False, suppressed=False, is_event=True,
+                    orig_link='https://www.instagram.com/p/%s/' % shortcode,
+                    orig_thumb='https://img/%s.jpg' % key)
+        base.update(kw)
+        return Event.objects.create(**base)
+
+    def _pending(self):
+        return EventMatch.objects.filter(status='pending').count()
+
+    def test_distinct_events_of_one_post_are_not_queued_or_hidden(self):
+        self._row('RENATE__ea', 'GARDEN hosted by Remoto Rec', 0)
+        self._row('RENATE__eb', 'GREEN hosted by Handmade DJ', 1)
+        self._row('RENATE__ec', 'RED hosted by Franz Scala', 2)
+        call_command('detect_duplicates', '--exact')
+        self.assertEqual(Event.objects.filter(suppressed=True).count(), 0)
+        self.assertEqual(self._pending(), 0)
+
+    def test_drift_twin_collapses_into_its_own_event_not_the_first_row(self):
+        a = self._row('RENATE__ea', 'GARDEN hosted by Remoto Rec', 0, artist='Atomlui')
+        b = self._row('RENATE__eb', 'GREEN hosted by Handmade DJ', 1)
+        twin = self._row('RENATE__eb2', 'Green hosted by Handmade DJ', 1)  # re-extraction drift
+        call_command('detect_duplicates', '--exact')
+        for e in (a, b, twin):
+            e.refresh_from_db()
+        self.assertTrue(twin.suppressed)
+        self.assertEqual(twin.canonical_id, b.id)           # its own event, not row A
+        self.assertFalse(a.suppressed)
+        self.assertFalse(b.suppressed)
+        self.assertEqual(self._pending(), 0)
+
+    def test_single_event_post_behaviour_unchanged(self):
+        keeper = self._row('P__0__0', 'Klubnacht', 0, shortcode='P', artist='X')
+        self._row('P__0__1', 'Klubnacht', 0, shortcode='P')
+        call_command('detect_duplicates', '--exact')
+        hidden = Event.objects.filter(shortcode='P', suppressed=True)
+        self.assertEqual(hidden.count(), 1)
+        self.assertEqual(hidden.get().canonical_id, keeper.id)
+        self.assertEqual(self._pending(), 0)
+
+    def test_oldest_textless_row_does_not_swallow_a_roundup(self):
+        # Review finding 2026-08-28: a nameless/dateless row that is the
+        # OLDEST of the post seeded a cluster that absorbed every distinct
+        # titled event (an empty signature contradicts nothing), re-queueing
+        # them all. It must attach last and hide; the events stay distinct.
+        blank = self._row('RENATE__0__0', None, 0, artist='DJ A', start_date=None)
+        a = self._row('RENATE__ea', 'GARDEN hosted by Remoto Rec', 0)
+        self._row('RENATE__eb', 'GREEN hosted by Handmade DJ', 1)
+        self._row('RENATE__ec', 'RED hosted by Franz Scala', 2)
+        call_command('detect_duplicates', '--exact')
+        blank.refresh_from_db()
+        self.assertTrue(blank.suppressed)
+        self.assertEqual(blank.canonical_id, a.id)
+        self.assertEqual(Event.objects.filter(suppressed=True).count(), 1)
+        self.assertEqual(self._pending(), 0)
+
+    def test_existing_pending_pair_that_now_qualifies_is_collapsed(self):
+        # Found live (2026-08-28): an identical-title, identical-date pair sat
+        # in the owner's queue because an existing EventMatch, even a merely
+        # PENDING one, made the collapse branch skip it.
+        keeper = self._row('P__0__0', 'ferrazmusic', 0, shortcode='P', artist='X')
+        twin = self._row('P__0__1', 'ferrazmusic', 0, shortcode='P')
+        EventMatch.objects.create(event_a=keeper, event_b=twin, score=0.0,
+                                  match_type='exact_link', status='pending')
+        call_command('detect_duplicates', '--exact')
+        twin.refresh_from_db()
+        self.assertTrue(twin.suppressed)
+        self.assertEqual(twin.canonical_id, keeper.id)
+        self.assertEqual(EventMatch.objects.get(event_a=keeper, event_b=twin).status, 'confirmed')
+        self.assertEqual(self._pending(), 0)
+
+    def test_rejected_pair_is_never_reopened(self):
+        # The owner said "not duplicates": the nightly pass must respect it
+        # even though the rows look identical.
+        a = self._row('P__0__0', 'ferrazmusic', 0, shortcode='P', artist='X')
+        b = self._row('P__0__1', 'ferrazmusic', 0, shortcode='P')
+        EventMatch.objects.create(event_a=a, event_b=b, score=0.0,
+                                  match_type='exact_link', status='rejected')
+        call_command('detect_duplicates', '--exact')
+        b.refresh_from_db()
+        self.assertFalse(b.suppressed)
+        self.assertEqual(EventMatch.objects.get(event_a=a, event_b=b).status, 'rejected')
+
+    def test_confirmed_pair_is_never_reopened_even_after_owner_restores_the_row(self):
+        # The critical case: a pair was collapsed (confirmed), then the owner
+        # restored the row via remove_duplicate_label, which clears the Event
+        # fields but never touches EventMatch. The match stays 'confirmed' and
+        # a re-run must not re-hide the row the owner explicitly brought back.
+        keeper = self._row('P__0__0', 'ferrazmusic', 0, shortcode='P', artist='X')
+        twin = self._row('P__0__1', 'ferrazmusic', 0, shortcode='P')
+        EventMatch.objects.create(event_a=keeper, event_b=twin, score=100.0,
+                                  match_type='exact_link', status='confirmed')
+        twin.suppressed = False; twin.canonical = None
+        twin.is_duplicate = False; twin.duplicate_link = None
+        twin.save()
+        call_command('detect_duplicates', '--exact')
+        twin.refresh_from_db()
+        self.assertFalse(twin.suppressed)
+        self.assertEqual(EventMatch.objects.get(event_a=keeper, event_b=twin).status, 'confirmed')
+
+    def test_nameless_rows_collapse_behind_the_titled_event(self):
+        # Unchanged behaviour: nameless, dateless per-slide rows join the
+        # titled event's cluster and hide behind it (they carry no evidence of
+        # being a distinct event), exactly as the 25k-row collapse did.
+        titled = self._row('RENATE__ea', 'GARDEN hosted by Remoto Rec', 0)
+        self._row('RENATE__0__1', None, 0, artist='DJ A', start_date=None)
+        self._row('RENATE__0__2', None, 0, artist='DJ B', start_date=None)
+        call_command('detect_duplicates', '--exact')
+        hidden = Event.objects.filter(shortcode='RENATE', suppressed=True)
+        self.assertEqual(hidden.count(), 2)
+        self.assertTrue(all(h.canonical_id == titled.id for h in hidden))
+        self.assertEqual(self._pending(), 0)
