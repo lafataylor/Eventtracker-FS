@@ -186,6 +186,50 @@ class RoundupClusterTests(TestCase):
         self.assertEqual(Event.objects.filter(suppressed=True).count(), 1)
         self.assertEqual(self._pending(), 0)
 
+    def test_existing_pending_pair_that_now_qualifies_is_collapsed(self):
+        # Found live (2026-08-28): an identical-title, identical-date pair sat
+        # in the owner's queue because an existing EventMatch, even a merely
+        # PENDING one, made the collapse branch skip it.
+        keeper = self._row('P__0__0', 'ferrazmusic', 0, shortcode='P', artist='X')
+        twin = self._row('P__0__1', 'ferrazmusic', 0, shortcode='P')
+        EventMatch.objects.create(event_a=keeper, event_b=twin, score=0.0,
+                                  match_type='exact_link', status='pending')
+        call_command('detect_duplicates', '--exact')
+        twin.refresh_from_db()
+        self.assertTrue(twin.suppressed)
+        self.assertEqual(twin.canonical_id, keeper.id)
+        self.assertEqual(EventMatch.objects.get(event_a=keeper, event_b=twin).status, 'confirmed')
+        self.assertEqual(self._pending(), 0)
+
+    def test_rejected_pair_is_never_reopened(self):
+        # The owner said "not duplicates": the nightly pass must respect it
+        # even though the rows look identical.
+        a = self._row('P__0__0', 'ferrazmusic', 0, shortcode='P', artist='X')
+        b = self._row('P__0__1', 'ferrazmusic', 0, shortcode='P')
+        EventMatch.objects.create(event_a=a, event_b=b, score=0.0,
+                                  match_type='exact_link', status='rejected')
+        call_command('detect_duplicates', '--exact')
+        b.refresh_from_db()
+        self.assertFalse(b.suppressed)
+        self.assertEqual(EventMatch.objects.get(event_a=a, event_b=b).status, 'rejected')
+
+    def test_confirmed_pair_is_never_reopened_even_after_owner_restores_the_row(self):
+        # The critical case: a pair was collapsed (confirmed), then the owner
+        # restored the row via remove_duplicate_label, which clears the Event
+        # fields but never touches EventMatch. The match stays 'confirmed' and
+        # a re-run must not re-hide the row the owner explicitly brought back.
+        keeper = self._row('P__0__0', 'ferrazmusic', 0, shortcode='P', artist='X')
+        twin = self._row('P__0__1', 'ferrazmusic', 0, shortcode='P')
+        EventMatch.objects.create(event_a=keeper, event_b=twin, score=100.0,
+                                  match_type='exact_link', status='confirmed')
+        twin.suppressed = False; twin.canonical = None
+        twin.is_duplicate = False; twin.duplicate_link = None
+        twin.save()
+        call_command('detect_duplicates', '--exact')
+        twin.refresh_from_db()
+        self.assertFalse(twin.suppressed)
+        self.assertEqual(EventMatch.objects.get(event_a=keeper, event_b=twin).status, 'confirmed')
+
     def test_nameless_rows_collapse_behind_the_titled_event(self):
         # Unchanged behaviour: nameless, dateless per-slide rows join the
         # titled event's cluster and hide behind it (they carry no evidence of

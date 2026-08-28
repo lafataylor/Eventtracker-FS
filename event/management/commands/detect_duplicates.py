@@ -227,7 +227,20 @@ class Command(BaseCommand):
                             defaults=dict(score=100.0, match_type='exact_link',
                                           status='confirmed'))
                         if not was_new:
-                            continue
+                            # An existing PENDING pair is not a decision by
+                            # anyone: it was queued by an earlier, more
+                            # cautious rule. If today's rule says collapse,
+                            # collapse it and record that (found live: an
+                            # identical-title, identical-date pair sat in the
+                            # owner's queue because the guard skipped it).
+                            # 'rejected' (owner said no) and 'confirmed'
+                            # (already collapsed, possibly restored since)
+                            # are decisions and stay untouched.
+                            if match.status != 'pending':
+                                continue
+                            match.status = 'confirmed'
+                            match.score = 100.0
+                            match.save(update_fields=['status', 'score'])
                         row.suppressed = True
                         row.canonical = canonical
                         # Also set is_duplicate so existing read paths hide it.
