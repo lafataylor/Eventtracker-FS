@@ -797,7 +797,8 @@ def process_post(item, account, biography, externalUrl, last_fetched, *, link_ov
                 # Keep the actual Instagram post link intact via `link` + `parent_shortcode`.
                 child_shortcode = f"{shortcode}__{idx}"
                 save_path = f"posters/{account}/{child_shortcode}.jpeg"
-                obj = create_image_object(image, caption, biography, externalUrl, child_shortcode)
+                obj = create_image_object(image, caption, biography, externalUrl, child_shortcode,
+                                          published_at=image_timestamp)
                 obj["parent_shortcode"] = shortcode
                 obj["link"] = post_link
                 download_and_save_image(image, save_path)
@@ -825,7 +826,8 @@ def process_post(item, account, biography, externalUrl, last_fetched, *, link_ov
                 return []
 
             log_step_progressed(f"Initiating download for : {imageUrl}")
-            obj = create_image_object(imageUrl, caption, biography, externalUrl, shortcode)
+            obj = create_image_object(imageUrl, caption, biography, externalUrl, shortcode,
+                                      published_at=image_timestamp)
             obj["link"] = post_link
             download_and_save_image(imageUrl, save_path)
             imageObjects.append(obj)
@@ -843,7 +845,8 @@ def process_post(item, account, biography, externalUrl, last_fetched, *, link_ov
                 return []
 
             log_step_progressed(f"Initiating download for : {videoUrl}")
-            obj = create_image_object(videoUrl, caption, biography, externalUrl, shortcode)
+            obj = create_image_object(videoUrl, caption, biography, externalUrl, shortcode,
+                                      published_at=image_timestamp)
             obj["link"] = post_link
             download_and_save_first_frame(videoUrl, save_path)
             imageObjects.append(obj)
@@ -856,7 +859,12 @@ def process_post(item, account, biography, externalUrl, last_fetched, *, link_ov
     
     return imageObjects
 
-def create_image_object(image_url, caption, biography, externalUrl, shortcode):
+def create_image_object(image_url, caption, biography, externalUrl, shortcode,
+                        published_at=None):
+    # taken_at_timestamp is the SCRAPE moment and is what the last-run
+    # freshness filter compares against; it must stay as it is. published_at
+    # (additive, optional) is the post's real publish time, used only by the
+    # structured extraction prompt to anchor "this week"-style dates.
     return {
         "baseImageUrl": image_url,
         "display_url": image_url,
@@ -864,7 +872,8 @@ def create_image_object(image_url, caption, biography, externalUrl, shortcode):
         "biography": biography,
         "externalUrl": externalUrl,
         "shortcode": shortcode,
-        "taken_at_timestamp": float(time.time())
+        "taken_at_timestamp": float(time.time()),
+        "published_at": published_at,
     }
 
 def fetch_last_run(account):
@@ -2046,12 +2055,12 @@ def clean_label_and_save_structured(account: str, exec_id: str, output_file_path
                 log_step_progressed(f"[STRUCTURED] no usable slides for {shortcode}")
                 continue
 
-            caption, biography, external_url = context_by_shortcode.get(
-                shortcode, ("", "", ""))
+            caption, biography, external_url, post_date = context_by_shortcode.get(
+                shortcode, ("", "", "", None))
 
             extraction = extract_events(
                 client, hosted_urls, caption=caption, biography=biography,
-                external_url=external_url)
+                external_url=external_url, post_date=post_date)
 
             payloads = build_payloads(
                 extraction, shortcode=shortcode,
@@ -2111,27 +2120,39 @@ def clean_label_and_save_structured(account: str, exec_id: str, output_file_path
 
 
 def _load_post_contexts(output_file_path):
-    """{shortcode: (caption, biography, external_url)} from the scrape file.
+    """{shortcode: (caption, biography, external_url, post_date)} from the
+    scrape file. post_date is the publish moment as an ISO string (or None):
+    it anchors relative dates in the extraction prompt, because "this week"
+    means the week the post went up, not the night it is scraped.
 
     Parsed once per account. The caption drives post_type classification and
     date resolution, so a missing scrape file degrades a whole night's
     extraction — log it loudly rather than returning silently.
     """
     contexts = {}
+
+    def _ctx(item):
+        # published_at is the real publish time (see create_image_object);
+        # taken_at_timestamp is only the scrape moment and is the fallback
+        # for files written before published_at existed.
+        ts = parse_item_timestamp_to_float(item.get("published_at")
+                                           or item.get("taken_at_timestamp")
+                                           or item.get("timestamp"))
+        return (item.get("caption") or "",
+                item.get("biography") or "",
+                item.get("externalUrl") or "",
+                _unix_ts_to_iso_z(ts) if ts else None)
+
     try:
         with open(output_file_path, "r") as handle:
             for item in json.loads(handle.read()):
                 code = item.get("shortcode")
                 if code and code not in contexts:
-                    contexts[code] = (item.get("caption") or "",
-                                      item.get("biography") or "",
-                                      item.get("externalUrl") or "")
+                    contexts[code] = _ctx(item)
                 # Child slides "SC__0" must also resolve for parent "SC".
                 parent = item.get("parent_shortcode")
                 if parent and parent not in contexts:
-                    contexts[parent] = (item.get("caption") or "",
-                                        item.get("biography") or "",
-                                        item.get("externalUrl") or "")
+                    contexts[parent] = _ctx(item)
     except Exception as exc:
         logger.warning("[STRUCTURED] could not read post contexts from %s: %s",
                        output_file_path, exc)
