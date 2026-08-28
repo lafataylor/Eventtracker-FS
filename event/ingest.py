@@ -10,14 +10,26 @@ yielding 73,519 venues for 55,385 events.
 
 Design
 ------
-Identity is *positional*: source_key = "{shortcode}__{slide}__{ordinal}".
-    - shortcode : the Instagram post
-    - slide     : the carousel slide the event came from
-    - ordinal   : the event's position among events extracted from that slide
-It is deliberately NOT derived from the event's text. 71.9% of production rows
-have no name, so a name-based key collapses distinct events into one key and
-loses data on upsert. Positional keys are collision-free by construction; two
-distinct events always get distinct keys and can never overwrite each other.
+Two identity shapes, chosen per post by `c_admin.post_ingest.build_payloads`:
+
+1. Positional: source_key = "{shortcode}__{slide}__{ordinal}"
+       - shortcode : the Instagram post
+       - slide     : the carousel slide the event came from
+       - ordinal   : the event's position among events extracted from that slide
+   Used for single-event posts, nameless events and recurring series (whose
+   per-date rows are expanded deterministically in code). For these the
+   extractor's output is stable, so the key is collision-free by construction
+   and needs no text: 71.9% of production rows have no name, and a name-based
+   key would collapse those into one key and lose data on upsert.
+
+2. Content-derived: source_key = "{shortcode}__e{sha1(name|date|time)[:12]}"
+   Used for each named event of a MULTI-event post. There the extractor's
+   order, count and slide attribution vary between runs, so a positional key
+   pointed at a different event on re-extraction and the manual refresh wrote
+   one event over another (2026-08-27). Two distinct events of one post
+   collide only if they share normalised title, date AND start time; the
+   accepted cost of wording drift between runs is a second row for the
+   review queue, never an overwrite of the wrong event.
 
 Scope: this module only makes *future* ingestion idempotent. The pre-existing
 23,355 legacy duplicates (source_key NULL) are handled by the separate
@@ -100,7 +112,7 @@ def build_source_key(shortcode, slide_index=None, ordinal=0):
     return f'{shortcode}__{coerce_int(slide_index)}__{coerce_int(ordinal)}'[:300]
 
 
-def content_source_key(shortcode, name, start_date, start_time=None):
+def content_source_key(shortcode, name, start_date, start_time=None, ordinal=None):
     """Compose a content-derived identity `{shortcode}__e{hash}` for one event
     of a MULTI-event post (several DISTINCT events extracted from one post —
     not a recurring series, whose per-date expansion is generated
@@ -121,14 +133,23 @@ def content_source_key(shortcode, name, start_date, start_time=None):
     without it they would share a key and the second would be silently
     merged into the first under the nightly fill-empty upsert.
 
+    When BOTH date and time are missing (the extractor may legitimately return
+    null for either), the ordinal joins the basis: two same-named undated
+    events in one post must not share a key, and the invariant that matters
+    is "a key match implies the same title and the same slot". Drift in
+    ordinal for such an event costs a duplicate row, never an overwrite.
+
     Returns None without a shortcode or a title: nameless events keep the
     positional key, which is the only identity they have.
     """
     if not shortcode or not (name or '').strip():
         return None
-    basis = '|'.join((normalize_text(name), (start_date or '').strip(),
-                      normalize_text(start_time or '')))
-    digest = hashlib.sha1(basis.encode('utf-8')).hexdigest()[:12]
+    date_part = (start_date or '').strip()
+    time_part = normalize_text(start_time or '')
+    parts = [normalize_text(name), date_part, time_part]
+    if not date_part and not time_part:
+        parts.append(f'#{coerce_int(ordinal)}')
+    digest = hashlib.sha1('|'.join(parts).encode('utf-8')).hexdigest()[:12]
     return f'{shortcode}__e{digest}'[:300]
 
 

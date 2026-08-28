@@ -36,6 +36,19 @@ class ContentSourceKeyTests(TestCase):
         self.assertIsNone(content_source_key("abc", "  ", "08-27-2026"))
         self.assertIsNone(content_source_key(None, "Klubnacht", "08-27-2026"))
 
+    def test_same_name_no_date_no_time_uses_ordinal_so_no_collision(self):
+        # Two "TBA" slots with the same title in one roundup must not share a
+        # key (a shared key would let one overwrite the other on refresh).
+        a = content_source_key("abc", "Secret Set", None, None, ordinal=0)
+        b = content_source_key("abc", "Secret Set", None, None, ordinal=1)
+        self.assertNotEqual(a, b)
+        # ...but the same undated event re-extracted at the same slot matches.
+        self.assertEqual(a, content_source_key("abc", "secret set", "", "", ordinal=0))
+
+    def test_ordinal_ignored_when_a_date_or_time_exists(self):
+        self.assertEqual(content_source_key("abc", "X", "08-27-2026", None, ordinal=0),
+                         content_source_key("abc", "X", "08-27-2026", None, ordinal=5))
+
     def test_cannot_collide_with_positional_keys(self):
         # positional keys are {shortcode}__{int}__{int}; content keys carry a
         # non-numeric marker so the two namespaces can never overlap.
