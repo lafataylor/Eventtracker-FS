@@ -986,21 +986,42 @@ def get_duplicate_events(request):
     except (TypeError, ValueError):
         limit, offset = 200, 0
     try:
-        # canonical IS NULL scopes the list to rows hidden WITHOUT a surviving
+        # scope=flagged (default) lists rows hidden WITHOUT a surviving
         # counterpart — the old scraper's flags and manual marks, i.e. the ones
-        # a human might actually want back. Proper collapses (canonical set)
-        # have a live twin and are reviewable through the pairs view; including
-        # them would bury the ~2k restorable rows under ~23k re-scrape husks.
+        # a human might actually want back. Including proper collapses by
+        # default would bury those ~2k restorable rows under ~25k re-scrape
+        # husks. scope=merged lists exactly those collapses (each with the row
+        # it was hidden behind, below) so the owner can audit them on demand
+        # instead of searching the main page for each twin; scope=all is both.
+        scope = request.GET.get("scope", "flagged")
         base = (Event.objects
                 .filter(Q(is_duplicate=True) | Q(suppressed=True))
-                .filter(canonical__isnull=True)
-                .select_related('venue', 'poster')
+                .select_related('venue', 'poster', 'canonical')
                 .order_by('-created_at'))
+        if scope == "merged":
+            base = base.filter(canonical__isnull=False)
+        elif scope != "all":
+            base = base.filter(canonical__isnull=True)
         total = base.count()
-        duplicate_events = base[offset:offset + limit]
+        duplicate_events = list(base[offset:offset + limit])
         event_serializer = EventSerializer(duplicate_events, many=True)
+        # Why each row is hidden, and what it was hidden BEHIND. Without this
+        # the owner had to go back to the main page and search for the twin to
+        # judge a restore (his words, 2026-08-30). canonical is only set by a
+        # duplicate collapse; the rest are the old scraper's auto-flags.
+        rows = event_serializer.data
+        for item, event in zip(rows, duplicate_events):
+            keeper = event.canonical
+            item["hidden_reason"] = ("duplicate" if keeper
+                                     else "flagged_by_scraper")
+            item["kept_instead"] = ({
+                "id": keeper.id,
+                "name": keeper.name,
+                "start_date": keeper.start_date,
+                "orig_link": keeper.orig_link,
+            } if keeper else None)
         return Success({"status": "success", "total": total, "offset": offset,
-                        "duplicate_events": event_serializer.data})
+                        "scope": scope, "duplicate_events": rows})
     except Exception as e:
         logger.error(f"Error retrieving duplicate events: {e}")
         return ServerProcessingError(message="Error retrieving duplicate events: "+str(e))
