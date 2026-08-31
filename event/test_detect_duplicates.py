@@ -430,3 +430,142 @@ class RecoveryScopeTests(TestCase):
         row = next(e for e in self._get()['duplicate_events'] if e['id'] == self.flagged.id)
         self.assertEqual(row['hidden_reason'], 'flagged_by_scraper')
         self.assertIsNone(row['kept_instead'])
+
+
+class FuzzyAutoMergeTests(TestCase):
+    """Task 4 (owner feedback 2026-08-30, Hood Rave x Dance Mania): identical
+    same-day cross-post listings should merge without review, but ONLY above
+    a high bar — score >= threshold AND the exact same day. Everything in the
+    82-95 band, and anything a day apart, still goes to a human."""
+
+    def _ev(self, name, day, shortcode, **kw):
+        base = dict(name=name, shortcode=shortcode,
+                    start_date=timezone.now() + timedelta(days=day),
+                    orig_link='https://www.instagram.com/p/%s/' % shortcode,
+                    is_duplicate=False, suppressed=False, is_event=True)
+        base.update(kw)
+        return Event.objects.create(**base)
+
+    def _run(self, **kw):
+        call_command('detect_duplicates', '--fuzzy',
+                     '--auto-merge-threshold', '95', **kw)
+
+    def test_identical_same_day_pair_is_auto_merged(self):
+        # the more complete row (artist + time) must be the keeper
+        keeper = self._ev('Hood Rave Summer Jam', 3, 'POSTA',
+                          artist='Dance Mania', start_time='22:00')
+        loser = self._ev('Hood Rave Summer Jam', 3, 'POSTB')
+        self._run()
+        loser.refresh_from_db(); keeper.refresh_from_db()
+        self.assertTrue(loser.suppressed)
+        self.assertEqual(loser.canonical_id, keeper.id)
+        self.assertTrue(loser.is_duplicate)
+        self.assertFalse(keeper.suppressed)
+        m = EventMatch.objects.get(event_a__in=[keeper, loser],
+                                   event_b__in=[keeper, loser])
+        self.assertEqual(m.status, 'confirmed')
+
+    def test_mid_band_pair_is_queued_not_merged(self):
+        from event.dedupe import event_signature, score_pair
+        a = self._ev('Taco Tuesday Fiesta', 3, 'POSTA',
+                     artist='Sonido Gallo')
+        b = self._ev('Taco Tuesday Fiesta', 3, 'POSTB',
+                     artist='Sonido Martines')
+        # guard: the fixture really sits in the review band
+        s = score_pair(event_signature(a), event_signature(b))
+        self.assertTrue(82 <= s < 95, f'fixture score {s} left the band')
+        self._run()
+        a.refresh_from_db(); b.refresh_from_db()
+        self.assertFalse(a.suppressed or b.suppressed)
+        self.assertEqual(EventMatch.objects.filter(status='pending').count(), 1)
+
+    def test_next_day_pair_is_never_auto_merged(self):
+        # LADW3 shape: identical listing, one day apart -> review, not merge
+        a = self._ev('LADW Group Show', 3, 'POSTA')
+        b = self._ev('LADW Group Show', 4, 'POSTB')
+        self._run()
+        a.refresh_from_db(); b.refresh_from_db()
+        self.assertFalse(a.suppressed or b.suppressed)
+        self.assertEqual(EventMatch.objects.filter(status='pending').count(), 1)
+
+    def test_rejected_verdict_is_never_overridden(self):
+        a = self._ev('Cumbia Night', 3, 'POSTA')
+        b = self._ev('Cumbia Night', 3, 'POSTB')
+        EventMatch.objects.create(event_a=a, event_b=b, score=100.0,
+                                  match_type='fuzzy', status='rejected')
+        self._run()
+        a.refresh_from_db(); b.refresh_from_db()
+        self.assertFalse(a.suppressed or b.suppressed)
+        self.assertEqual(EventMatch.objects.get(event_a=a, event_b=b).status,
+                         'rejected')
+
+    def test_triple_converges_to_one_keeper_without_chains(self):
+        rows = [self._ev('Techno Marathon', 3, 'POST%d' % i,
+                         artist='Same Artist') for i in range(3)]
+        rows[0].start_time = '23:00'
+        rows[0].save(update_fields=['start_time'])  # most complete -> keeper
+        self._run()
+        for r in rows:
+            r.refresh_from_db()
+        keepers = [r for r in rows if not r.suppressed]
+        losers = [r for r in rows if r.suppressed]
+        self.assertEqual(len(keepers), 1)
+        # every loser points STRAIGHT at the keeper — no loser->loser chain
+        for l in losers:
+            self.assertEqual(l.canonical_id, keepers[0].id)
+
+    def test_dry_run_writes_nothing(self):
+        self._ev('Hood Rave Summer Jam', 3, 'POSTA')
+        self._ev('Hood Rave Summer Jam', 3, 'POSTB')
+        self._run(dry_run=True)
+        self.assertEqual(EventMatch.objects.count(), 0)
+        self.assertFalse(Event.objects.filter(suppressed=True).exists())
+
+    def test_ascending_completeness_triple_leaves_no_chain(self):
+        # The nasty ordering: completeness INCREASES with id, so the first
+        # pair's keeper later loses to the third row. The earlier loser must
+        # be re-pointed at the final keeper, never left aiming at a
+        # suppressed row.
+        r1 = self._ev('Techno Marathon', 3, 'POST1', artist='Same Artist')
+        r2 = self._ev('Techno Marathon', 3, 'POST2', artist='Same Artist',
+                      start_time='23:00')
+        r3 = self._ev('Techno Marathon', 3, 'POST3', artist='Same Artist',
+                      start_time='23:00', price='150')
+        self._run()
+        for r in (r1, r2, r3):
+            r.refresh_from_db()
+        self.assertFalse(r3.suppressed)
+        self.assertTrue(r1.suppressed and r2.suppressed)
+        self.assertEqual(r1.canonical_id, r3.id)
+        self.assertEqual(r2.canonical_id, r3.id)
+
+    def test_keeper_with_stale_duplicate_flag_is_unhidden(self):
+        # keep_a clears the keeper's legacy over-flagging; the auto path
+        # must too, or the merge hides BOTH rows.
+        keeper = self._ev('Hood Rave Summer Jam', 3, 'POSTA',
+                          artist='Dance Mania', start_time='22:00',
+                          is_duplicate=True)
+        loser = self._ev('Hood Rave Summer Jam', 3, 'POSTB')
+        self._run()
+        keeper.refresh_from_db(); loser.refresh_from_db()
+        self.assertFalse(keeper.is_duplicate)
+        self.assertFalse(keeper.suppressed)
+        self.assertTrue(loser.suppressed)
+
+    def test_dry_run_counts_match_a_real_run(self):
+        import io
+        from django.core.management import call_command as cc
+        for i in range(3):
+            self._ev('Techno Marathon', 3, 'POST%d' % i,
+                     artist='Same Artist',
+                     start_time='23:00' if i else None)
+        def merged_count(dry):
+            out = io.StringIO()
+            cc('detect_duplicates', '--fuzzy', '--auto-merge-threshold', '95',
+               dry_run=dry, stdout=out)
+            import re as _re
+            return int(_re.search(r'auto-merge[d]? (\d+)', out.getvalue()).group(1))
+        dry_n = merged_count(True)
+        self.assertEqual(EventMatch.objects.count(), 0)  # dry wrote nothing
+        real_n = merged_count(False)
+        self.assertEqual(dry_n, real_n)
