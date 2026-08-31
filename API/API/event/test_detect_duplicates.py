@@ -188,6 +188,23 @@ class RoundupClusterTests(TestCase):
         self.assertEqual(Event.objects.filter(shortcode='P', suppressed=True).count(), 1)
         self.assertEqual(Event.objects.get(shortcode='P', suppressed=True).canonical_id, a.id)
 
+    def test_non_event_pair_one_day_apart_collapses_deliberately(self):
+        # Decided behaviour (review 2026-08-31), not an accident: two rows
+        # that are BOTH explicitly not-an-event collapse even when their dates
+        # sit within the ±1-day nightlife tolerance and secondary fields
+        # differ. Neither row can appear in any feed or search, so review
+        # would be a choice between two invisible rows; the loser stays
+        # restorable from the merged scope.
+        keeper = self._row('P__0__0', None, 0, shortcode='P', is_event=False,
+                           artist='DJ A', genres='house')
+        self._row('P__0__1', None, 1, shortcode='P', is_event=False,
+                  artist='DJ B', genres='techno')
+        call_command('detect_duplicates', '--exact')
+        self.assertEqual(self._pending(), 0)
+        hidden = Event.objects.filter(shortcode='P', suppressed=True)
+        self.assertEqual(hidden.count(), 1)
+        self.assertEqual(hidden.get().canonical_id, keeper.id)
+
     def test_unclassified_row_is_not_treated_as_a_non_event(self):
         # is_event NULL means "never classified", not "not an event":
         # search_events filters ~Q(is_event=False) precisely so NULL rows stay
