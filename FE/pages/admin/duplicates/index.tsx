@@ -52,8 +52,9 @@ const Index = () => {
   const [pendingTotal, setPendingTotal] = useState(0);
   // "Previously flagged": single events the OLD scraper hid via is_duplicate
   // before that auto-flagging was retired. Kept as a recovery path so an event
-  // wrongly hidden by the old logic can be restored (the new pairs view only
-  // covers EventMatch rows, which the old scraper never created).
+  // wrongly hidden by the old logic can be restored, and — behind the
+  // 'merged' scope — so can rows collapsed by the duplicate pass, each shown
+  // with what was kept instead (see the scope switch below).
   const [flagged, setFlagged] = useState<FlaggedEvent[]>([]);
   const [flaggedTotal, setFlaggedTotal] = useState(0);
   const [flaggedScope, setFlaggedScope] = useState<'flagged' | 'merged'>('flagged');

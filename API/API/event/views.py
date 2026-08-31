@@ -970,12 +970,13 @@ def add_duplicate_label(request):
 
 @api_view(["GET"])
 def get_duplicate_events(request):
-    """Every event currently hidden as a duplicate, for the recovery view.
+    """Hidden events for the recovery view, selected by ?scope=.
 
-    Includes rows hidden by automated flagging AND by a confirmed pair review,
-    because the UI promises "you can restore it later" for both — excluding
-    suppressed rows left them with no way back. remove_duplicate_label clears
-    both flags, so anything listed here really is restorable.
+    scope=flagged (default): rows hidden WITHOUT a surviving canonical — the
+    old scraper's flags and manual marks. scope=merged: duplicate collapses
+    (canonical set), each reporting what was kept instead. scope=all: both.
+    Whatever the scope, anything listed really is restorable:
+    remove_duplicate_label clears every hiding flag.
 
     No start_date floor: a wrongly-hidden event is usually past-dated, and a
     24h window made most of them unreachable. Newest-flagged first, bounded.
@@ -1032,7 +1033,7 @@ def get_event_matches(request):
     """Ticket 1: candidate duplicate PAIRS for side-by-side review.
 
     Unlike get_duplicate_events (which returns a flat list of flagged events and
-    a bare duplicate_link string), this returns both full events of each pair so
+    a keeper summary), this returns both full events of each pair so
     the owner can actually compare them. Ordered most-confident first.
     """
     status = request.GET.get("status", "pending")
