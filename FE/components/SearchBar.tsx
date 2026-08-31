@@ -36,6 +36,11 @@ const norm = (value?: string | null) =>
     .replace(/[̀-ͯ]/g, '')
     .toLowerCase();
 
+/** Letters and digits only, on top of norm(): "hip-hop", "hiphop" and
+ *  "hip hop" all squash to "hiphop" so every spelling finds the others
+ *  (owner feedback 2026-08-30). Mirrors the server's squash(). */
+const squash = (value?: string | null) => norm(value).replace(/[^a-z0-9]/g, '');
+
 /** Fields a local search looks at. Previously only name + venue.address, so
  *  searching an artist, a genre, or a venue by NAME found nothing — the
  *  "search misses events" complaint. Mirrors the server's search_events. */
@@ -43,7 +48,7 @@ const eventMatchesTerm = (event: Event, term: string) => {
   const q = norm(term);
   if (!q) return true;
   const venue: any = (event as any).venue ?? {};
-  return [
+  const fields = [
     event.name,
     (event as any).artist,
     (event as any).opener,
@@ -52,12 +57,35 @@ const eventMatchesTerm = (event: Event, term: string) => {
     (event as any).offering,
     (event as any).genres,
     (event as any).forLocation,
+    // The Instagram handle the event was retrieved from — the owner searches
+    // by account to verify what a profile's posts turned into.
+    (event as any).poster?.user,
     venue.name,
     venue.address,
     venue.city,
     venue.state,
     venue.country,
-  ].some((field) => norm(field as string).includes(q));
+  ];
+  if (fields.some((field) => norm(field as string).includes(q))) return true;
+  // Squashed pass, per field (never joined — a term must not match across a
+  // field boundary). Same ≥3 length guard as the server so "dj" or "a" does
+  // not squash-match half the catalogue. Deliberately EXCLUDES the venue
+  // fields, exactly like the server's scan, so local and server results
+  // agree when the debounced server response replaces the local pass.
+  const sq = squash(term);
+  if (sq.length < 3) return false;
+  const squashFields = [
+    event.name,
+    (event as any).artist,
+    (event as any).opener,
+    (event as any).host,
+    (event as any).promoter,
+    (event as any).offering,
+    (event as any).genres,
+    (event as any).forLocation,
+    (event as any).poster?.user,
+  ];
+  return squashFields.some((field) => squash(field as string).includes(sq));
 };
 
 const SearchBar = ({
