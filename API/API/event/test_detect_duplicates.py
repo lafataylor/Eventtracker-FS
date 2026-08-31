@@ -80,22 +80,25 @@ class BlankPairGuardTests(TestCase):
     def test_two_artist_rows_without_title_or_date_still_queue(self):
         # Both sides carry text a reviewer can compare: could be two distinct
         # roundup events the extractor could not title — a human decides.
-        self._row('ABC123__0__0', name=None, start_date=None, artist='DJ A')
-        self._row('ABC123__1__0', name=None, start_date=None, artist='DJ B')
+        # is_event=True is explicit here: the ambiguity rule is about rows a
+        # visitor can actually see. A pair where BOTH sides are non-events is
+        # collapsed instead (see RoundupClusterTests).
+        self._row('ABC123__0__0', name=None, start_date=None, artist='DJ A', is_event=True)
+        self._row('ABC123__1__0', name=None, start_date=None, artist='DJ B', is_event=True)
         call_command('detect_duplicates', '--exact')
         self._assert_queued()
 
     def test_dated_row_vs_artist_row_still_queues(self):
-        self._row('ABC123__0__0', name=None, start_date=timezone.now())
-        self._row('ABC123__1__0', name=None, start_date=None, artist='DJ B')
+        self._row('ABC123__0__0', name=None, start_date=timezone.now(), is_event=True)
+        self._row('ABC123__1__0', name=None, start_date=None, artist='DJ B', is_event=True)
         call_command('detect_duplicates', '--exact')
         self._assert_queued()
 
     def test_legacy_row_vs_keyed_row_both_with_text_still_queues(self):
         # The common production shape: an old row with no source_key next to
         # a new keyed one. Keying must not change the reviewability rule.
-        self._row(None, name=None, start_date=None, artist='DJ A')
-        self._row('ABC123__1__0', name=None, start_date=None, artist='DJ B')
+        self._row(None, name=None, start_date=None, artist='DJ A', is_event=True)
+        self._row('ABC123__1__0', name=None, start_date=None, artist='DJ B', is_event=True)
         call_command('detect_duplicates', '--exact')
         self._assert_queued()
 
@@ -170,6 +173,45 @@ class RoundupClusterTests(TestCase):
         self.assertEqual(hidden.get().canonical_id, keeper.id)
         self.assertEqual(self._pending(), 0)
 
+    def test_pair_of_non_events_is_collapsed_not_queued(self):
+        # Owner feedback 2026-08-30: "most of the events in the duplicate
+        # pairs section are not actually events". Measured: 85 of 165 pending
+        # pairs had BOTH sides is_event != True. Such a row shows nowhere (the
+        # feed filters duplicates, search excludes is_event=False), so there is
+        # nothing for a reviewer to rescue and nothing to compare.
+        a = self._row('P__0__0', None, 0, shortcode='P', is_event=False,
+                      start_date=None, venue=None, artist='DJ A')
+        self._row('P__0__1', None, 0, shortcode='P', is_event=False,
+                  start_date=None, artist='DJ B')
+        call_command('detect_duplicates', '--exact')
+        self.assertEqual(self._pending(), 0)
+        self.assertEqual(Event.objects.filter(shortcode='P', suppressed=True).count(), 1)
+        self.assertEqual(Event.objects.get(shortcode='P', suppressed=True).canonical_id, a.id)
+
+    def test_unclassified_row_is_not_treated_as_a_non_event(self):
+        # is_event NULL means "never classified", not "not an event":
+        # search_events filters ~Q(is_event=False) precisely so NULL rows stay
+        # findable. A findable row must keep its review.
+        self._row('P__0__0', None, 0, shortcode='P', is_event=None,
+                  start_date=None, artist='DJ A')
+        self._row('P__0__1', None, 0, shortcode='P', is_event=False,
+                  start_date=None, artist='DJ B')
+        call_command('detect_duplicates', '--exact')
+        self.assertEqual(self._pending(), 1)
+        self.assertEqual(Event.objects.filter(shortcode='P', suppressed=True).count(), 0)
+
+    def test_non_event_beside_a_real_event_still_queues(self):
+        # Only a pair where BOTH sides are non-events is safe to collapse: if
+        # one side is a real listing the classification may simply be wrong on
+        # the other, so a human decides.
+        self._row('P__0__0', None, 0, shortcode='P', is_event=False,
+                  start_date=None, artist='DJ A')
+        self._row('P__0__1', None, 0, shortcode='P', is_event=True,
+                  start_date=None, artist='DJ B')
+        call_command('detect_duplicates', '--exact')
+        self.assertEqual(self._pending(), 1)
+        self.assertEqual(Event.objects.filter(shortcode='P', suppressed=True).count(), 0)
+
     def test_oldest_textless_row_does_not_swallow_a_roundup(self):
         # Review finding 2026-08-28: a nameless/dateless row that is the
         # OLDEST of the post seeded a cluster that absorbed every distinct
@@ -242,3 +284,50 @@ class RoundupClusterTests(TestCase):
         self.assertEqual(hidden.count(), 2)
         self.assertTrue(all(h.canonical_id == titled.id for h in hidden))
         self.assertEqual(self._pending(), 0)
+
+
+class RecoveryScopeTests(TestCase):
+    """The recovery list must be able to answer "what was this hidden behind?"
+    (owner, 2026-08-30: otherwise "I would have to go back to the main page
+    and search each event"). Default scope stays the restorable auto-flags so
+    they are not buried under ~25k collapses."""
+
+    def setUp(self):
+        from c_auth.models import User
+        self.user = User.objects.create(email='rec@test.dev', usertype='admin')
+        self.user.set_password('x'); self.user.save()
+        import jwt
+        self.tok = jwt.encode({'id': self.user.id}, 'secret', algorithm='HS256')
+        self.keeper = Event.objects.create(name='Real Event', is_duplicate=False,
+                                           suppressed=False, is_event=True,
+                                           orig_link='https://insta/p/A/')
+        self.merged = Event.objects.create(name='Re-scrape', is_duplicate=True,
+                                           suppressed=True, canonical=self.keeper,
+                                           is_event=True)
+        self.flagged = Event.objects.create(name='Old auto-flag', is_duplicate=True,
+                                            suppressed=False, canonical=None,
+                                            is_event=True)
+
+    def _get(self, scope=None):
+        url = '/v1/event/getDuplicateEvents/' + (f'?scope={scope}' if scope else '')
+        return self.client.get(url, HTTP_AUTHORIZATION='Token ' + self.tok).json()
+
+    def test_default_scope_excludes_merged_rows(self):
+        ids = [e['id'] for e in self._get()['duplicate_events']]
+        self.assertIn(self.flagged.id, ids)
+        self.assertNotIn(self.merged.id, ids)
+
+    def test_merged_scope_reports_what_it_was_kept_instead_of(self):
+        rows = self._get('merged')['duplicate_events']
+        ids = [e['id'] for e in rows]
+        self.assertIn(self.merged.id, ids)
+        self.assertNotIn(self.flagged.id, ids)
+        row = next(e for e in rows if e['id'] == self.merged.id)
+        self.assertEqual(row['hidden_reason'], 'duplicate')
+        self.assertEqual(row['kept_instead']['id'], self.keeper.id)
+        self.assertEqual(row['kept_instead']['name'], 'Real Event')
+
+    def test_flagged_rows_say_why_without_a_keeper(self):
+        row = next(e for e in self._get()['duplicate_events'] if e['id'] == self.flagged.id)
+        self.assertEqual(row['hidden_reason'], 'flagged_by_scraper')
+        self.assertIsNone(row['kept_instead'])
