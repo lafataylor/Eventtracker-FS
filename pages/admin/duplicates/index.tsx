@@ -28,6 +28,14 @@ interface Match {
 
 type ViewMode = 'pairs' | 'flagged';
 
+// A hidden row carries why it is hidden and, for a collapse, the row it was
+// kept instead of — so a restore decision needs no search on the main page.
+type FlaggedEvent = Event & {
+  hidden_reason?: 'duplicate' | 'flagged_by_scraper';
+  kept_instead?: { id: number; name: string | null; start_date: string | null;
+                   orig_link: string | null } | null;
+};
+
 const MATCH_LABEL: Record<string, string> = {
   fuzzy: 'Similar event',
   exact_link: 'Same Instagram post',
@@ -46,8 +54,9 @@ const Index = () => {
   // before that auto-flagging was retired. Kept as a recovery path so an event
   // wrongly hidden by the old logic can be restored (the new pairs view only
   // covers EventMatch rows, which the old scraper never created).
-  const [flagged, setFlagged] = useState<Event[]>([]);
+  const [flagged, setFlagged] = useState<FlaggedEvent[]>([]);
   const [flaggedTotal, setFlaggedTotal] = useState(0);
+  const [flaggedScope, setFlaggedScope] = useState<'flagged' | 'merged'>('flagged');
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState(false);
   // A set, not a scalar: resolving two cards at once must keep both disabled
@@ -70,12 +79,13 @@ const Index = () => {
       },
     });
 
-  const fetchFlagged = async (loadMoreOffset: number = 0) => {
+  const fetchFlagged = async (loadMoreOffset: number = 0,
+                              scope: 'flagged' | 'merged' = flaggedScope) => {
     if (!(await requestMiddleware(dispatch))) return;
     setIsLoading(true);
     setLoadError(false);
     try {
-      const res = await readAdminDuplicates(loadMoreOffset);
+      const res = await readAdminDuplicates(loadMoreOffset, scope);
       if (res.status === 200) {
         const page = res.data?.duplicate_events || [];
         setFlagged((prev) => (loadMoreOffset > 0 ? [...prev, ...page] : page));
@@ -271,10 +281,38 @@ const Index = () => {
               </button>
             </div>
           ) : view === 'flagged' ? (
-            flagged.length === 0 ? (
+            <>
+            {/* Two different kinds of hidden row, kept apart on purpose: the
+                scraper's old flags are the restorable ones, and would be
+                buried under ~25k duplicate collapses if merged into one list. */}
+            <div className="flex gap-2 mb-4">
+              {([['flagged', 'Flagged as not an event'],
+                 ['merged', 'Hidden as duplicates']] as const).map(([s, label]) => (
+                <button
+                  key={s}
+                  className={`px-3 py-1 rounded-lg text-sm ${
+                    flaggedScope === s
+                      ? 'bg-beaming-orange text-black font-semibold'
+                      : 'border border-stone-gray text-off-white'}`}
+                  onClick={() => {
+                    setFlaggedScope(s);
+                    setFlagged([]);
+                    setFlaggedTotal(0);
+                    fetchFlagged(0, s);
+                  }}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+            {flagged.length === 0 ? (
               <div className="w-full h-64 flex flex-col items-center justify-center gap-2">
-                <div className="text-2xl font-bold">Nothing flagged 🎉</div>
-                <div className="text-stone-gray">No previously-hidden events to review.</div>
+                <div className="text-2xl font-bold">Nothing here 🎉</div>
+                <div className="text-stone-gray">
+                  {flaggedScope === 'merged'
+                    ? 'No duplicates have been hidden yet.'
+                    : 'No previously-flagged events to review.'}
+                </div>
               </div>
             ) : (
               <div className="flex flex-wrap gap-6">
@@ -285,6 +323,23 @@ const Index = () => {
                   >
                     <div className="w-64">
                       <EventCard event={event} disabled={false} isFavorite={false} />
+                    </div>
+                    {/* Why it is hidden, and what survived in its place, so a
+                        restore decision needs no search on the main page. */}
+                    <div className="w-64 text-xs text-stone-gray">
+                      {event.kept_instead ? (
+                        <>
+                          Hidden as a duplicate. Kept instead:{' '}
+                          <span className="text-off-white">
+                            {event.kept_instead.name || 'untitled event'}
+                          </span>
+                          {event.kept_instead.start_date
+                            ? ` (${new Date(event.kept_instead.start_date).toLocaleDateString()})`
+                            : ''}
+                        </>
+                      ) : (
+                        'Flagged by the scraper as not an event.'
+                      )}
                     </div>
                     <button
                       className="py-2 px-4 w-64 rounded-lg bg-beaming-orange text-black font-semibold disabled:opacity-50"
@@ -313,7 +368,8 @@ const Index = () => {
                   </div>
                 )}
               </div>
-            )
+            )}
+            </>
           ) : matches.length === 0 ? (
             <div className="w-full h-64 flex flex-col items-center justify-center gap-2">
               <div className="text-2xl font-bold">All caught up 🎉</div>
@@ -332,8 +388,15 @@ const Index = () => {
                       <span className="text-beaming-orange font-bold uppercase text-sm tracking-wide">
                         {MATCH_LABEL[m.match_type] || 'Possible duplicate'}
                       </span>
+                      {/* A same-post pair is not scored by similarity: the
+                          two rows come from ONE Instagram post, which is the
+                          evidence. Printing "0% match" for those read as "the
+                          system is 0% sure" (owner feedback 2026-08-30). Only
+                          cross-post (fuzzy) pairs carry a meaningful score. */}
                       <span className="text-stone-gray text-sm">
-                        {Math.round(m.score)}% match
+                        {m.match_type === 'exact_link'
+                          ? 'system unsure which to keep'
+                          : `${Math.round(m.score)}% match`}
                       </span>
                     </div>
 

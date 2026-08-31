@@ -232,8 +232,12 @@ export async function refetchToken(dispatch: Dispatch<any>) {
 }
 
 
-export function readAdminDuplicates(offset: number = 0) {
-  return axiosClient.get(`event/getDuplicateEvents/?offset=${offset}`, {
+// scope: 'flagged' (default) = hidden without a surviving twin, i.e. the old
+// scraper's flags — the rows worth restoring. 'merged' = collapsed duplicates,
+// each reporting what it was kept instead of. 'all' = both.
+export function readAdminDuplicates(offset: number = 0, scope: string = 'flagged') {
+  return axiosClient.get(
+    `event/getDuplicateEvents/?offset=${offset}&scope=${scope}`, {
     headers: getHeader()
   });
 }
