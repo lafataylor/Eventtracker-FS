@@ -303,6 +303,88 @@ class RoundupClusterTests(TestCase):
         self.assertEqual(self._pending(), 0)
 
 
+class ResolveDeleteBothTests(TestCase):
+    """Owner feedback 2026-08-30: "there should be a way to delete both of
+    the suggested duplicates". delete_both hard-deletes both events of a pair
+    and blacklists their posts (same rule as AdminEvent.delete) so the
+    nightly scrape cannot re-ingest either."""
+
+    def setUp(self):
+        from c_auth.models import User
+        import jwt
+        u = User.objects.create(email='del@test.dev', usertype='admin')
+        u.set_password('x'); u.save()
+        self.tok = jwt.encode({'id': u.id}, 'secret', algorithm='HS256')
+        self.a = Event.objects.create(name='A', orig_link='https://ig/p/AA/', is_event=True)
+        self.b = Event.objects.create(name='B', orig_link='https://ig/p/BB/', is_event=True)
+        self.m = EventMatch.objects.create(event_a=self.a, event_b=self.b,
+                                           score=0.0, match_type='exact_link',
+                                           status='pending')
+
+    def _resolve(self, action):
+        return self.client.post('/v1/event/matches/resolve/',
+                                {'match_id': self.m.id, 'action': action},
+                                content_type='application/json',
+                                HTTP_AUTHORIZATION='Token ' + self.tok)
+
+    def test_delete_both_removes_events_and_blacklists(self):
+        from event.models import BlacklistedLink
+        r = self._resolve('delete_both')
+        self.assertEqual(r.status_code, 200)
+        self.assertFalse(Event.objects.filter(id__in=[self.a.id, self.b.id]).exists())
+        self.assertFalse(EventMatch.objects.filter(id=self.m.id).exists())
+        self.assertEqual(BlacklistedLink.objects.filter(
+            url__in=['https://ig/p/AA/', 'https://ig/p/BB/']).count(), 2)
+
+    def test_unknown_action_still_rejected(self):
+        r = self._resolve('obliterate')
+        self.assertEqual(r.status_code, 400)
+        self.assertFalse(Event.objects.filter(id=self.a.id, suppressed=True).exists())
+        self.assertTrue(EventMatch.objects.filter(id=self.m.id, status='pending').exists())
+
+    def test_delete_both_spares_the_link_a_third_event_still_uses(self):
+        # exact-link cluster of 3: deleting one pair must NOT blacklist the
+        # shared post, or the scrape could never refresh the survivor.
+        from event.models import BlacklistedLink
+        shared = 'https://ig/p/SHARED/'
+        for ev in (self.a, self.b):
+            ev.orig_link = shared
+            ev.save(update_fields=['orig_link'])
+        survivor = Event.objects.create(name='C', orig_link=shared,
+                                        is_event=True)
+        r = self._resolve('delete_both')
+        self.assertEqual(r.status_code, 200)
+        self.assertFalse(Event.objects.filter(id__in=[self.a.id, self.b.id]).exists())
+        self.assertTrue(Event.objects.filter(id=survivor.id).exists())
+        self.assertFalse(BlacklistedLink.objects.filter(url=shared).exists())
+
+    def test_admin_delete_spares_the_link_a_survivor_still_uses(self):
+        # The cluster review's "keep this one" deletes the losers through
+        # admin/event/ DELETE; the keeper shares their orig_link. The keeper's
+        # post must stay scrapeable.
+        from event.models import BlacklistedLink
+        shared = 'https://ig/p/KEEPME/'
+        keeper = Event.objects.create(name='keeper', orig_link=shared,
+                                      is_event=True)
+        losers = [Event.objects.create(name=f'loser{i}', orig_link=shared,
+                                       is_event=True) for i in range(2)]
+        solo = Event.objects.create(name='solo junk',
+                                    orig_link='https://ig/p/JUNK/',
+                                    is_event=True)
+        r = self.client.delete('/v1/admin/event/',
+                               {'events': [e.id for e in losers] + [solo.id]},
+                               content_type='application/json',
+                               HTTP_AUTHORIZATION='Token ' + self.tok)
+        self.assertEqual(r.status_code, 200)
+        self.assertTrue(Event.objects.filter(id=keeper.id).exists())
+        self.assertFalse(Event.objects.filter(
+            id__in=[e.id for e in losers] + [solo.id]).exists())
+        # shared link spared, solo junk's link blacklisted as before
+        self.assertFalse(BlacklistedLink.objects.filter(url=shared).exists())
+        self.assertTrue(BlacklistedLink.objects.filter(
+            url='https://ig/p/JUNK/').exists())
+
+
 class RecoveryScopeTests(TestCase):
     """The recovery list must be able to answer "what was this hidden behind?"
     (owner, 2026-08-30: otherwise "I would have to go back to the main page

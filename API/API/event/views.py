@@ -4,7 +4,7 @@ from rest_framework.views import APIView
 from .models import Event, Venue, Execution, Feedback, FavoritesData, BlacklistedLink, EventMatch
 from .serializers import EventSerializer, FeedbackSerializer
 from .ingest import (build_source_key, coerce_int, normalize_poster_name,
-                     resolve_venue, upsert_event)
+                     normalize_text, resolve_venue, upsert_event)
 from django.db import transaction
 from django.db.models import Q
 from django.utils import timezone
@@ -19,6 +19,7 @@ from dateutil.parser import parse
 from datetime import datetime, timedelta
 
 import json
+import re
 
 validator = Validator()
 
@@ -35,6 +36,12 @@ UNDATED_EVENT_WINDOW_DAYS = 45
 # Search returned every match unpaginated. Bound it so one broad query cannot
 # serialize tens of thousands of rows.
 SEARCH_RESULT_LIMIT = 500
+
+# The spelling-variant pass ("hip-hop" == "hiphop" == "hip hop") cannot be
+# expressed in SQL icontains, so it scans a bounded, newest-first slice of the
+# already visibility-filtered events in Python — same pattern and rationale as
+# PRICE_SCAN_LIMIT.
+SEARCH_SCAN_LIMIT = 5000
 
 # Price lives in a free-text CharField, so range filtering has to parse each
 # value in Python. Cap how many rows that scan touches per request.
@@ -552,14 +559,25 @@ class AdminEvent(APIView):
             return InvalidParameters()
 
         try:
+            batch_ids = [coerce_int(i) for i in event_ids]
+            batch_ids = [i for i in batch_ids if i is not None]
             for event_id in event_ids:
                 event = Event.objects.filter(id=event_id).first()
 
                 if not event:
                     continue
-                
-                # Blacklist the original link before deleting
-                if event.orig_link:
+
+                # Blacklist the original link before deleting — but NOT when
+                # another event outside this delete batch still points at the
+                # same post (exact-link duplicates share one orig_link).
+                # Blacklisting it would stop the nightly scrape from ever
+                # refreshing the SURVIVING event, e.g. the cluster review's
+                # "keep this one" deletes the losers through this endpoint.
+                survivor_exists = (
+                    event.orig_link
+                    and Event.objects.filter(orig_link=event.orig_link)
+                        .exclude(id__in=batch_ids).exists())
+                if event.orig_link and not survivor_exists:
                     # Check if already blacklisted to avoid duplicates
                     if not BlacklistedLink.objects.filter(url=event.orig_link).exists():
                         # Create blacklist entry
@@ -635,7 +653,10 @@ def search_events(request):
             | Q(artist__icontains=query) | Q(offering__icontains=query)
             | Q(genres__icontains=query) | Q(opener__icontains=query)
             | Q(host__icontains=query) | Q(promoter__icontains=query)
-            | Q(forLocation__icontains=query))
+            | Q(forLocation__icontains=query)
+            # "you should be able to search the Instagram handle that the
+            # event was posted by" (owner, 2026-08-30).
+            | Q(poster__user__icontains=query))
 
         # start_date IS NULL previously excluded the event outright, hiding
         # 2,534 real events from search permanently. Include them when recent.
@@ -646,10 +667,50 @@ def search_events(request):
         # Exclude only KNOWN non-events. is_event is null=True; filtering
         # is_event=True would also drop NULL rows (unknown classification),
         # which were previously searchable and have no admin control to flip.
+        visibility = (in_window & Q(is_duplicate=False) & Q(suppressed=False)
+                      & ~Q(is_event=False))
+
+        # Spelling variants: "hip-hop" / "hiphop" / "hip hop" must all match
+        # each other (owner feedback 2026-08-30). SQL icontains cannot ignore
+        # punctuation, so widen the candidates with a squashed (letters and
+        # digits only) comparison over a bounded newest-first slice of the
+        # already visibility-filtered events. Typo forms ("hip hopp") are NOT
+        # handled here — that would need fuzzy matching.
+        def squash(value):
+            return re.sub(r'[^a-z0-9]', '', normalize_text(value) or '')
+
+        extra_ids = []
+        squashed_q = squash(query)
+        # Length guard: one- or two-character squashes ("dj", "a") would match
+        # half the table and defeat the point of the SQL filter.
+        if len(squashed_q) >= 3:
+            scan = (Event.objects.filter(visibility)
+                    .select_related('poster')
+                    .order_by('-timestamp')
+                    .only('id', 'name', 'artist', 'genres', 'offering',
+                          'opener', 'host', 'promoter', 'forLocation',
+                          'poster__user')[:SEARCH_SCAN_LIMIT])
+            for e in scan:
+                # Fields are squashed one by one, not joined first, so a term
+                # cannot match across a field boundary ("...rock" + "band...").
+                # Same field list as the SQL arm minus venue (a join per row is
+                # not worth it here); poster is included so "bar oriente"
+                # finds the handle bar_oriente — same variant problem,
+                # different punctuation. Mirrored in FE eventMatchesTerm.
+                fields = (e.name, e.artist, e.genres, e.offering, e.opener,
+                          e.host, e.promoter, e.forLocation,
+                          e.poster.user if e.poster else None)
+                if any(squashed_q in squash(f) for f in fields if f):
+                    extra_ids.append(e.id)
+                    # Only SEARCH_RESULT_LIMIT rows can be returned anyway,
+                    # and an unbounded IN(...) overflows older SQLite's
+                    # 999-variable limit and 500s the whole search.
+                    if len(extra_ids) >= SEARCH_RESULT_LIMIT:
+                        break
+
         user_events = (Event.objects
-                       .filter(matches_text & in_window
-                               & Q(is_duplicate=False) & Q(suppressed=False)
-                               & ~Q(is_event=False))
+                       .filter((matches_text | Q(id__in=extra_ids))
+                               & visibility)
                        .select_related('venue', 'poster')
                        .order_by('-timestamp')[:SEARCH_RESULT_LIMIT])
 
@@ -1077,13 +1138,17 @@ def resolve_event_match(request):
       keep_a / keep_b  -> suppress the other event (recoverable: suppressed=True
                           + canonical set, never deleted) and confirm the match
       not_duplicate    -> reject the match, touch neither event
+      delete_both      -> hard-delete BOTH events (blacklisting their source
+                          posts unless a third event still uses the link);
+                          the match row cascades away, so this one is NOT
+                          re-resolvable
     """
     match_id = request.data.get("match_id")
     action = request.data.get("action")
 
     if validator.is_missing([match_id, action]):
         return MissingInformation()
-    if action not in ("keep_a", "keep_b", "not_duplicate"):
+    if action not in ("keep_a", "keep_b", "not_duplicate", "delete_both"):
         return InvalidParameters()
     try:
         match_id = int(match_id)
@@ -1098,8 +1163,33 @@ def resolve_event_match(request):
         # All-or-nothing: keep/drop/match mutations must commit together, or a
         # mid-way failure would leave one event mutated and the pair still
         # pending. Re-resolving a pair is allowed (the owner may change their
-        # mind) and is idempotent.
+        # mind) and is idempotent — EXCEPT delete_both, which removes the pair
+        # itself; a retry gets EventNotFound.
         with transaction.atomic():
+            if action == "delete_both":
+                # The owner judged BOTH candidates junk ("there should be a
+                # way to delete both", 2026-08-30). Blacklist first, same rule
+                # as AdminEvent.delete, so the nightly scrape cannot re-ingest
+                # either post; then hard-delete. EventMatch FKs are CASCADE,
+                # so deleting the events removes the pair row too.
+                pair_ids = [match.event_a_id, match.event_b_id]
+                for ev in (match.event_a, match.event_b):
+                    if not ev.orig_link:
+                        continue
+                    # A third event may share the link (exact-link clusters
+                    # of 3+ candidates). Blacklisting would block the scrape
+                    # from ever refreshing that survivor — skip it.
+                    if Event.objects.filter(orig_link=ev.orig_link)\
+                            .exclude(id__in=pair_ids).exists():
+                        continue
+                    if not BlacklistedLink.objects.filter(
+                            url=ev.orig_link).exists():
+                        BlacklistedLink.objects.create(
+                            url=ev.orig_link,
+                            reason="Deleted from duplicates review")
+                match.event_a.delete()
+                match.event_b.delete()
+                return Success({"deleted": True})
             if action == "not_duplicate":
                 match.status = "rejected"
             else:

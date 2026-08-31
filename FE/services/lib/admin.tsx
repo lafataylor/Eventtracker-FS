@@ -256,7 +256,9 @@ export function readEventMatches(status: string = 'pending', limit: number = 50)
 }
 
 // Ticket 1: record the owner's verdict on a pair.
-// action: 'keep_a' | 'keep_b' | 'not_duplicate'
+// action: 'keep_a' | 'keep_b' | 'not_duplicate' | 'delete_both'
+// (delete_both hard-deletes both events; the match row cascades away, so it
+// is the one verdict that cannot be re-resolved.)
 export function resolveEventMatch(match_id: number, action: string) {
   return axiosClient.post('event/matches/resolve/', { match_id, action }, {
     headers: getHeader()

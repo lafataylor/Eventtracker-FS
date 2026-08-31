@@ -328,3 +328,50 @@ class SamePostAsymmetryTests(TestCase):
         self.assertTrue(same_post_is_redundant(
             self._sig('fri rave', date(2026, 9, 4)),
             self._sig('', date(2026, 9, 4))))
+
+
+class SearchVariantsAndHandleTests(TestCase):
+    """Owner feedback 2026-08-30: "hip-hop, hiphop, hip hop should return the
+    same results" and "you should be able to search the Instagram handle that
+    the event was posted by"."""
+
+    def setUp(self):
+        from datetime import timedelta
+        from django.utils import timezone
+        from c_admin.models import Account
+        from c_auth.models import User
+        import jwt
+        u = User.objects.create(email='s@test.dev', usertype='admin')
+        self.tok = jwt.encode({'id': u.id}, 'secret', algorithm='HS256')
+        soon = timezone.now() + timedelta(days=7)
+        self.acct = Account.objects.create(user='bar_oriente')
+        self.hyphen = Event.objects.create(name='Friday Night', genres='hip-hop, rap',
+                                           start_date=soon, is_event=True,
+                                           is_duplicate=False)
+        self.solid = Event.objects.create(name='HipHop Sundays', start_date=soon,
+                                          is_event=True, is_duplicate=False)
+        self.by_acct = Event.objects.create(name='Oriente Takeover', poster=self.acct,
+                                            start_date=soon, is_event=True,
+                                            is_duplicate=False)
+
+    def _search(self, q):
+        r = self.client.get(f'/v1/event/search/?query={q}',
+                            HTTP_AUTHORIZATION='Token ' + self.tok).json()
+        return {e['name'] for e in (r.get('data') or [])}
+
+    def test_spelling_variants_meet_in_the_middle(self):
+        # every spelling finds both the hyphenated genre and the solid title
+        for q in ('hiphop', 'hip-hop', 'hip%20hop'):
+            names = self._search(q)
+            self.assertIn('Friday Night', names, q)
+            self.assertIn('HipHop Sundays', names, q)
+
+    def test_instagram_handle_finds_the_accounts_events(self):
+        self.assertIn('Oriente Takeover', self._search('bar_oriente'))
+
+    def test_handle_with_space_instead_of_underscore(self):
+        # a person types "bar oriente"; the handle is bar_oriente
+        self.assertIn('Oriente Takeover', self._search('bar%20oriente'))
+
+    def test_unrelated_term_still_empty(self):
+        self.assertEqual(self._search('zzqqxx'), set())
