@@ -203,8 +203,26 @@ class Command(BaseCommand):
                     # Measured 2026-08-27: 69 of 191 pending pairs had a textless
                     # side, growing ~80 per night; the 122 with text on both
                     # sides (102 titled) keep going to review.
+                    # A pair whose BOTH sides are EXPLICITLY classified
+                    # not-an-event has nothing for a reviewer to rescue: such
+                    # rows appear in no feed (which filters duplicates) and in
+                    # no search (search_events excludes is_event=False), so
+                    # "keep this one" is a choice between two invisible rows.
+                    # Owner feedback 2026-08-30 ("most of these are not
+                    # actually events"); measured 85 of 165 pending pairs.
+                    #
+                    # `is True` / `is False` on purpose: is_event is nullable
+                    # and NULL means "never classified", NOT "not an event".
+                    # search_events filters ~Q(is_event=False) precisely so
+                    # NULL rows stay findable, so a NULL row IS visible and
+                    # must keep its review. If either side is a real listing
+                    # the classification may simply be wrong on the other, so
+                    # those go to review too.
+                    neither_is_event = (row.is_event is False
+                                        and canonical.is_event is False)
                     ambiguous_pair = (
-                        not canonical_sig['name'] and not row_sig['name']
+                        not neither_is_event
+                        and not canonical_sig['name'] and not row_sig['name']
                         and has_extracted_text(row) and has_extracted_text(canonical))
                     if ambiguous_pair or not same_post_is_redundant(canonical_sig, row_sig):
                         if not dry:
