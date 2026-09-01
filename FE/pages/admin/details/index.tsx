@@ -536,7 +536,7 @@ export default function AdminDetailsPage() {
   }, []);
 
   const filteredAccounts = accounts.filter((a) =>
-    a.user.toLowerCase().includes(search.toLowerCase())
+    (a.user ?? '').toLowerCase().includes(search.toLowerCase())
   );
 
   const getDetailsForAccount = (accountId: number) =>

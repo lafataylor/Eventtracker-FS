@@ -90,7 +90,11 @@ const index = () => {
             const accountList: Account[] = res.data;
 
             const data = {
-              accounts: accountList.map((account) => account.user),
+              // an account with no handle cannot be scraped; sending null
+              // would hand the scraper a useless target
+              accounts: accountList
+                .map((account) => account.user)
+                .filter((u): u is string => !!u),
             };
 
             runScraper(data)

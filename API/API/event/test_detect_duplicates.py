@@ -773,3 +773,84 @@ class AnchorAmbiguityGuardTests(TestCase):
         self._run()
         a.refresh_from_db(); b.refresh_from_db()
         self.assertEqual([a.suppressed, b.suppressed].count(True), 1)
+
+
+class AnchorCliqueTests(TestCase):
+    """Review 2026-09-01 proved the first guard got both cases backwards: it
+    BLOCKED the owner's bazaar (four mutually-anchored posts, so every row had
+    three partners) while merging the isolated pairs that carry the least
+    evidence — including 14 production pairs whose start times disagreed."""
+
+    def _row(self, name, day, addr, poster, start_time=None):
+        return Event.objects.create(
+            name=name, start_date=timezone.now() + timedelta(days=day),
+            start_time=start_time, poster=poster,
+            venue=Venue.objects.create(address=addr),
+            is_event=True, is_duplicate=False, suppressed=False)
+
+    def _run(self):
+        call_command('detect_duplicates', '--fuzzy',
+                     '--auto-merge-threshold', '95')
+
+    def test_the_owners_bazaar_clique_collapses_to_one(self):
+        # four posts of one market, every row untitled: the case in his
+        # screenshot, and the case the previous guard refused to merge
+        acct = Account.objects.create(user='adiosclosetbazar')
+        rows = [self._row(None, 3, a, acct) for a in (
+            'tonala 308 eoma sur',
+            'tonala 308, roma sur, mexico',
+            'tonala 308 roma sur, mexico city, mexico',
+            'tonala 308, roma sur, mexico')]
+        self._run()
+        for r in rows:
+            r.refresh_from_db()
+        self.assertEqual([r.suppressed for r in rows].count(False), 1,
+                         'exactly one bazaar row should remain visible')
+
+    def test_a_star_of_distinct_concerts_is_never_merged(self):
+        # Zinco Jazz Club, Motolinia 20: six titled concerts one night plus an
+        # untitled row that anchors to all of them. The concerts are titled so
+        # they do not anchor to each other -> star, not clique -> ambiguous.
+        acct = Account.objects.create(user='zincojazz')
+        titled = [self._row(n, 3, 'motolinia 20, centro', acct) for n in
+                  ('bravo brubeck', 'bossa e foda', 'la gran locumbia')]
+        loose = self._row(None, 3, 'motolinia 20, centro, cdmx', acct)
+        self._run()
+        loose.refresh_from_db()
+        for t in titled:
+            t.refresh_from_db()
+        self.assertFalse(loose.suppressed)
+        self.assertFalse(any(t.suppressed for t in titled))
+
+    def test_contradicting_start_times_block_a_merge(self):
+        # a 5pm football screening and a 10pm party at one venue are two
+        # events, whatever else they share
+        acct = Account.objects.create(user='homagebrewing')
+        a = self._row('Colombia vs Ghana', 3, 'homage brewing, 100 chestnut st, pomona', acct,
+                      start_time='05:00 PM')
+        b = self._row(None, 3, 'homage brewing, 100 chestnut st, pomona, la', acct,
+                      start_time='10:00 PM')
+        self._run()
+        a.refresh_from_db(); b.refresh_from_db()
+        self.assertFalse(a.suppressed or b.suppressed)
+
+    def test_agreeing_times_still_merge(self):
+        acct = Account.objects.create(user='somebar')
+        a = self._row('Cumbia Night', 3, 'bar sonora, calle orizaba 55, roma norte', acct,
+                      start_time='10:00 PM')
+        b = self._row(None, 3, 'bar sonora, calle orizaba 55, roma norte, cdmx', acct,
+                      start_time='10:00 PM')
+        self._run()
+        a.refresh_from_db(); b.refresh_from_db()
+        self.assertTrue(b.suppressed)
+        self.assertFalse(a.suppressed)
+
+    def test_one_sided_time_is_not_a_contradiction(self):
+        acct = Account.objects.create(user='somebar')
+        a = self._row('Cumbia Night', 3, 'bar sonora, calle orizaba 55, roma norte', acct,
+                      start_time='10:00 PM')
+        b = self._row(None, 3, 'bar sonora, calle orizaba 55, roma norte, cdmx', acct,
+                      start_time=None)
+        self._run()
+        b.refresh_from_db()
+        self.assertTrue(b.suppressed)

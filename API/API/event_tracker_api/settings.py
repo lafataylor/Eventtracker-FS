@@ -142,6 +142,12 @@ os.makedirs(BASE_DIR / 'logs', exist_ok=True)
 LOGGING = {
     'version': 1,
     'disable_existing_loggers': False,
+    'formatters': {
+        # client_errors.log exists to be read at a glance the morning after;
+        # without a timestamp you cannot tell a crash from ten minutes ago
+        # from one from last week, or line it up against a deploy.
+        'stamped': {'format': '%(asctime)s %(message)s'},
+    },
     'handlers': {
         'file': {
             'level': os.getenv('DJANGO_LOG_LEVEL', 'INFO'),
@@ -159,6 +165,7 @@ LOGGING = {
             'filename': str(BASE_DIR / 'logs' / 'client_errors.log'),
             'maxBytes': 5 * 1024 * 1024,
             'backupCount': 2,
+            'formatter': 'stamped',
         },
     },
     'loggers': {

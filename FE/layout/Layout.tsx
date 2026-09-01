@@ -29,7 +29,7 @@ const Layout = ({ children, router }: LayoutProps) => {
               store and auth context, and a crash in page content should cost
               the content, not the whole app (2026-09-01 outage). */}
           <main className="w-full h-full">
-            <ErrorBoundary>{children}</ErrorBoundary>
+            <ErrorBoundary resetKey={router.asPath}>{children}</ErrorBoundary>
           </main>
         </AuthManager>
       </Providers>

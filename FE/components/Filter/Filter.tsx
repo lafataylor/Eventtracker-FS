@@ -85,7 +85,14 @@ const Filter = ({
   const { filter } = state;
 
   const [filteredLocationOptions, setFilteredLocationOptions] = useState(
-    existingEvents ? existingEvents.map((event) => event.venue.address) : []
+    // Same treatment as handleLocationInputChange below: venue.address is
+    // null on ~60% of rows, so this seeded the dropdown with blank options
+    // whose selection handler then called .toString() on null.
+    existingEvents
+      ? existingEvents
+          .map((event) => event.venue?.address)
+          .filter((option): option is string => !!option)
+      : []
   );
 
   const [selectedLocation, setSelectedLocation] = useState('');

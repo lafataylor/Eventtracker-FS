@@ -116,6 +116,10 @@ def event_signature(event):
         # anchor in score_pair, where "the same account said it twice" is the
         # evidence a missing title cannot provide.
         'poster': event.poster_id,
+        # Start time, used by the ambiguity check in detect_duplicates: two
+        # rows at one venue on one night with DIFFERENT times are two events
+        # (a 5pm match and a 10pm party), whatever else they share.
+        'start_time': normalize_text(event.start_time),
         # The venue's NAME on its own, not fused into `venue` with the address
         # and city. One address can hold several venues — production has
         # 'Departamento' and 'PB' at Álvaro Obregón 154, and 'ESSEX CLUB' and
