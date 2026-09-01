@@ -6,6 +6,7 @@ urlpatterns = [
     path("admin/event/", AdminEvent.as_view()),
     path("event/user/", user_events),
     path("event/search/", search_events),
+    path("event/clientError/", report_client_error),
     path("event/date/", date_events),
     path("event/date/range/", date_range_events),
     path("event/filter/", filter_events),

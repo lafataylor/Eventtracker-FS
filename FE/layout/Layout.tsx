@@ -4,6 +4,7 @@ import { withRouter, NextRouter } from 'next/router';
 
 import { StoreProvider } from '../store/store';
 import AuthManager from './AuthManager';
+import ErrorBoundary from '../components/ErrorBoundary';
 
 interface ProviderProps {
   path: string | undefined;
@@ -24,7 +25,12 @@ const Layout = ({ children, router }: LayoutProps) => {
     <>
       <Providers path={router.pathname}>
         <AuthManager>
-          <main className="w-full h-full">{children}</main>
+          {/* Inside the providers on purpose: the fallback still needs the
+              store and auth context, and a crash in page content should cost
+              the content, not the whole app (2026-09-01 outage). */}
+          <main className="w-full h-full">
+            <ErrorBoundary>{children}</ErrorBoundary>
+          </main>
         </AuthManager>
       </Providers>
     </>
