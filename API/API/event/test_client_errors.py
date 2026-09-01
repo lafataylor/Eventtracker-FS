@@ -41,11 +41,11 @@ class ClientErrorEndpointTests(TestCase):
     def test_a_burst_from_one_client_is_capped(self):
         # a render loop can fire this hundreds of times a second
         from event import views
-        views._client_error_hits.clear()
+        views._client_error_hits.clear(); views._client_error_totals.clear()
         with patch('event.views.client_error_logger') as log:
             for _ in range(40):
                 self._post({'message': 'boom', 'path': '/'},
-                           REMOTE_ADDR='203.0.113.9')
+                           HTTP_X_REAL_IP='203.0.113.9')
         self.assertLessEqual(log.warning.call_count, views.CLIENT_ERROR_MAX_PER_MIN)
 
     def test_junk_body_does_not_500(self):
@@ -56,3 +56,71 @@ class ClientErrorEndpointTests(TestCase):
     def test_missing_message_is_rejected(self):
         r = self._post({'path': '/'})
         self.assertEqual(r.status_code, 400)
+
+
+class ClientErrorHardeningTests(TestCase):
+    """This endpoint is unauthenticated and reachable from the open internet,
+    so every field is hostile input. Flagged by security review 2026-09-01."""
+
+    URL = '/v1/event/clientError/'
+
+    def setUp(self):
+        from event import views
+        views._client_error_hits.clear()
+        views._client_error_totals.clear()
+
+    def _post(self, payload, **extra):
+        return self.client.post(self.URL, json.dumps(payload),
+                                content_type='application/json', **extra)
+
+    def test_newlines_cannot_forge_extra_log_lines(self):
+        # without stripping, this payload writes its own convincing entry into
+        # the file a human reads to find out why the site broke
+        forged = ("real\r\nCLIENT CRASH path=/ source=127.0.0.1 "
+                  "message=nothing to see here")
+        with patch('event.views.client_error_logger') as log:
+            r = self._post({'message': forged, 'path': "/a\nb",
+                            'stack': "x\r\ny"})
+        self.assertEqual(r.status_code, 200)
+        logged = log.warning.call_args[0][0]
+        self.assertNotIn('\n', logged)
+        self.assertNotIn('\r', logged)
+
+    def test_a_spoofed_forwarded_header_cannot_reset_the_cap(self):
+        # nginx APPENDS to X-Forwarded-For, so the leftmost entry is whatever
+        # the client claimed. Rotating it must not buy more reports.
+        from event import views
+        with patch('event.views.client_error_logger') as log:
+            for i in range(40):
+                self._post({'message': 'boom'},
+                           HTTP_X_FORWARDED_FOR=f'10.0.0.{i}, 198.51.100.7')
+        self.assertLessEqual(log.warning.call_count,
+                             views.CLIENT_ERROR_MAX_PER_MIN)
+
+    def test_real_ip_is_preferred_over_a_claimed_forwarded_value(self):
+        from event import views
+        with patch('event.views.client_error_logger') as log:
+            for i in range(40):
+                self._post({'message': 'boom'},
+                           HTTP_X_REAL_IP='198.51.100.7',
+                           HTTP_X_FORWARDED_FOR=f'10.0.0.{i}')
+        self.assertLessEqual(log.warning.call_count,
+                             views.CLIENT_ERROR_MAX_PER_MIN)
+
+    def test_many_distinct_sources_are_globally_capped(self):
+        # the per-source key can never be fully trusted; the global cap is
+        # what actually protects the disk
+        from event import views
+        with patch('event.views.client_error_logger') as log:
+            for i in range(600):
+                self._post({'message': 'boom'},
+                           HTTP_X_REAL_IP=f'203.0.113.{i % 256}')
+        self.assertLessEqual(log.warning.call_count,
+                             views.CLIENT_ERROR_MAX_PER_MIN_TOTAL)
+
+    def test_the_tracking_map_stays_bounded(self):
+        from event import views
+        for i in range(3000):
+            self._post({'message': 'boom'}, HTTP_X_REAL_IP=f'198.51.{i//256}.{i%256}')
+        self.assertLessEqual(len(views._client_error_hits),
+                             views.CLIENT_ERROR_MAX_TRACKED)

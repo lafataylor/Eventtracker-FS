@@ -34,7 +34,46 @@ client_error_logger = logging.getLogger('client_errors')
 # tabs. Cap per source per minute so one broken page cannot fill the disk -
 # the disk has hit 100% on this box before.
 CLIENT_ERROR_MAX_PER_MIN = 10
+# ...and a GLOBAL cap, because the per-source key can never be fully trusted
+# on a public endpoint. The per-source limit is a courtesy that keeps one
+# broken browser from drowning out others; THIS is what actually protects the
+# disk, and it holds even against an attacker rotating source addresses.
+CLIENT_ERROR_MAX_PER_MIN_TOTAL = 200
+# Hard ceiling on distinct sources tracked in a minute, so the bookkeeping
+# itself cannot be turned into a memory exhaustion vector.
+CLIENT_ERROR_MAX_TRACKED = 2000
 _client_error_hits = {}
+_client_error_totals = {}
+
+
+def _client_error_source(request):
+    """Best available identity for the caller, preferring what nginx observed.
+
+    nginx sets `X-Real-IP $remote_addr` and OVERWRITES whatever the client
+    sent, so it is trustworthy. X-Forwarded-For is not: nginx appends with
+    $proxy_add_x_forwarded_for, so everything left of the last entry is
+    attacker-supplied and the leftmost value - the obvious one to read - is
+    exactly the one a client can forge to walk around a per-source limit.
+    Hence X-Real-IP, then the RIGHTMOST forwarded entry, then the peer.
+    """
+    real_ip = request.META.get('HTTP_X_REAL_IP', '').strip()
+    if real_ip:
+        return real_ip[:45]
+    forwarded = request.META.get('HTTP_X_FORWARDED_FOR', '')
+    if forwarded:
+        return forwarded.split(',')[-1].strip()[:45]
+    return str(request.META.get('REMOTE_ADDR', '?'))[:45]
+
+
+def _log_safe(value, limit):
+    """Trim to `limit` and flatten anything that could forge a log line.
+
+    Every field here is attacker-controlled and lands in a file a human reads
+    to find out why the site broke. A CR or LF in the payload would let that
+    attacker write their own convincing 'CLIENT CRASH ...' entries, so control
+    characters become spaces rather than new lines.
+    """
+    return re.sub(r'[\x00-\x1f\x7f]', ' ', str(value or ''))[:limit]
 
 EVENT_CUTOFF_TIME = timedelta(hours=25)
 
@@ -1267,27 +1306,40 @@ def report_client_error(request):
     """
     from django.utils import timezone as _tz
 
-    source = (request.META.get('HTTP_X_FORWARDED_FOR', '').split(',')[0].strip()
-              or request.META.get('REMOTE_ADDR', '?'))
+    source = _client_error_source(request)
     minute = int(_tz.now().timestamp() // 60)
-    key = (source, minute)
-    seen = _client_error_hits.get(key, 0) + 1
-    _client_error_hits[key] = seen
-    # Drop older buckets so this dict cannot grow without bound.
+
+    # Drop older buckets first so the bookkeeping cannot grow without bound.
     for stale in [k for k in _client_error_hits if k[1] < minute - 2]:
         _client_error_hits.pop(stale, None)
+    for stale in [k for k in _client_error_totals if k < minute - 2]:
+        _client_error_totals.pop(stale, None)
+
+    total = _client_error_totals.get(minute, 0) + 1
+    _client_error_totals[minute] = total
+    if total > CLIENT_ERROR_MAX_PER_MIN_TOTAL:
+        return Success({"recorded": False, "throttled": True})
+
+    key = (source, minute)
+    if key not in _client_error_hits and len(_client_error_hits) >= CLIENT_ERROR_MAX_TRACKED:
+        # Too many distinct sources this minute to track individually. The
+        # global cap above is still counting, so reporting stays bounded; we
+        # simply stop growing the per-source map.
+        return Success({"recorded": False, "throttled": True})
+    seen = _client_error_hits.get(key, 0) + 1
+    _client_error_hits[key] = seen
     if seen > CLIENT_ERROR_MAX_PER_MIN:
         return Success({"recorded": False, "throttled": True})
 
     data = request.data if isinstance(request.data, dict) else {}
-    message = str(data.get("message") or "").strip()
+    message = _log_safe(data.get("message"), 500).strip()
     if not message:
         return InvalidParameters()
 
-    path = str(data.get("path") or "")[:200]
-    stack = str(data.get("stack") or "")[:2000]
-    component = str(data.get("component") or "")[:1000]
+    path = _log_safe(data.get("path"), 200)
+    stack = _log_safe(data.get("stack"), 2000)
+    component = _log_safe(data.get("component"), 1000)
     client_error_logger.warning(
         "CLIENT CRASH path=%s source=%s message=%s | stack=%s | component=%s"
-        % (path, source, message[:500], stack, component))
+        % (path, source, message, stack, component))
     return Success({"recorded": True})
