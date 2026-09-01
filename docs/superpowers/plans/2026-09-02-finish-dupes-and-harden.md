@@ -246,3 +246,52 @@ class ErrorBoundary extends React.Component<{children: React.ReactNode},
 
 ## Execution record
 - 2026-09-01: written after shipping the outage fix, the preflight repair, the venue anchor (queue-only) and the 988-row merge. Tasks ordered by owner-visible impact; Task 1 is the one he will notice.
+
+## Execution record (2026-09-01, evening)
+
+All code written, verified and merged to `main`. **Nothing is deployed** — the
+window closed at 20:30 UTC and preflight correctly refused at 21:19 with the
+nightly scrape running. Three deploys and one attended command are queued for
+the next window (03:00–20:30 UTC).
+
+- **Task 1 DONE (steps 1–7), deploy pending.** `venue_anchor_applies()`
+  extracted so the scorer and the command share one definition of "anchored" —
+  the command asks the predicate instead of comparing a float to
+  VENUE_ANCHOR_SCORE. `_fuzzy` now materialises candidates, counts each row's
+  anchor partners, and lets only a 1:1 anchor clear the merge bar. Every
+  existing guard still applies to those merges. Mutation-tested: removing the
+  guard, loosening the degree check to `>= 1`, or inverting the predicate each
+  fail the suite. **Still to do: steps 8–9** — dry-run (expect merges up from
+  988 by a few dozen, queue down by about twice that; STOP if merges rise
+  >150), then the attended run, invariants, and confirm exactly one of
+  73653/75874/77107/77684 survives.
+- **Task 3 DONE, deploy pending.** Venue and Poster fields widened to
+  `string | null`. Only 2 errors surfaced (yesterday's guards already covered
+  the call sites): DashboardFilter's `.filter(Boolean)` drops nulls at runtime
+  but not from the TYPE, replaced with `is string` predicates. tsc rc=0, build
+  rc=0, and every public page plus /es, /favorites, all filter dropdowns and
+  search walked against the live API with no crash and no console errors.
+- **Task 4 DONE, deploy pending.** ErrorBoundary + `POST event/clientError/`
+  (unauthenticated, length-capped, 10/source/minute, logged to its own file)
+  + `scripts/smoke_check.sh`.
+  **The important finding came from testing the detector rather than trusting
+  it:** against a deliberately broken build the smoke check reported all five
+  pages healthy, because the ErrorBoundary REPLACES Next's "Application error"
+  text with our panel — the exact string the check grepped for. A monitor that
+  goes quiet precisely when the fix works is worse than no monitor. The
+  boundary now carries `data-crashed` and the check looks for it; re-verified
+  failing on all five pages against the broken build and passing against the
+  clean one. Also worth noting: reintroducing the original 2026-09-01 bug no
+  longer even COMPILES now that the types are honest.
+- **Task 2 NOT STARTED — blocked on approval.** It needs ~3 live OpenAI
+  extraction calls to validate that the model classifies neighbourhoods as
+  their parent city rather than OTHER. CLAUDE.md requires confirming spend, so
+  this waits for Zain rather than being guessed at. The branch
+  `feat/served-city-filter` is unchanged and still off `main`.
+
+### Queued for the 03:00 UTC window
+1. `deploy_api.sh` (ambiguity guard + clientError endpoint), dry-run first.
+2. Fresh `deploy-staging-fe` clone + build + `deploy_fe.sh` (types, boundary).
+3. `detect_duplicates --fuzzy --auto-merge-threshold 95 --dry-run`, compare to
+   988/1720, then run attended and verify the owner's four bazaar cards.
+4. `scripts/smoke_check.sh` against production after both deploys.
