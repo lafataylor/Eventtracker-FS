@@ -57,8 +57,9 @@ const EventsListItem = ({
     }
   };
 
-  const getOptions = (value: string) => {
-    const valueSplit = value.split(Constants.delimiter);
+  const getOptions = (value: string | null) => {
+    // nullable event fields reach here straight from the API
+    const valueSplit = (value ?? '').split(Constants.delimiter);
 
     const options = valueSplit.map((val) => ({
       value: val,

@@ -162,7 +162,9 @@ export const getValueFromColumnName = (event: Event, column: string) => {
     case 'End Time':
       return  event.end_time;
     case 'Ticket Price':
-      return `$${parseFloat(event.price?.replace('$', '')).toFixed(2)}`;
+      return event.price
+        ? `$${parseFloat(event.price.replace('$', '')).toFixed(2)}`
+        : '';
     case 'Ticket link':
       return event.ticket_link;
     case 'All ages / 21+':
@@ -217,7 +219,7 @@ export const getValueFromColumnNameForFeedback = (event: Event, column: string) 
     case 'End Time':
       return  event.end_time;
     case 'Ticket Price':
-      return `$${parseFloat(event.price).toFixed(2)}`;
+      return event.price ? `$${parseFloat(event.price).toFixed(2)}` : '';
     case 'Ticket link':
       return event.ticket_link;
     case 'All ages / 21+':

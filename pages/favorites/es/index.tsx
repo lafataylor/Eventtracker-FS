@@ -260,7 +260,7 @@ const Home: NextPage = () => {
             ? valA.localeCompare(valB)
             : valB.localeCompare(valA);
         case 'price':
-          const parsePrice = (price: string): number => {
+          const parsePrice = (price: string | null): number => {
             if (!price) return 0;
             price = price.toLowerCase().trim();
             if (price === 'no cover' || price === 'free') return 0;
@@ -361,7 +361,11 @@ const Home: NextPage = () => {
 
     if (filters.offerings) {
       filteredEvents = filteredEvents.filter((event) =>
-        event.offering.toLowerCase().includes(filters.offerings.toLowerCase())
+        // offering is null for ~42% of events since the structured extractor
+        // shipped. An unguarded .toLowerCase() here crashed the whole app on
+        // the first keystroke in the offerings box (2026-09-01 outage class):
+        // a null offering simply does not match the filter.
+        (event.offering ?? '').toLowerCase().includes(filters.offerings.toLowerCase())
       );
     }
 
