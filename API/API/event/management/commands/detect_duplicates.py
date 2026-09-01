@@ -119,6 +119,11 @@ class Command(BaseCommand):
                             help='Report counts, write nothing.')
         parser.add_argument('--limit', type=int, default=0,
                             help='Cap events scanned (0 = all), for testing.')
+        parser.add_argument('--auto-merge-threshold', type=float, default=0.0,
+                            help='With --fuzzy: pairs scoring at or above this'
+                                 ' AND dated the SAME day are merged without'
+                                 ' review (loser suppressed behind the more'
+                                 ' complete row). 0 (default) = queue only.')
 
     def handle(self, *args, **opts):
         if not (opts['exact'] or opts['fuzzy']):
@@ -136,7 +141,7 @@ class Command(BaseCommand):
                 self._exact(dry, opts['limit'])
         if opts['fuzzy']:
             with transaction.atomic():
-                self._fuzzy(dry, opts['limit'])
+                self._fuzzy(dry, opts['limit'], opts['auto_merge_threshold'])
 
     # --- pass 1: exact re-scrapes sharing a shortcode ---------------------
     def _exact(self, dry, limit):
@@ -203,8 +208,26 @@ class Command(BaseCommand):
                     # Measured 2026-08-27: 69 of 191 pending pairs had a textless
                     # side, growing ~80 per night; the 122 with text on both
                     # sides (102 titled) keep going to review.
+                    # A pair whose BOTH sides are EXPLICITLY classified
+                    # not-an-event has nothing for a reviewer to rescue: such
+                    # rows appear in no feed (which filters duplicates) and in
+                    # no search (search_events excludes is_event=False), so
+                    # "keep this one" is a choice between two invisible rows.
+                    # Owner feedback 2026-08-30 ("most of these are not
+                    # actually events"); measured 85 of 165 pending pairs.
+                    #
+                    # `is True` / `is False` on purpose: is_event is nullable
+                    # and NULL means "never classified", NOT "not an event".
+                    # search_events filters ~Q(is_event=False) precisely so
+                    # NULL rows stay findable, so a NULL row IS visible and
+                    # must keep its review. If either side is a real listing
+                    # the classification may simply be wrong on the other, so
+                    # those go to review too.
+                    neither_is_event = (row.is_event is False
+                                        and canonical.is_event is False)
                     ambiguous_pair = (
-                        not canonical_sig['name'] and not row_sig['name']
+                        not neither_is_event
+                        and not canonical_sig['name'] and not row_sig['name']
                         and has_extracted_text(row) and has_extracted_text(canonical))
                     if ambiguous_pair or not same_post_is_redundant(canonical_sig, row_sig):
                         if not dry:
@@ -257,7 +280,7 @@ class Command(BaseCommand):
             f'({pairs} EventMatch pairs total)'))
 
     # --- pass 2: fuzzy cross-post duplicates ------------------------------
-    def _fuzzy(self, dry, limit):
+    def _fuzzy(self, dry, limit, auto_threshold=0.0):
         qs = (Event.objects.filter(is_event=True, suppressed=False,
                                    start_date__isnull=False)
               .select_related('venue'))
@@ -266,24 +289,107 @@ class Command(BaseCommand):
         # Collect the shortcode while iterating: a follow-up
         # filter(id__in=[~55k ids]) blows past SQLite's host-parameter limit
         # (OperationalError: too many SQL variables).
-        signatures, sc = [], {}
+        signatures, sc, dates = [], {}, {}
         for event in qs.iterator(chunk_size=2000):
-            signatures.append(event_signature(event))
+            sig = event_signature(event)
+            signatures.append(sig)
             sc[event.id] = event.shortcode
+            dates[event.id] = sig['date']
         self.stdout.write(f'[fuzzy] scanning {len(signatures)} dated events')
 
-        created = examined = 0
+        created = examined = merged = 0
+        # Losers suppressed THIS run. A pair touching one is skipped rather
+        # than merged/queued so one run can never build a canonical chain
+        # (loser -> loser -> keeper); a survivor that still matches the
+        # keeper is picked up by the next nightly run, against the keeper
+        # directly. Same lesson as the exact pass's per-post keepers.
+        suppressed_now = set()
         for lo, hi, score in find_fuzzy_pairs(signatures):
             examined += 1
             if sc.get(lo) and sc.get(lo) == sc.get(hi):
                 continue  # same post — handled by --exact
+            if lo in suppressed_now or hi in suppressed_now:
+                continue
+            # Auto-merge only clears the HIGH bar the owner saw evidence for
+            # (2026-08-30 measurement): score at or above the threshold AND
+            # the exact same day. score_pair tolerates ±1 day for nightlife;
+            # that tolerance stays review-only — a date difference is real
+            # counter-evidence, so those pairs always go to a human.
+            auto = (auto_threshold and score >= auto_threshold
+                    and dates.get(lo) == dates.get(hi))
+            existing = EventMatch.objects.filter(
+                event_a_id=lo, event_b_id=hi).first()
+            # An owner verdict is never overridden: rejected means "not
+            # duplicates" no matter what tonight's score says, and confirmed
+            # is already resolved.
+            if existing and existing.status in ('rejected', 'confirmed'):
+                continue
+            if auto:
+                a = Event.objects.filter(id=lo, suppressed=False).first()
+                b = Event.objects.filter(id=hi, suppressed=False).first()
+                if not (a and b):
+                    continue
+                # Keeper = most complete row; ties fall to the lower id so
+                # the oldest row wins deterministically (same rule as the
+                # exact pass).
+                keep, drop = sorted((a, b),
+                                    key=lambda e: (completeness(e), -e.id),
+                                    reverse=True)
+                # Track the loser in dry mode too, or dry counts would
+                # diverge from what a real run does (a later pair touching
+                # this loser is skipped for real, so dry must skip it too).
+                suppressed_now.add(drop.id)
+                merged += 1
+                if dry:
+                    continue
+                drop.suppressed = True
+                drop.canonical = keep
+                drop.is_duplicate = True
+                drop.duplicate_link = keep.orig_link or f"event_{keep.id}"
+                drop.save(update_fields=['suppressed', 'canonical',
+                                         'is_duplicate', 'duplicate_link'])
+                # The dropped row may itself be the keeper of earlier losers
+                # (this run or a previous night). Re-point them at the new
+                # keeper, or they would sit hidden behind a hidden row and
+                # the recovery tab would name a suppressed event as
+                # "kept instead".
+                Event.objects.filter(canonical=drop).update(
+                    canonical=keep,
+                    duplicate_link=keep.orig_link or f"event_{keep.id}")
+                # Mirror the owner's keep_a path on the KEEPER as well: the
+                # old scraper over-flagged real events, and a keeper still
+                # carrying is_duplicate=True would leave BOTH rows hidden.
+                if keep.is_duplicate or keep.canonical_id or keep.duplicate_link:
+                    keep.is_duplicate = False
+                    keep.canonical = None
+                    keep.duplicate_link = None
+                    keep.save(update_fields=['is_duplicate', 'canonical',
+                                             'duplicate_link'])
+                # reviewed_at stays NULL on purpose: confirmed + NULL
+                # reviewed_at = machine-merged, reviewed_at set = a human
+                # clicked. That distinction is the audit trail.
+                if existing:
+                    existing.status = 'confirmed'
+                    existing.score = score
+                    existing.save(update_fields=['status', 'score'])
+                else:
+                    EventMatch.objects.create(
+                        event_a_id=lo, event_b_id=hi, score=score,
+                        match_type='fuzzy', status='confirmed')
+                continue
             if not dry:
-                _, was_created = EventMatch.objects.get_or_create(
-                    event_a_id=lo, event_b_id=hi,
-                    defaults=dict(score=score, match_type='fuzzy', status='pending'))
-                created += int(was_created)
+                if not existing:
+                    EventMatch.objects.create(
+                        event_a_id=lo, event_b_id=hi, score=score,
+                        match_type='fuzzy', status='pending')
+                    created += 1
             else:
                 created += 1
         verb = 'would queue' if dry else 'queued'
+        mverb = 'would auto-merge' if dry else 'auto-merged'
+        if auto_threshold:
+            self.stdout.write(self.style.SUCCESS(
+                f'[fuzzy] {mverb} {merged} pairs '
+                f'(score >= {auto_threshold:g}, same day)'))
         self.stdout.write(self.style.SUCCESS(
             f'[fuzzy] {verb} {created} pending pairs ({examined} above threshold)'))

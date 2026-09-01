@@ -232,8 +232,12 @@ export async function refetchToken(dispatch: Dispatch<any>) {
 }
 
 
-export function readAdminDuplicates(offset: number = 0) {
-  return axiosClient.get(`event/getDuplicateEvents/?offset=${offset}`, {
+// scope: 'flagged' (default) = hidden without a surviving twin, i.e. the old
+// scraper's flags — the rows worth restoring. 'merged' = collapsed duplicates,
+// each reporting what it was kept instead of. 'all' = both.
+export function readAdminDuplicates(offset: number = 0, scope: string = 'flagged') {
+  return axiosClient.get(
+    `event/getDuplicateEvents/?offset=${offset}&scope=${scope}`, {
     headers: getHeader()
   });
 }
@@ -252,7 +256,9 @@ export function readEventMatches(status: string = 'pending', limit: number = 50)
 }
 
 // Ticket 1: record the owner's verdict on a pair.
-// action: 'keep_a' | 'keep_b' | 'not_duplicate'
+// action: 'keep_a' | 'keep_b' | 'not_duplicate' | 'delete_both'
+// (delete_both hard-deletes both events; the match row cascades away, so it
+// is the one verdict that cannot be re-resolved.)
 export function resolveEventMatch(match_id: number, action: string) {
   return axiosClient.post('event/matches/resolve/', { match_id, action }, {
     headers: getHeader()
