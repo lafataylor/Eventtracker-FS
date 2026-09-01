@@ -655,3 +655,23 @@ class NamelessVenueAnchorTests(TestCase):
         a = self._sig(id=1, poster=7, date=date(2026, 9, 4), venue='berlin, germany')
         b = self._sig(id=2, poster=7, date=date(2026, 9, 4), venue='berlin, germany')
         self.assertEqual(score_pair(a, b), 0.0)
+
+
+class VenueAnchorKeeperTests(TestCase):
+    """The venue anchor can pair an untitled row with a TITLED one. The whole
+    safety case for auto-merging those rests on the titled row always winning
+    the keeper contest, so that a merge can only ever hide the untitled copy.
+    If completeness tiers are ever reordered, this must fail loudly."""
+
+    def test_titled_row_always_outranks_an_untitled_one(self):
+        from django.utils import timezone
+        day = timezone.now() + timedelta(days=5)
+        titled = Event.objects.create(name='JEAN TONIQUE', start_date=day,
+                                      is_event=True, is_duplicate=False)
+        # give the untitled row MORE descriptive fields; it must still lose,
+        # because a title is identifying and the rest merely describes
+        untitled = Event.objects.create(name=None, start_date=day,
+                                        artist='Someone', genres='house',
+                                        price='200', start_time='22:00',
+                                        is_event=True, is_duplicate=False)
+        self.assertGreater(completeness(titled), completeness(untitled))
