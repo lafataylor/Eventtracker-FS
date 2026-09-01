@@ -46,16 +46,25 @@ FUZZY_THRESHOLD = 82.0
 MIN_TITLE_SIM = 70.0
 
 # For pairs with no title on at least one side (see score_pair): how alike two
-# venue strings must be to count as one place, and the score such a pair gets.
-# The score sits at the auto-merge bar because the anchor (same account, same
-# exact date, same street address) is a tighter identity than a fuzzy title
-# match, not a looser one.
+# venue strings must be to count as one place, how alike their venue NAMES must
+# be, and the score such a pair gets.
+#
+# The score deliberately sits BELOW the auto-merge bar (95) so anchored pairs
+# are QUEUED for review rather than hidden unattended. Review of the first
+# version (2026-09-01) measured it on production: of 453 pairs the anchor
+# found, 183 (40%) were rows sharing one account, date and address with
+# SEVERAL mutually different titled events — e.g. Zinco Jazz Club at
+# Motolinía 20 ran six distinct concerts on 2025-02-01 and one untitled row
+# anchored equally to all six. Which one it would have merged into was
+# decided by id order. An untitled row is exactly the row we know least
+# about, so it earns a human glance, not an automatic hide.
 VENUE_ANCHOR_SIM = 80.0
-VENUE_ANCHOR_SCORE = 95.0
+VENUE_ANCHOR_NAME_SIM = 75.0
+VENUE_ANCHOR_SCORE = 90.0
 
 
 def street_numbers(venue_text_value):
-    """The street numbers in a venue string, e.g. 'tonala 308 roma sur' -> {'308'}.
+    """Plausible street numbers in a venue string: 'tonala 308 roma sur' -> {'308'}.
 
     Similarity ALONE cannot identify a venue, measured 2026-09-01:
       'tonala 308, roma sur, mexico' vs 'tonala 250, roma sur, mexico' -> 92.9
@@ -63,13 +72,29 @@ def street_numbers(venue_text_value):
     so two different buildings on one street score HIGHER than one building
     spelled two ways, and a pair of rows whose address degraded to just
     'berlin, germany' scores a perfect 100. The street number is the token
-    that actually identifies the place, so the nameless anchor requires one on
-    both sides and requires them to agree. Venues with no number in their
-    address simply never anchor — that misses some duplicates, which is the
-    safe direction: a false 'distinct' costs a review, a false 'redundant'
-    hides a real event.
+    that actually identifies the place.
+
+    Not every digit run IS a street number, though, and each wrong one is a
+    way for two unrelated venues to look identical: Berlin postcodes (10245,
+    10439) sit in most German addresses, and a year in a venue's NAME
+    ('Studio 2026', 'Bar 1984') collides with any address carrying the same
+    digits. So 5+ digit runs and year-shaped tokens are dropped, and leading
+    zeros normalised so '08' and '8' are one number.
+
+    Callers compare by INTERSECTION, not equality: one side keeping a postcode
+    ('Alt-Stralau 70, 10245 Berlin' vs 'Alt-Stralau 70, Berlin') must not
+    block a true match. Venues whose address carries no number never anchor at
+    all — that misses some duplicates, which is the safe direction: a false
+    'distinct' costs a review, a false 'redundant' hides a real event.
     """
-    return {t for t in re.findall(r'\d+', venue_text_value or '')}
+    out = set()
+    for token in re.findall(r'\d+', venue_text_value or ''):
+        if len(token) >= 5:                      # postcode / phone fragment
+            continue
+        if re.fullmatch(r'(19|20)\d\d', token):  # a year, not a house number
+            continue
+        out.add(token.lstrip('0') or '0')
+    return out
 
 
 def venue_text(venue):
@@ -91,6 +116,12 @@ def event_signature(event):
         # anchor in score_pair, where "the same account said it twice" is the
         # evidence a missing title cannot provide.
         'poster': event.poster_id,
+        # The venue's NAME on its own, not fused into `venue` with the address
+        # and city. One address can hold several venues — production has
+        # 'Departamento' and 'PB' at Álvaro Obregón 154, and 'ESSEX CLUB' and
+        # 'NightClub' at Londres 195 — and once the shared address is folded
+        # into one string it drags the whole comparison over any threshold.
+        'venue_name': normalize_text(event.venue.name if event.venue else ''),
     }
 
 
@@ -122,9 +153,17 @@ def score_pair(a, b):
         # 308 Eoma Sur" vs "Tonalá 308, Roma Sur, Mexico"), so compare, never
         # equate.
         nums_a, nums_b = street_numbers(a['venue']), street_numbers(b['venue'])
-        if (a.get('poster') and a.get('poster') == b.get('poster')
+        # When BOTH rows name their venue, that name has to agree. A shared
+        # street number means one building, not one venue: 'Departamento' and
+        # 'PB' share Álvaro Obregón 154 and are different rooms.
+        name_a, name_b = a.get('venue_name'), b.get('venue_name')
+        names_disagree = (
+            name_a and name_b
+            and fuzz.token_set_ratio(name_a, name_b) < VENUE_ANCHOR_NAME_SIM)
+        if (a['poster'] and a['poster'] == b['poster']
                 and a['date'] and a['date'] == b['date']
-                and nums_a and nums_a == nums_b
+                and nums_a and nums_b and (nums_a & nums_b)
+                and not names_disagree
                 and fuzz.token_set_ratio(a['venue'],
                                          b['venue']) >= VENUE_ANCHOR_SIM):
             return VENUE_ANCHOR_SCORE
