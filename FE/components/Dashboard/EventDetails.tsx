@@ -201,9 +201,12 @@ function EventDetails({ isEdit, locationName }: EventDetailsProps) {
       if (propertyName == 'state') {
         const prevState = (newUpdatedEvent as any).venue.state;
         (newUpdatedEvent as any).venue.state = value;
+        // address is null on ~60% of venues; .replace() on null threw and left
+        // the State edit silently doing nothing (the setUpdatedEvent below
+        // never ran). With no address there is nothing to rewrite.
         (newUpdatedEvent as any).venue.address = (
-          newUpdatedEvent as any
-        ).venue.address.replace(prevState + ',', value + ',');
+          (newUpdatedEvent as any).venue.address ?? ''
+        ).replace(prevState + ',', value + ',');
         setUpdatedEvent(newUpdatedEvent);
         return;
       }
@@ -1096,7 +1099,7 @@ function EventDetails({ isEdit, locationName }: EventDetailsProps) {
                         onClick={(e) => e.stopPropagation()}
                         value={
                           (updatedEvent as Event).offering
-                            ? (updatedEvent as Event).offering
+                            ? ((updatedEvent as Event).offering ?? '')
                             : ''
                         }
                         onChange={(e) =>
@@ -1333,7 +1336,7 @@ function EventDetails({ isEdit, locationName }: EventDetailsProps) {
                           ? eventDetailsDialog.event.ticket_link
                           : eventDetailsDialog.event.link_in_bio
                           ? 'https://instagram.com/' +
-                            eventDetailsDialog.event.poster.user.substring(1)
+                            (eventDetailsDialog.event.poster?.user ?? '').substring(1)
                           : eventDetailsDialog.event.ticket_link
                       }
                       target="_blank"

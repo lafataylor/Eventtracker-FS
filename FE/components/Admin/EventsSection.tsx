@@ -167,8 +167,8 @@ const EventsSection = ({
             ? new Date(`1970-01-01T${convertTo24Hr(valB)}`)
             : new Date(0);
         } else if (isPriceColumn) {
-          valueA = parseFloat(valA.replace(/[^0-9.-]+/g, '')) || 0;
-          valueB = parseFloat(valB.replace(/[^0-9.-]+/g, '')) || 0;
+          valueA = parseFloat((valA ?? '').replace(/[^0-9.-]+/g, '')) || 0;
+          valueB = parseFloat((valB ?? '').replace(/[^0-9.-]+/g, '')) || 0;
         } else {
           valueA = valA ? valA.toString().toLowerCase() : '';
           valueB = valB ? valB.toString().toLowerCase() : '';

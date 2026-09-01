@@ -67,12 +67,12 @@ export interface Poster {
 
 export interface Event {
   id: number;
-  name: string;
-  artist: string;
-  opener: string;
-  host: string;
-  promoter: string;
-  offering: string;
+  name: string | null;
+  artist: string | null;
+  opener: string | null;
+  host: string | null;
+  promoter: string | null;
+  offering: string | null;
   timestamp: string;
   created_at: string;
   date: string;
@@ -80,14 +80,14 @@ export interface Event {
   //startDate: string;
   start_date: string;
   //startTime: string;
-  start_time: string;
+  start_time: string | null;
   //endDate: string;
   end_date: string;
   //endTime: string;
   end_time: string;
   venue: Venue;
-  price: string;
-  ticket_link: string;
+  price: string | null;
+  ticket_link: string | null;
   is_age_restricted: boolean;
   orig_link: string;
   orig_thumb: string;
@@ -98,7 +98,7 @@ export interface Event {
   link_in_bio: boolean;
   rsvp_required: boolean;
   num_events: number;
-  genres: string;
+  genres: string | null;
   is_blurred: boolean;
   is_favorite: boolean;
   viewing_language?: string;

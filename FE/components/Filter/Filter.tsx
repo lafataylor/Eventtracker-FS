@@ -251,8 +251,13 @@ const Filter = ({
 
   const handleLocationInputChange = (inputValue: string, index: number) => {
     onChangeFilterValue(index, 'values', inputValue, 0);
+    // venue.address is null on ~60% of venue rows, so the map yields nulls and
+    // the filter used to call .toLowerCase() straight on them — the same
+    // crash-the-whole-app shape as the 2026-09-01 outage. Drop the empties
+    // first; they were only ever rendered as blank options anyway.
     const filtered = existingEvents
-      ?.map((event) => event.venue.address)
+      ?.map((event) => event.venue?.address)
+      .filter((option): option is string => !!option)
       .filter((option) =>
         option.toLowerCase().includes(inputValue.toLowerCase())
       );
@@ -430,7 +435,9 @@ const Filter = ({
             const accountFilterValue = filter.values[0];
 
             filteredEvents = filteredEvents.filter((event) =>
-              event.poster.user
+              // Account.user is nullable; an account without a handle simply
+              // matches no handle filter instead of crashing the page.
+              (event.poster?.user ?? '')
                 .trim()
                 .toLowerCase()
                 .startsWith(accountFilterValue.trim().toLowerCase())

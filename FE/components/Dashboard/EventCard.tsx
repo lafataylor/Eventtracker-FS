@@ -322,8 +322,8 @@ function EventCard({
                       className={`font-bold text-[10px] md:text-sm text-beaming-orange ${genreOrOfferingStyle}`}
                     >
                       
-                      {getGenreOrOffering(event).length > 12 
-                        ? `${getGenreOrOffering(event).slice(0, 12)}...` 
+                      {(getGenreOrOffering(event) ?? '').length > 12
+                        ? `${(getGenreOrOffering(event) ?? '').slice(0, 12)}...`
                         : getGenreOrOffering(event)}
                     </span>
                   </div>
