@@ -16,13 +16,15 @@ Always safe to re-run: exact suppression is idempotent, and fuzzy pairs are
 de-duplicated by EventMatch's unique (event_a, event_b) constraint.
 """
 
+from collections import defaultdict
+
 from django.core.management.base import BaseCommand
 from django.db import transaction
 from django.db.models import Count
 
 from event.models import Event, EventMatch
 from event.dedupe import (event_signature, find_fuzzy_pairs,
-                          same_post_is_redundant)
+                          same_post_is_redundant, venue_anchor_applies)
 
 COMPLETENESS_FIELDS = ('name', 'artist', 'start_date', 'start_time', 'price',
                        'genres', 'ticket_link', 'orig_thumb', 'venue_id')
@@ -289,13 +291,38 @@ class Command(BaseCommand):
         # Collect the shortcode while iterating: a follow-up
         # filter(id__in=[~55k ids]) blows past SQLite's host-parameter limit
         # (OperationalError: too many SQL variables).
-        signatures, sc, dates = [], {}, {}
+        signatures, sc, dates, sig_by_id = [], {}, {}, {}
         for event in qs.iterator(chunk_size=2000):
             sig = event_signature(event)
             signatures.append(sig)
+            sig_by_id[event.id] = sig
             sc[event.id] = event.shortcode
             dates[event.id] = sig['date']
         self.stdout.write(f'[fuzzy] scanning {len(signatures)} dated events')
+
+        # Materialise the candidates so each row's anchor partners can be
+        # counted BEFORE any decision is made.
+        candidates = [(lo, hi, score)
+                      for lo, hi, score in find_fuzzy_pairs(signatures)
+                      if not (sc.get(lo) and sc.get(lo) == sc.get(hi))]
+
+        # An untitled row that anchors to SEVERAL events at one venue on one
+        # night cannot be attributed: Zinco Jazz Club played six distinct
+        # concerts at Motolinia 20 on 2025-02-01 and one untitled row anchored
+        # to every one of them, so merging it would have picked a concert by
+        # id order (183 of 453 anchored pairs looked like this on production,
+        # 2026-09-01). Only a 1:1 anchor is unambiguous enough to merge
+        # itself; the rest stay queued for the owner.
+        anchor_partners = defaultdict(set)
+        for lo, hi, _ in candidates:
+            if venue_anchor_applies(sig_by_id[lo], sig_by_id[hi]):
+                anchor_partners[lo].add(hi)
+                anchor_partners[hi].add(lo)
+
+        def unambiguous_anchor(lo, hi):
+            return (venue_anchor_applies(sig_by_id[lo], sig_by_id[hi])
+                    and len(anchor_partners[lo]) == 1
+                    and len(anchor_partners[hi]) == 1)
 
         created = examined = merged = 0
         # Losers suppressed THIS run. A pair touching one is skipped rather
@@ -304,10 +331,8 @@ class Command(BaseCommand):
         # keeper is picked up by the next nightly run, against the keeper
         # directly. Same lesson as the exact pass's per-post keepers.
         suppressed_now = set()
-        for lo, hi, score in find_fuzzy_pairs(signatures):
+        for lo, hi, score in candidates:
             examined += 1
-            if sc.get(lo) and sc.get(lo) == sc.get(hi):
-                continue  # same post — handled by --exact
             if lo in suppressed_now or hi in suppressed_now:
                 continue
             # Auto-merge only clears the HIGH bar the owner saw evidence for
@@ -315,8 +340,10 @@ class Command(BaseCommand):
             # the exact same day. score_pair tolerates ±1 day for nightlife;
             # that tolerance stays review-only — a date difference is real
             # counter-evidence, so those pairs always go to a human.
-            auto = (auto_threshold and score >= auto_threshold
-                    and dates.get(lo) == dates.get(hi))
+            auto = (auto_threshold
+                    and dates.get(lo) == dates.get(hi)
+                    and (score >= auto_threshold
+                         or unambiguous_anchor(lo, hi)))
             existing = EventMatch.objects.filter(
                 event_a_id=lo, event_b_id=hi).first()
             # An owner verdict is never overridden: rejected means "not

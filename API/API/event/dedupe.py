@@ -125,49 +125,61 @@ def event_signature(event):
     }
 
 
+def venue_anchor_applies(a, b):
+    """True when an untitled pair may be treated as one event on venue evidence.
+
+    A title is normally the only thing strong enough to assert "same event",
+    but one account re-promoting one event across several posts is the
+    commonest duplicate that gate misses — measured on production 2026-09-01,
+    39 of the 129 redundant visible rows, including the owner's four-card
+    bazaar screenshot (four posts, one Tonalá 308 bazaar, every row untitled).
+
+    So anchor on an identity that needs no title: the SAME posting account,
+    the SAME exact date, a house number shared by both addresses, agreeing
+    venue names where both are given, and similar venue text. Deliberately
+    stricter than the titled path, which tolerates ±1 day and matches across
+    accounts — with no title there is nothing to fall back on if the anchor is
+    wrong. Venue spellings drift for one place ("Tonalá 308 Eoma Sur" vs
+    "Tonalá 308, Roma Sur, Mexico"), so compare, never equate; and see
+    street_numbers() for why a bare digit run is not a house number.
+
+    Lives on its own so score_pair and the detect_duplicates command share ONE
+    definition of "anchored" — the command must decide ambiguity by asking
+    this, never by comparing a float against VENUE_ANCHOR_SCORE.
+    """
+    if a['name'] and b['name']:
+        return False                     # titled pairs use the fused score
+    # When BOTH rows name their venue, that name has to agree. A shared street
+    # number means one building, not one venue: 'Departamento' and 'PB' share
+    # Álvaro Obregón 154 and are different rooms.
+    name_a, name_b = a.get('venue_name'), b.get('venue_name')
+    if (name_a and name_b
+            and fuzz.token_set_ratio(name_a, name_b) < VENUE_ANCHOR_NAME_SIM):
+        return False
+    nums_a, nums_b = street_numbers(a['venue']), street_numbers(b['venue'])
+    return bool(
+        a['poster'] and a['poster'] == b['poster']
+        and a['date'] and a['date'] == b['date']
+        and nums_a and nums_b and (nums_a & nums_b)
+        and fuzz.token_set_ratio(a['venue'], b['venue']) >= VENUE_ANCHOR_SIM)
+
+
 def score_pair(a, b):
     """Fused 0-100 similarity, or 0 if the pair fails a hard gate.
 
     Gates:
       - both dates present and more than 1 day apart -> 0 (nightlife ±1 day)
       - titles present but dissimilar                -> 0 (no venue-only matches)
-      - a title missing on either side               -> 0, UNLESS the venue
-        anchor below holds (same account, same exact date, same street number)
+      - a title missing on either side               -> 0, UNLESS
+        venue_anchor_applies(); such a pair scores below the auto-merge bar so
+        it is QUEUED, and only detect_duplicates may promote an unambiguous
+        one to a merge.
     """
     if a['date'] and b['date'] and abs((a['date'] - b['date']).days) > 1:
         return 0.0
 
     if not (a['name'] and b['name']):
-        # No title on at least one side. A title is normally the only thing
-        # strong enough to assert "same event", but one account re-promoting
-        # one event across several posts is the commonest duplicate that gate
-        # misses — measured on production 2026-09-01, 39 of the 129 redundant
-        # visible rows, including the owner's four-card bazaar screenshot
-        # (four posts, one Tonalá 308 bazaar, every row untitled).
-        #
-        # Anchor instead on an identity that needs no title: the SAME posting
-        # account, the SAME exact date, and the same venue. Deliberately
-        # stricter than the titled path, which tolerates ±1 day and matches
-        # across accounts — with no title there is nothing to fall back on if
-        # the anchor is wrong. Venue spellings drift for one place ("Tonalá
-        # 308 Eoma Sur" vs "Tonalá 308, Roma Sur, Mexico"), so compare, never
-        # equate.
-        nums_a, nums_b = street_numbers(a['venue']), street_numbers(b['venue'])
-        # When BOTH rows name their venue, that name has to agree. A shared
-        # street number means one building, not one venue: 'Departamento' and
-        # 'PB' share Álvaro Obregón 154 and are different rooms.
-        name_a, name_b = a.get('venue_name'), b.get('venue_name')
-        names_disagree = (
-            name_a and name_b
-            and fuzz.token_set_ratio(name_a, name_b) < VENUE_ANCHOR_NAME_SIM)
-        if (a['poster'] and a['poster'] == b['poster']
-                and a['date'] and a['date'] == b['date']
-                and nums_a and nums_b and (nums_a & nums_b)
-                and not names_disagree
-                and fuzz.token_set_ratio(a['venue'],
-                                         b['venue']) >= VENUE_ANCHOR_SIM):
-            return VENUE_ANCHOR_SCORE
-        return 0.0
+        return VENUE_ANCHOR_SCORE if venue_anchor_applies(a, b) else 0.0
     title_sim = fuzz.token_set_ratio(a['name'], b['name'])
     if title_sim < MIN_TITLE_SIM:
         return 0.0
