@@ -95,16 +95,23 @@ const DashboardFilter: React.FC<DashboardFilterProps> = ({
   const offeringsButtonRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
-    const states = Array.from(new Set(events.map((event) => event.venue.state)))
-      .filter((state) => Constants.validStates.includes(state))
+    // Every event field here is nullable in the API. venue can be missing,
+    // and a null offering makes the optional chain yield undefined — which
+    // flatMap keeps as an ELEMENT (it only flattens arrays), so the .trim()
+    // below threw and took down every city page (2026-09-01 outage). Feed
+    // flatMap an empty array instead and filter falsy values first.
+    const states = Array.from(new Set(events.map((event) => event.venue?.state)))
+      .filter((state) => state && Constants.validStates.includes(state))
       .sort();
     const cities = Array.from(
-      new Set(events.map((event) => event.venue.city))
-    ).sort();
-    const offerings = Array.from(
-      new Set(events.flatMap((event) => event.offering?.toLowerCase()?.split(',')))
+      new Set(events.map((event) => event.venue?.city))
     )
-      .filter((offering) => offering.trim() !== '')
+      .filter(Boolean)
+      .sort();
+    const offerings = Array.from(
+      new Set(events.flatMap((event) => event.offering?.toLowerCase()?.split(',') ?? []))
+    )
+      .filter((offering) => offering && offering.trim() !== '')
       .sort();
     setStateOptions(states);
     setCityOptions(cities);
