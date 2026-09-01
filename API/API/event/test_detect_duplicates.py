@@ -7,7 +7,8 @@ from django.utils import timezone
 
 from event.management.commands.detect_duplicates import completeness
 from event.dedupe import FUZZY_THRESHOLD, score_pair, street_numbers
-from event.models import Event, EventMatch
+from c_admin.models import Account
+from event.models import Event, EventMatch, Venue
 
 
 class KeeperChoiceTests(TestCase):
@@ -715,3 +716,60 @@ class VenueAnchorKeeperTests(TestCase):
                                         price='200', start_time='22:00',
                                         is_event=True, is_duplicate=False)
         self.assertGreater(completeness(titled), completeness(untitled))
+
+
+class AnchorAmbiguityGuardTests(TestCase):
+    """One untitled row matching SEVERAL events at one venue on one night is
+    ambiguous — Zinco Jazz Club, Motolinía 20, 2025-02-01, six concerts and one
+    untitled row that anchored to every one of them, so merging it would have
+    picked a concert by id order. Only a 1:1 anchor may merge itself; the rest
+    go to the owner."""
+
+    def _row(self, name, day, addr='motolinia 20, centro', poster=None):
+        return Event.objects.create(
+            name=name, start_date=timezone.now() + timedelta(days=day),
+            poster=poster, venue=Venue.objects.create(address=addr),
+            is_event=True, is_duplicate=False, suppressed=False)
+
+    def _run(self):
+        call_command('detect_duplicates', '--fuzzy',
+                     '--auto-merge-threshold', '95')
+
+    def test_untitled_row_matching_two_events_is_queued_not_merged(self):
+        acct = Account.objects.create(user='zincojazz')
+        self._row('bravo brubeck', 3, poster=acct)
+        self._row('bossa e foda', 3, poster=acct)
+        self._row(None, 3, poster=acct)
+        self._run()
+        self.assertFalse(Event.objects.filter(suppressed=True).exists())
+        self.assertGreaterEqual(
+            EventMatch.objects.filter(status='pending').count(), 2)
+
+    def test_untitled_row_matching_exactly_one_event_is_merged(self):
+        acct = Account.objects.create(user='adiosclosetbazar')
+        keeper = self._row('bazar', 3, addr='tonala 308, roma sur', poster=acct)
+        loser = self._row(None, 3, addr='tonala 308, roma sur, mexico',
+                          poster=acct)
+        self._run()
+        loser.refresh_from_db(); keeper.refresh_from_db()
+        self.assertTrue(loser.suppressed)
+        self.assertEqual(loser.canonical_id, keeper.id)
+        self.assertFalse(keeper.suppressed)
+
+    def test_two_untitled_rows_alone_at_a_venue_merge(self):
+        # the owner's bazaar shape: both sides untitled, nothing else there
+        acct = Account.objects.create(user='adiosclosetbazar')
+        a = self._row(None, 3, addr='tonala 308, roma sur', poster=acct)
+        b = self._row(None, 3, addr='tonala 308 roma sur, cdmx', poster=acct)
+        self._run()
+        a.refresh_from_db(); b.refresh_from_db()
+        self.assertEqual([a.suppressed, b.suppressed].count(True), 1)
+
+    def test_titled_pairs_are_unaffected_by_the_guard(self):
+        # a near-identical titled same-day pair must still auto-merge
+        acct = Account.objects.create(user='someclub')
+        a = self._row('Techno Marathon', 3, addr='calle 5', poster=acct)
+        b = self._row('Techno Marathon', 3, addr='calle 5', poster=acct)
+        self._run()
+        a.refresh_from_db(); b.refresh_from_db()
+        self.assertEqual([a.suppressed, b.suppressed].count(True), 1)
