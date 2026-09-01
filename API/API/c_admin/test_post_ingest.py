@@ -278,3 +278,69 @@ class ContentIdentityTests(SimpleTestCase):
             shortcode="abc", post_link="L", slide_urls=["s0"])
         self.assertNotIn("source_key", p[0])
         self.assertEqual(p[0]["sourceOrdinal"], 0)
+
+
+class ServedMetroFilterTests(SimpleTestCase):
+    """Owner rule (2026-09-01): "when one post grabs events from a whole tour
+    with other cities I would like to just drop them unless they are cities
+    that are currently on my list", i.e. Berlin, Bali, LA, Mexico City.
+
+    The filter acts ONLY on an explicit OTHER. Deciding on the city string was
+    measured against 14 days of production rows and would have deleted ~146
+    real events whose city is a neighbourhood, so everything else is kept."""
+
+    def _payloads(self, events):
+        return build_payloads(
+            PostExtraction(post_type="roundup", events=events),
+            shortcode="TOUR", post_link="https://insta/p/TOUR/",
+            slide_urls=["s0.jpg"])
+
+    def test_tour_drops_only_the_other_metro_stops(self):
+        p = self._payloads([
+            mk_event(event_name="Berlin show", city="Berlin", metro="Berlin"),
+            mk_event(event_name="Hamburg show", city="Hamburg", metro="OTHER"),
+            mk_event(event_name="London show", city="London", metro="OTHER"),
+        ])
+        self.assertEqual([x["name"] for x in p], ["Berlin show"])
+
+    def test_neighbourhoods_are_kept(self):
+        # the ~146-events-per-fortnight regression this design exists to avoid
+        p = self._payloads([
+            mk_event(event_name="Roma Norte party", city="Roma Norte",
+                     metro="Mexico City"),
+            mk_event(event_name="Neukoelln rave", city="Neukoelln",
+                     metro="Berlin"),
+            mk_event(event_name="Seminyak beach", city="Seminyak", metro="Bali"),
+            mk_event(event_name="DTLA gig", city="DTLA", metro="Los Angeles"),
+        ])
+        self.assertEqual(len(p), 4)
+
+    def test_unknown_metro_is_kept(self):
+        p = self._payloads([mk_event(event_name="No location given",
+                                     metro="UNKNOWN")])
+        self.assertEqual(len(p), 1)
+
+    def test_non_event_payload_is_never_dropped(self):
+        # non-events mark the post processed; dropping them re-bills OpenAI
+        p = self._payloads([mk_event(is_event=False, event_name="promo flyer",
+                                     city="Paris", metro="OTHER")])
+        self.assertEqual(len(p), 1)
+
+    def test_surviving_rows_keep_their_source_keys(self):
+        events = [
+            mk_event(event_name="Berlin show", start_date="09-10-2026",
+                     metro="Berlin"),
+            mk_event(event_name="Hamburg show", start_date="09-11-2026",
+                     metro="OTHER"),
+            mk_event(event_name="Bali show", start_date="09-12-2026",
+                     metro="Bali"),
+        ]
+        filtered = self._payloads(events)
+        # same keys as if nothing had been dropped: ordinals are assigned
+        # before the filter runs
+        unfiltered = self._payloads(
+            [mk_event(event_name=e.event_name, start_date=e.start_date,
+                      metro="UNKNOWN") for e in events])
+        keys = {x["name"]: x.get("source_key") for x in unfiltered}
+        for row in filtered:
+            self.assertEqual(row.get("source_key"), keys[row["name"]])
