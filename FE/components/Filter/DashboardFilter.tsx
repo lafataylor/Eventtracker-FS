@@ -100,13 +100,18 @@ const DashboardFilter: React.FC<DashboardFilterProps> = ({
     // flatMap keeps as an ELEMENT (it only flattens arrays), so the .trim()
     // below threw and took down every city page (2026-09-01 outage). Feed
     // flatMap an empty array instead and filter falsy values first.
+    // The `is string` predicates are what make the dropdowns string[]: a bare
+    // .filter(Boolean) drops the nulls at runtime but not from the TYPE, and
+    // a nullable value flowing on unnoticed is exactly how the 2026-09-01
+    // crash reached production.
     const states = Array.from(new Set(events.map((event) => event.venue?.state)))
-      .filter((state) => state && Constants.validStates.includes(state))
+      .filter((state): state is string =>
+        !!state && Constants.validStates.includes(state))
       .sort();
     const cities = Array.from(
       new Set(events.map((event) => event.venue?.city))
     )
-      .filter(Boolean)
+      .filter((city): city is string => !!city)
       .sort();
     const offerings = Array.from(
       new Set(events.flatMap((event) => event.offering?.toLowerCase()?.split(',') ?? []))
