@@ -293,10 +293,12 @@ const FeedbackDialog = ({ existingEvent, language }: FeedbackDialogProps) => {
                       onChange={(newValue) => {
                         updateError(index, {
                           field_name: (newValue as Option)['value'],
+                          // a nullable field reports an empty current value
+                          // rather than a literal null in the feedback payload
                           current: getValueFromColumnNameForFeedback(
                             existingEvent,
                             (newValue as Option)['value']
-                          ),
+                          ) ?? '',
                         });
                       }}
                       options={columnOptions}

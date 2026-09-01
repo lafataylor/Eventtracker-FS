@@ -985,7 +985,7 @@ function EventCreate({ isEdit, onClose, account }: EventCreateProps) {
                         onClick={(e) => e.stopPropagation()}
                         value={
                           (updatedEvent as Event).offering
-                            ? (updatedEvent as Event).offering
+                            ? ((updatedEvent as Event).offering ?? '')
                             : ''
                         }
                         onChange={(e) =>
