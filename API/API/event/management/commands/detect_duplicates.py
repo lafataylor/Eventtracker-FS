@@ -23,7 +23,10 @@ from django.db import transaction
 from django.db.models import Count
 
 from event.models import Event, EventMatch
-from event.dedupe import (event_signature, find_fuzzy_pairs,
+from rapidfuzz import fuzz
+
+from event.dedupe import (MIN_TITLE_SIM, VENUE_ANCHOR_SCORE,
+                          event_signature, find_fuzzy_pairs,
                           same_post_is_redundant, venue_anchor_applies)
 
 COMPLETENESS_FIELDS = ('name', 'artist', 'start_date', 'start_time', 'price',
@@ -283,9 +286,12 @@ class Command(BaseCommand):
 
     # --- pass 2: fuzzy cross-post duplicates ------------------------------
     def _fuzzy(self, dry, limit, auto_threshold=0.0):
+        # order_by('id') so the run is reproducible: without it SQLite row
+        # order decides which of two overlapping eligible pairs reaches
+        # suppressed_now first.
         qs = (Event.objects.filter(is_event=True, suppressed=False,
                                    start_date__isnull=False)
-              .select_related('venue'))
+              .select_related('venue').order_by('id'))
         if limit:
             qs = qs[:limit]
         # Collect the shortcode while iterating: a follow-up
@@ -300,37 +306,155 @@ class Command(BaseCommand):
             dates[event.id] = sig['date']
         self.stdout.write(f'[fuzzy] scanning {len(signatures)} dated events')
 
-        # Materialise the candidates so each row's anchor partners can be
-        # counted BEFORE any decision is made.
-        candidates = [(lo, hi, score)
-                      for lo, hi, score in find_fuzzy_pairs(signatures)
+        # Materialise the candidates so the anchor graph can be built BEFORE
+        # any decision is made.
+        all_pairs = list(find_fuzzy_pairs(signatures))
+        candidates = [(lo, hi, score) for lo, hi, score in all_pairs
                       if not (sc.get(lo) and sc.get(lo) == sc.get(hi))]
 
-        # An untitled row that anchors to SEVERAL events at one venue on one
-        # night cannot be attributed: Zinco Jazz Club played six distinct
-        # concerts at Motolinia 20 on 2025-02-01 and one untitled row anchored
-        # to every one of them, so merging it would have picked a concert by
-        # id order (183 of 453 anchored pairs looked like this on production,
-        # 2026-09-01). Only a 1:1 anchor is unambiguous enough to merge
-        # itself; the rest stay queued for the owner.
-        anchor_partners = defaultdict(set)
-        for lo, hi, _ in candidates:
+        # --- which untitled matches are safe to merge unattended ----------
+        #
+        # Anchored pairs form a graph. What may merge is decided per CONNECTED
+        # COMPONENT, not per pair, because the shape of the component is the
+        # evidence:
+        #
+        #   * A COMPLETE component (every row anchored to every other) is one
+        #     event promoted several times — the owner's bazaar: four posts
+        #     of one Tonala 308 market, all mutually anchored. Merge it.
+        #   * A STAR is ambiguous — Zinco Jazz Club played six DIFFERENT
+        #     concerts at Motolinia 20 on 2025-02-01 and one untitled row
+        #     anchored to all six. The concerts are titled, so they never
+        #     anchor to EACH OTHER; the component is a star, not a clique, and
+        #     merging would attach that row to a concert picked by id order.
+        #
+        # An earlier version asked "does this row have exactly one partner?".
+        # That inverted the outcome: it blocked the bazaar (each row has three
+        # partners) while merrily merging the isolated pairs that carry the
+        # least evidence of all.
+        #
+        # Edges come from the UNFILTERED pair list: a same-post partner still
+        # counts as competing evidence even though --exact owns that pair.
+        anchor_edges = set()
+        anchor_adj = defaultdict(set)
+        for lo, hi, _ in all_pairs:
             if venue_anchor_applies(sig_by_id[lo], sig_by_id[hi]):
-                anchor_partners[lo].add(hi)
-                anchor_partners[hi].add(lo)
+                anchor_edges.add((lo, hi))
+                anchor_adj[lo].add(hi)
+                anchor_adj[hi].add(lo)
+
+        def _component(start, seen):
+            stack, group = [start], set()
+            while stack:
+                node = stack.pop()
+                if node in group:
+                    continue
+                group.add(node)
+                seen.add(node)
+                stack.extend(anchor_adj[node] - group)
+            return group
+
+        mergeable_nodes = set()
+        mergeable_components = []
+        seen_nodes = set()
+        for node in list(anchor_adj):
+            if node in seen_nodes:
+                continue
+            group = _component(node, seen_nodes)
+            # How many DISTINCT events does this component describe? That, not
+            # the shape of the graph, is the evidence:
+            #   0 or 1 distinct title -> one event promoted several times (the
+            #     owner's bazaar: four untitled posts of one market), merge it;
+            #   2+ distinct titles    -> the venue ran several events that
+            #     night (Zinco Jazz Club, six concerts at Motolinia 20 on
+            #     2025-02-01), so an untitled row cannot be attributed and the
+            #     whole component is left for review.
+            # Requiring a COMPLETE clique was tried and rejected: address
+            # spellings drift for one venue, so a single weak edge blocked
+            # genuine groups - including the bazaar this exists to fix.
+            titles = {sig_by_id[i]['name'] for i in group if sig_by_id[i]['name']}
+            if len(titles) > 1:
+                titles = list(titles)
+                if any(fuzz.token_set_ratio(x, y) < MIN_TITLE_SIM
+                       for i, x in enumerate(titles)
+                       for y in titles[i + 1:]):
+                    continue
+            # Times must not contradict. Two rows at one venue on one night
+            # with different start times are two events, whatever else they
+            # share: measured on production, 14 of 115 merges an earlier rule
+            # allowed paired a 5pm listing with a 10pm one.
+            times = {sig_by_id[i]['start_time'] for i in group
+                     if sig_by_id[i].get('start_time')}
+            if len(times) > 1:
+                continue
+            mergeable_nodes |= group
+            mergeable_components.append(group)
 
         def unambiguous_anchor(lo, hi):
-            return (venue_anchor_applies(sig_by_id[lo], sig_by_id[hi])
-                    and len(anchor_partners[lo]) == 1
-                    and len(anchor_partners[hi]) == 1)
+            # components are collapsed wholesale above; nothing left for the
+            # pair loop to auto-merge on anchor evidence
+            return False
 
-        created = examined = merged = 0
+        created = examined = merged = anchor_merged = 0
+
+        # Collapse each mergeable component in ONE pass, to its most complete
+        # row. Doing this pairwise instead needs a night per extra copy: the
+        # chain guard below skips any pair touching a row suppressed earlier
+        # in the run, so the owner's four-post bazaar would go 4 -> 2 tonight
+        # and 2 -> 1 tomorrow. He is looking at those cards now.
+        suppressed_now = set()
+        collapsed_now = set()
+        for group in mergeable_components:
+            if len(group) < 2:
+                continue
+            rows = list(Event.objects.filter(id__in=group, suppressed=False))
+            if len(rows) < 2:
+                continue
+            rows.sort(key=lambda e: (completeness(e), -e.id), reverse=True)
+            keep, losers = rows[0], rows[1:]
+            anchor_merged += len(losers)
+            merged += len(losers)
+            if dry:
+                collapsed_now.update(e.id for e in rows)
+                continue
+            for drop in losers:
+                drop.suppressed = True
+                drop.canonical = keep
+                drop.is_duplicate = True
+                drop.duplicate_link = keep.orig_link or f"event_{keep.id}"
+                drop.save(update_fields=['suppressed', 'canonical',
+                                         'is_duplicate', 'duplicate_link'])
+                # rows hidden behind THIS loser on an earlier night must not
+                # be left pointing at a hidden row
+                Event.objects.filter(canonical=drop).exclude(id=keep.id).update(
+                    canonical=keep,
+                    duplicate_link=keep.orig_link or f"event_{keep.id}")
+                lo_id, hi_id = sorted((keep.id, drop.id))
+                match = EventMatch.objects.filter(event_a_id=lo_id,
+                                                  event_b_id=hi_id).first()
+                if match and match.status in ('rejected', 'confirmed'):
+                    continue          # never override a human verdict
+                if match:
+                    match.status = 'confirmed'
+                    match.score = VENUE_ANCHOR_SCORE
+                    match.save(update_fields=['status', 'score'])
+                else:
+                    EventMatch.objects.create(
+                        event_a_id=lo_id, event_b_id=hi_id,
+                        score=VENUE_ANCHOR_SCORE, match_type='fuzzy',
+                        status='confirmed')
+            if keep.is_duplicate or keep.canonical_id or keep.duplicate_link:
+                keep.is_duplicate = False
+                keep.canonical = None
+                keep.duplicate_link = None
+                keep.save(update_fields=['is_duplicate', 'canonical',
+                                         'duplicate_link'])
+            collapsed_now.update(e.id for e in rows)
+        suppressed_now |= {i for i in collapsed_now}
         # Losers suppressed THIS run. A pair touching one is skipped rather
         # than merged/queued so one run can never build a canonical chain
         # (loser -> loser -> keeper); a survivor that still matches the
         # keeper is picked up by the next nightly run, against the keeper
         # directly. Same lesson as the exact pass's per-post keepers.
-        suppressed_now = set()
         for lo, hi, score in candidates:
             examined += 1
             if lo in suppressed_now or hi in suppressed_now:
@@ -367,6 +491,8 @@ class Command(BaseCommand):
                 # this loser is skipped for real, so dry must skip it too).
                 suppressed_now.add(drop.id)
                 merged += 1
+                if score < auto_threshold:
+                    anchor_merged += 1
                 if dry:
                     continue
                 drop.suppressed = True
@@ -415,8 +541,10 @@ class Command(BaseCommand):
         verb = 'would queue' if dry else 'queued'
         mverb = 'would auto-merge' if dry else 'auto-merged'
         if auto_threshold:
+            by_score = merged - anchor_merged
             self.stdout.write(self.style.SUCCESS(
                 f'[fuzzy] {mverb} {merged} pairs '
-                f'(score >= {auto_threshold:g}, same day)'))
+                f'({by_score} by score >= {auto_threshold:g}, '
+                f'{anchor_merged} by an unambiguous venue anchor; all same day)'))
         self.stdout.write(self.style.SUCCESS(
             f'[fuzzy] {verb} {created} pending pairs ({examined} above threshold)'))

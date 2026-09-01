@@ -81,7 +81,7 @@ function AddAccount({
 
   useEffect(() => {
     setExistingUsernames(
-      existingAccounts.map((account) => account.user.toLowerCase())
+      existingAccounts.map((account) => (account.user ?? '').toLowerCase())
     );
 
     const savedInfoMessage = localStorage.getItem('infoMessage');
@@ -101,7 +101,8 @@ function AddAccount({
         .filter(
           (acc) => (acc.forLocation || 'general') === selectedLocation.value
         )
-        .map((acc) => acc.user);
+        .map((acc) => acc.user)
+        .filter((u): u is string => !!u);
       setAccounts(accountsForLocation);
     } else {
       setAccounts([]);
@@ -168,7 +169,7 @@ function AddAccount({
         .filter(
           (acc) => (acc.forLocation || 'general') === selectedLocation?.value
         )
-        .map((acc) => acc.user.toLowerCase());
+        .map((acc) => (acc.user ?? '').toLowerCase());
 
       const uniqueAccounts = accounts.filter(
         (account) => !existingAccountsForLocation.includes(account.toLowerCase())
@@ -438,7 +439,7 @@ function AddAccount({
                                     (a.forLocation || 'general') ===
                                     selectedLocation?.value
                                 )
-                                .map((a) => a.user.toLowerCase())
+                                .map((a) => (a.user ?? '').toLowerCase())
                                 .includes(acc.toLowerCase())
                           ).length
                         }{' '}

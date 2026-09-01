@@ -2,7 +2,8 @@ export interface Account {
   id: number;
   is_personal: boolean;
   created_at: string;
-  user: string;
+  // same c_admin_account.user column as Poster.user; null=True in the API
+  user: string | null;
   status: string;
   forLocation?: string;
 }

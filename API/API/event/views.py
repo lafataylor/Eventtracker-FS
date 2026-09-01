@@ -34,11 +34,16 @@ client_error_logger = logging.getLogger('client_errors')
 # tabs. Cap per source per minute so one broken page cannot fill the disk -
 # the disk has hit 100% on this box before.
 CLIENT_ERROR_MAX_PER_MIN = 10
-# ...and a GLOBAL cap, because the per-source key can never be fully trusted
-# on a public endpoint. The per-source limit is a courtesy that keeps one
-# broken browser from drowning out others; THIS is what actually protects the
-# disk, and it holds even against an attacker rotating source addresses.
-CLIENT_ERROR_MAX_PER_MIN_TOTAL = 200
+# ...and a cap across all sources, because the per-source key can never be
+# fully trusted on a public endpoint.
+#
+# Be precise about what this buys: these counters are module-level, and
+# gunicorn runs 3 workers, so the real ceiling is 3x these numbers - about 180
+# reports a minute, not 60. What actually bounds the disk is the handler's
+# rotation (5 MB x 3 files = 15 MB), NOT this cap. The cap's real job is to
+# stop a flood cycling the log so fast that it erases the very crash reports
+# it is generating.
+CLIENT_ERROR_MAX_PER_MIN_TOTAL = 60
 # Hard ceiling on distinct sources tracked in a minute, so the bookkeeping
 # itself cannot be turned into a memory exhaustion vector.
 CLIENT_ERROR_MAX_TRACKED = 2000
@@ -65,15 +70,30 @@ def _client_error_source(request):
     return str(request.META.get('REMOTE_ADDR', '?'))[:45]
 
 
+# ASCII control characters AND the ones people forget: NEL, the C1 range
+# (which carries 8-bit CSI), and U+2028/2029, which JSON and JS-based log
+# viewers treat as line breaks even though `less` does not.
+_LOG_UNSAFE = re.compile(r'[\x00-\x1f\x7f-\x9f\u2028\u2029]')
+
+
 def _log_safe(value, limit):
     """Trim to `limit` and flatten anything that could forge a log line.
 
     Every field here is attacker-controlled and lands in a file a human reads
-    to find out why the site broke. A CR or LF in the payload would let that
-    attacker write their own convincing 'CLIENT CRASH ...' entries, so control
-    characters become spaces rather than new lines.
+    to find out why the site broke. A line break in the payload would let that
+    attacker write their own convincing 'CLIENT CRASH ...' entries.
+
+    Non-strings are dropped rather than coerced: str() on a deeply nested
+    list raises RecursionError, which is not a ValueError, so it escaped the
+    parser's handling and turned a ~200 KB request into a 500 plus a full
+    traceback in the main log - neatly sidestepping this file's size budget.
+
+    Truncation happens BEFORE the substitution so a 1 MB body cannot buy a
+    1 MB regex scan; a substitution can never lengthen the string.
     """
-    return re.sub(r'[\x00-\x1f\x7f]', ' ', str(value or ''))[:limit]
+    if not isinstance(value, str):
+        return ''
+    return _LOG_UNSAFE.sub(' ', value[:limit])
 
 EVENT_CUTOFF_TIME = timedelta(hours=25)
 
@@ -1315,26 +1335,34 @@ def report_client_error(request):
     for stale in [k for k in _client_error_totals if k < minute - 2]:
         _client_error_totals.pop(stale, None)
 
+    # Validate BEFORE spending any budget. Counting rejected junk first let an
+    # attacker fire empty bodies to exhaust the minute's allowance, so genuine
+    # ErrorBoundary reports were dropped for the rest of that minute - and
+    # because nothing was written, the log showed no sign it had happened.
+    data = request.data if isinstance(request.data, dict) else {}
+    message = _log_safe(data.get("message"), 500).strip()
+    if not message:
+        return InvalidParameters()
+
     total = _client_error_totals.get(minute, 0) + 1
     _client_error_totals[minute] = total
     if total > CLIENT_ERROR_MAX_PER_MIN_TOTAL:
+        # One line per minute per worker, so a suppressed flood is visible in
+        # the log rather than looking like silence.
+        if total == CLIENT_ERROR_MAX_PER_MIN_TOTAL + 1:
+            client_error_logger.warning(
+                "CLIENT CRASH THROTTLED: over %d reports this minute; "
+                "further reports dropped until the next minute",
+                CLIENT_ERROR_MAX_PER_MIN_TOTAL)
         return Success({"recorded": False, "throttled": True})
 
     key = (source, minute)
     if key not in _client_error_hits and len(_client_error_hits) >= CLIENT_ERROR_MAX_TRACKED:
-        # Too many distinct sources this minute to track individually. The
-        # global cap above is still counting, so reporting stays bounded; we
-        # simply stop growing the per-source map.
         return Success({"recorded": False, "throttled": True})
     seen = _client_error_hits.get(key, 0) + 1
     _client_error_hits[key] = seen
     if seen > CLIENT_ERROR_MAX_PER_MIN:
         return Success({"recorded": False, "throttled": True})
-
-    data = request.data if isinstance(request.data, dict) else {}
-    message = _log_safe(data.get("message"), 500).strip()
-    if not message:
-        return InvalidParameters()
 
     path = _log_safe(data.get("path"), 200)
     stack = _log_safe(data.get("stack"), 2000)

@@ -115,7 +115,10 @@ class ClientErrorHardeningTests(TestCase):
             for i in range(600):
                 self._post({'message': 'boom'},
                            HTTP_X_REAL_IP=f'203.0.113.{i % 256}')
-        self.assertLessEqual(log.warning.call_count,
+            # count only recorded crashes; the one THROTTLED notice is not one
+            crashes = [c for c in log.warning.call_args_list
+                       if 'CLIENT CRASH path' in str(c[0][0])]
+        self.assertLessEqual(len(crashes),
                              views.CLIENT_ERROR_MAX_PER_MIN_TOTAL)
 
     def test_the_tracking_map_stays_bounded(self):
@@ -124,3 +127,38 @@ class ClientErrorHardeningTests(TestCase):
             self._post({'message': 'boom'}, HTTP_X_REAL_IP=f'198.51.{i//256}.{i%256}')
         self.assertLessEqual(len(views._client_error_hits),
                              views.CLIENT_ERROR_MAX_TRACKED)
+
+    def test_junk_requests_do_not_burn_the_budget(self):
+        # an attacker firing empty bodies must not silently blind the monitor
+        from event import views
+        views._client_error_hits.clear(); views._client_error_totals.clear()
+        for _ in range(300):
+            self._post({'path': '/no-message'}, HTTP_X_REAL_IP='203.0.113.1')
+        with patch('event.views.client_error_logger') as log:
+            r = self._post({'message': 'a genuine crash'},
+                           HTTP_X_REAL_IP='198.51.100.2')
+        self.assertEqual(r.status_code, 200)
+        self.assertTrue(log.warning.called, 'a real report was dropped')
+
+    def test_unicode_line_separators_cannot_forge_a_line(self):
+        with patch('event.views.client_error_logger') as log:
+            self._post({'message': 'a CLIENT CRASH forged b'})
+        logged = log.warning.call_args[0][0]
+        self.assertNotIn(' ', logged)
+        self.assertNotIn(' ', logged)
+
+    def test_a_deeply_nested_value_does_not_500(self):
+        # str() on deep nesting raises RecursionError, which is not ValueError
+        payload = {'message': 'ok', 'stack': [[[[[['deep']]]]]]}
+        r = self._post(payload)
+        self.assertEqual(r.status_code, 200)
+
+    def test_a_throttle_flood_leaves_a_trace(self):
+        from event import views
+        views._client_error_hits.clear(); views._client_error_totals.clear()
+        with patch('event.views.client_error_logger') as log:
+            for i in range(views.CLIENT_ERROR_MAX_PER_MIN_TOTAL + 30):
+                self._post({'message': 'flood'}, HTTP_X_REAL_IP=f'203.0.113.{i % 250}')
+            messages = [str(c[0][0]) for c in log.warning.call_args_list]
+        self.assertTrue(any('THROTTLED' in m for m in messages),
+                        'a suppressed flood must not look like silence')
