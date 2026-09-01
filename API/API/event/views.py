@@ -25,6 +25,16 @@ validator = Validator()
 
 import logging
 logger = logging.getLogger('django')
+# Browser crashes go to their own small file (see LOGGING in settings): the
+# main django.log is gigabytes of pipeline chatter, and this one has to be
+# readable at a glance the morning after.
+client_error_logger = logging.getLogger('client_errors')
+
+# A render loop can fire the reporter hundreds of times a second, from many
+# tabs. Cap per source per minute so one broken page cannot fill the disk -
+# the disk has hit 100% on this box before.
+CLIENT_ERROR_MAX_PER_MIN = 10
+_client_error_hits = {}
 
 EVENT_CUTOFF_TIME = timedelta(hours=25)
 
@@ -1243,3 +1253,41 @@ def list_locations(request):
     except Exception as e:
         logger.error(f"Error listing locations: {e}")
         return ServerProcessingError()
+
+
+@api_view(["POST"])
+def report_client_error(request):
+    """Record a browser-side crash reported by the FE ErrorBoundary.
+
+    Deliberately unauthenticated: the page that needs to report is the page
+    that just fell over, and asking it for a valid session is asking for the
+    report we will not get. Everything here is untrusted input from the open
+    internet, so it is length-capped, rate-capped per source, and only ever
+    written to a log — never to the database, never rendered anywhere.
+    """
+    from django.utils import timezone as _tz
+
+    source = (request.META.get('HTTP_X_FORWARDED_FOR', '').split(',')[0].strip()
+              or request.META.get('REMOTE_ADDR', '?'))
+    minute = int(_tz.now().timestamp() // 60)
+    key = (source, minute)
+    seen = _client_error_hits.get(key, 0) + 1
+    _client_error_hits[key] = seen
+    # Drop older buckets so this dict cannot grow without bound.
+    for stale in [k for k in _client_error_hits if k[1] < minute - 2]:
+        _client_error_hits.pop(stale, None)
+    if seen > CLIENT_ERROR_MAX_PER_MIN:
+        return Success({"recorded": False, "throttled": True})
+
+    data = request.data if isinstance(request.data, dict) else {}
+    message = str(data.get("message") or "").strip()
+    if not message:
+        return InvalidParameters()
+
+    path = str(data.get("path") or "")[:200]
+    stack = str(data.get("stack") or "")[:2000]
+    component = str(data.get("component") or "")[:1000]
+    client_error_logger.warning(
+        "CLIENT CRASH path=%s source=%s message=%s | stack=%s | component=%s"
+        % (path, source, message[:500], stack, component))
+    return Success({"recorded": True})
