@@ -50,17 +50,22 @@ export interface KeywordColActivations {
 
 export interface Venue {
   id: number;
-  name: string;
-  address: string;
-  city: string;
-  state: string;
-  country: string;
+  // Every one of these is null=True in the API and frequently null in the
+  // data — address alone is NULL on 44,137 of 73,519 venue rows. Typing them
+  // as plain strings is what let the 2026-09-01 crashes typecheck cleanly.
+  name: string | null;
+  address: string | null;
+  city: string | null;
+  state: string | null;
+  country: string | null;
 }
 
 export interface Poster {
   forLocation?: string;
   id: number;
-  user: string;
+  // Account.user is null=True; no production row is null today, but the type
+  // should say what the API can send, not what it happens to send.
+  user: string | null;
   is_personal: true;
   created_at: string;
 }
