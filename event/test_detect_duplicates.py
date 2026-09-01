@@ -569,3 +569,89 @@ class FuzzyAutoMergeTests(TestCase):
         self.assertEqual(EventMatch.objects.count(), 0)  # dry wrote nothing
         real_n = merged_count(False)
         self.assertEqual(dry_n, real_n)
+
+
+class NamelessVenueAnchorTests(TestCase):
+    """The owner's 2026-09-01 screenshot: one account re-promoting one bazaar
+    across four separate posts, every row untitled, so score_pair's both-names
+    gate scored each pair 0 and all four stayed visible."""
+
+    def _sig(self, **kw):
+        base = dict(id=1, name='', artist='', venue='', date=None, poster=None)
+        base.update(kw)
+        return base
+
+    def test_nameless_same_account_date_and_venue_is_a_duplicate(self):
+        from datetime import date
+        from event.dedupe import score_pair, FUZZY_THRESHOLD
+        a = self._sig(id=1, poster=7, date=date(2026, 9, 4),
+                      venue='tonala 308 eoma sur')
+        b = self._sig(id=2, poster=7, date=date(2026, 9, 4),
+                      venue='tonala 308, roma sur, mexico')
+        self.assertGreaterEqual(score_pair(a, b), FUZZY_THRESHOLD)
+
+    def test_named_beside_nameless_at_the_same_venue_matches(self):
+        # the "mixed" bucket; completeness makes the NAMED row the keeper
+        from datetime import date
+        from event.dedupe import score_pair, FUZZY_THRESHOLD
+        a = self._sig(id=1, poster=7, date=date(2026, 9, 4), name='bazar',
+                      venue='tonala 308, roma sur')
+        b = self._sig(id=2, poster=7, date=date(2026, 9, 4),
+                      venue='tonala 308, roma sur')
+        self.assertGreaterEqual(score_pair(a, b), FUZZY_THRESHOLD)
+
+    def test_different_accounts_do_not_anchor(self):
+        from datetime import date
+        from event.dedupe import score_pair
+        a = self._sig(id=1, poster=7, date=date(2026, 9, 4), venue='same place')
+        b = self._sig(id=2, poster=9, date=date(2026, 9, 4), venue='same place')
+        self.assertEqual(score_pair(a, b), 0.0)
+
+    def test_different_days_do_not_anchor(self):
+        # +/-1 day is fine for titled nightlife; with no title it is not evidence
+        from datetime import date
+        from event.dedupe import score_pair
+        a = self._sig(id=1, poster=7, date=date(2026, 9, 4), venue='same place')
+        b = self._sig(id=2, poster=7, date=date(2026, 9, 5), venue='same place')
+        self.assertEqual(score_pair(a, b), 0.0)
+
+    def test_different_venues_do_not_anchor(self):
+        from datetime import date
+        from event.dedupe import score_pair
+        a = self._sig(id=1, poster=7, date=date(2026, 9, 4),
+                      venue='club gretchen, berlin')
+        b = self._sig(id=2, poster=7, date=date(2026, 9, 4),
+                      venue='foro indie rocks, cdmx')
+        self.assertEqual(score_pair(a, b), 0.0)
+
+    def test_missing_venue_never_anchors(self):
+        from datetime import date
+        from event.dedupe import score_pair
+        a = self._sig(id=1, poster=7, date=date(2026, 9, 4), venue='')
+        b = self._sig(id=2, poster=7, date=date(2026, 9, 4), venue='')
+        self.assertEqual(score_pair(a, b), 0.0)
+
+    def test_undated_nameless_rows_never_anchor(self):
+        from event.dedupe import score_pair
+        a = self._sig(id=1, poster=7, date=None, venue='tonala 308')
+        b = self._sig(id=2, poster=7, date=None, venue='tonala 308')
+        self.assertEqual(score_pair(a, b), 0.0)
+
+    def test_same_street_different_building_does_not_anchor(self):
+        # measured: these score 92.9 by string similarity, HIGHER than the
+        # same venue spelled two ways - the street number is what separates them
+        from datetime import date
+        from event.dedupe import score_pair
+        a = self._sig(id=1, poster=7, date=date(2026, 9, 4),
+                      venue='tonala 308, roma sur, mexico')
+        b = self._sig(id=2, poster=7, date=date(2026, 9, 4),
+                      venue='tonala 250, roma sur, mexico')
+        self.assertEqual(score_pair(a, b), 0.0)
+
+    def test_city_only_addresses_never_anchor(self):
+        # two different venues whose address degraded to the city score 100
+        from datetime import date
+        from event.dedupe import score_pair
+        a = self._sig(id=1, poster=7, date=date(2026, 9, 4), venue='berlin, germany')
+        b = self._sig(id=2, poster=7, date=date(2026, 9, 4), venue='berlin, germany')
+        self.assertEqual(score_pair(a, b), 0.0)
