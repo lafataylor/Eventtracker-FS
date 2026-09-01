@@ -24,6 +24,8 @@ backlog is not feasible. Text matching fully satisfies the contract; pHash can
 be added for freshly-ingested events later.
 """
 
+import re
+
 from rapidfuzz import fuzz
 
 from .ingest import normalize_text
@@ -43,6 +45,32 @@ WEIGHTS = {'name': 0.55, 'artist': 0.20, 'venue': 0.25}
 FUZZY_THRESHOLD = 82.0
 MIN_TITLE_SIM = 70.0
 
+# For pairs with no title on at least one side (see score_pair): how alike two
+# venue strings must be to count as one place, and the score such a pair gets.
+# The score sits at the auto-merge bar because the anchor (same account, same
+# exact date, same street address) is a tighter identity than a fuzzy title
+# match, not a looser one.
+VENUE_ANCHOR_SIM = 80.0
+VENUE_ANCHOR_SCORE = 95.0
+
+
+def street_numbers(venue_text_value):
+    """The street numbers in a venue string, e.g. 'tonala 308 roma sur' -> {'308'}.
+
+    Similarity ALONE cannot identify a venue, measured 2026-09-01:
+      'tonala 308, roma sur, mexico' vs 'tonala 250, roma sur, mexico' -> 92.9
+      'tonala 308 eoma sur'          vs 'tonala 308, roma sur, mexico' -> 80.9
+    so two different buildings on one street score HIGHER than one building
+    spelled two ways, and a pair of rows whose address degraded to just
+    'berlin, germany' scores a perfect 100. The street number is the token
+    that actually identifies the place, so the nameless anchor requires one on
+    both sides and requires them to agree. Venues with no number in their
+    address simply never anchor — that misses some duplicates, which is the
+    safe direction: a false 'distinct' costs a review, a false 'redundant'
+    hides a real event.
+    """
+    return {t for t in re.findall(r'\d+', venue_text_value or '')}
+
 
 def venue_text(venue):
     if not venue:
@@ -59,6 +87,10 @@ def event_signature(event):
         'artist': normalize_text(event.artist),
         'venue': normalize_text(venue_text(event.venue)),
         'date': d,
+        # Which Instagram account posted it. Only used by the nameless-pair
+        # anchor in score_pair, where "the same account said it twice" is the
+        # evidence a missing title cannot provide.
+        'poster': event.poster_id,
     }
 
 
@@ -68,12 +100,34 @@ def score_pair(a, b):
     Gates:
       - both dates present and more than 1 day apart -> 0 (nightlife ±1 day)
       - titles present but dissimilar                -> 0 (no venue-only matches)
-      - no title on either side                      -> 0 (too weak to assert)
+      - a title missing on either side               -> 0, UNLESS the venue
+        anchor below holds (same account, same exact date, same street number)
     """
     if a['date'] and b['date'] and abs((a['date'] - b['date']).days) > 1:
         return 0.0
 
     if not (a['name'] and b['name']):
+        # No title on at least one side. A title is normally the only thing
+        # strong enough to assert "same event", but one account re-promoting
+        # one event across several posts is the commonest duplicate that gate
+        # misses — measured on production 2026-09-01, 39 of the 129 redundant
+        # visible rows, including the owner's four-card bazaar screenshot
+        # (four posts, one Tonalá 308 bazaar, every row untitled).
+        #
+        # Anchor instead on an identity that needs no title: the SAME posting
+        # account, the SAME exact date, and the same venue. Deliberately
+        # stricter than the titled path, which tolerates ±1 day and matches
+        # across accounts — with no title there is nothing to fall back on if
+        # the anchor is wrong. Venue spellings drift for one place ("Tonalá
+        # 308 Eoma Sur" vs "Tonalá 308, Roma Sur, Mexico"), so compare, never
+        # equate.
+        nums_a, nums_b = street_numbers(a['venue']), street_numbers(b['venue'])
+        if (a.get('poster') and a.get('poster') == b.get('poster')
+                and a['date'] and a['date'] == b['date']
+                and nums_a and nums_a == nums_b
+                and fuzz.token_set_ratio(a['venue'],
+                                         b['venue']) >= VENUE_ANCHOR_SIM):
+            return VENUE_ANCHOR_SCORE
         return 0.0
     title_sim = fuzz.token_set_ratio(a['name'], b['name'])
     if title_sim < MIN_TITLE_SIM:
