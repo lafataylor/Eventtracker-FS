@@ -61,25 +61,6 @@ class ExtractedEvent(BaseModel):
     recurrence: Optional[str] = Field(
         description="For a repeating series, how often it repeats: 'weekly', "
                     "'biweekly', or 'monthly'. Null for a one-off event.")
-    # Owner rule (2026-09-01): a tour announcement creates one event per stop,
-    # and stops outside the served cities must be dropped rather than shown in
-    # the posting account's feed. The CITY STRING cannot decide that — a
-    # neighbourhood ("Roma Norte", "Neukoelln", "Seminyak", "Hollywood") is a
-    # served city while a same-country stop ("Hamburg", "Monterrey") is not,
-    # and country/state are equal in both cases. The model knows this geography,
-    # so it classifies the metro and code only acts on an explicit OTHER.
-    metro: Literal["Mexico City", "Berlin", "Los Angeles", "Bali",
-                   "OTHER", "UNKNOWN"] = Field(
-        description="Which served metro area this event physically takes place "
-                    "in. Neighbourhoods and nearby areas count as their metro: "
-                    "Roma/Roma Norte/Condesa/Polanco/CDMX/Ciudad de Mexico = "
-                    "Mexico City; Neukoelln/Kreuzberg/Friedrichshain/Mitte = "
-                    "Berlin; Hollywood/DTLA/Silver Lake/Highland Park/Venice/"
-                    "Santa Monica/West Hollywood = Los Angeles; Seminyak/"
-                    "Canggu/Ubud/Uluwatu/Denpasar/Kuta = Bali. Use OTHER only "
-                    "when the event is clearly in a different metro (e.g. a "
-                    "tour stop in Hamburg, Monterrey, London, Brooklyn). Use "
-                    "UNKNOWN when the location is not stated or you are unsure.")
     recurrence_until: Optional[str] = Field(
         description="MM-DD-YYYY the series ends, if the post states one. Null "
                     "if open-ended.")
@@ -133,11 +114,6 @@ Populate venue with the venue name only (strip city/state/country into their own
 fields). link_in_bio is true only if the image/caption says something like "link in \
 bio" (ignore the bio for that flag). If link_in_bio is true, use the bio URL as \
 ticket_link.
-
-Set metro per event from where it physically happens. A tour or multi-city \
-announcement has a DIFFERENT metro per stop. A neighbourhood belongs to its metro. \
-Only use OTHER when the event is clearly in a metro that is not Mexico City, \
-Berlin, Los Angeles or Bali; if the location is absent or ambiguous use UNKNOWN.
 
 Caption:
 {caption}

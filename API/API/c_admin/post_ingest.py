@@ -274,39 +274,7 @@ def build_payloads(extraction, *, shortcode, post_link, slide_urls,
                                            ordinal=ordinal)
                         if multi_event and not event.recurrence else None),
         ))
-    return _drop_other_metro_events(payloads, expanded, shortcode)
-
-
-def _drop_other_metro_events(payloads, events, shortcode):
-    """Drop event rows the extractor placed in a metro the site does not serve.
-
-    Owner rule (2026-09-01): "when one post grabs events from a whole tour with
-    other cities I would like to just drop them unless they are cities that are
-    currently on my list", i.e. Berlin, Bali, Los Angeles, Mexico City.
-
-    Only an explicit OTHER drops a row. UNKNOWN, a missing field (older
-    extractions replayed through this path) and every served metro are kept:
-    measured on 14 days of production rows, deciding on the city STRING instead
-    would have deleted ~146 real events whose city is a neighbourhood
-    (Roma Norte, Neukoelln, Seminyak, Hollywood), so this fails open by design.
-
-    Non-event payloads are never dropped: they carry no listing but they are
-    what marks a post as processed, and dropping them would re-bill the same
-    post to OpenAI every night.
-
-    Filtering happens AFTER build_payloads assigned ordinals, so the surviving
-    rows keep the same source_key they would have had — both ingestion paths
-    stay in agreement and a re-scrape still upserts instead of duplicating.
-    """
-    kept = []
-    for payload, event in zip(payloads, events):
-        if payload.get("isEvent") and getattr(event, "metro", None) == "OTHER":
-            logger.info(
-                "[METRO] dropping %s event %r (city=%r) - outside the served "
-                "cities", shortcode, event.event_name, event.city)
-            continue
-        kept.append(payload)
-    return kept
+    return payloads
 
 
 def group_slides_by_post(images_for_account):
