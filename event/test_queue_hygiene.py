@@ -101,7 +101,23 @@ class DuplicateQueueTests(TestCase):
         # column to LA time, so from ~5pm LA onward a pair whose only live
         # side was TONIGHT dropped out of the queue - exactly when the owner
         # would be clearing duplicates before that night's shows.
-        tonight = self.now.replace(hour=23, minute=30, second=0, microsecond=0)
+        #
+        # The clock is FROZEN at 18:30 LA: UTC-today only disagrees with
+        # LA-today during those evening hours, so an unfrozen version of this
+        # test passed WITH the bug present whenever the suite ran before 5pm
+        # LA - a regression pin that only worked 7 hours a day.
+        import zoneinfo
+        from unittest import mock
+        la = zoneinfo.ZoneInfo('America/Los_Angeles')
+        local_evening = timezone.datetime(2026, 9, 10, 18, 30, tzinfo=la)
+        # timezone.now() returns a UTC-aware datetime in real life, and the
+        # bug lives in the difference between now().date() (UTC calendar day)
+        # and localdate() (LA calendar day). Freezing to an LA-aware value
+        # would make now().date() the LA date too and mask the very bug this
+        # test exists to catch - which is exactly what the first version of
+        # this test did, caught by mutation-testing it.
+        frozen = local_evening.astimezone(timezone.timezone.utc)
+        tonight = local_evening.replace(hour=23, minute=30)
         a = Event.objects.create(name='Tonight A', start_date=tonight,
                                  is_event=True, is_duplicate=False,
                                  suppressed=False)
@@ -109,8 +125,24 @@ class DuplicateQueueTests(TestCase):
                                  is_event=True, is_duplicate=False,
                                  suppressed=False)
         m = self._pair(a, b)
-        self.assertIn(m.id, [x['match_id'] for x in self._get()['matches']],
-                      "tonight's pair vanished from the queue")
+        # localdate() calls timezone.now() internally, so one patch covers
+        # both the fixture's frame of reference and the view's.
+        with mock.patch('django.utils.timezone.now', return_value=frozen):
+            listed = [x['match_id'] for x in self._get()['matches']]
+        self.assertIn(m.id, listed, "tonight's pair vanished from the queue")
+
+    def test_pair_alive_only_through_an_undated_side_sorts_as_undated(self):
+        # Decided behaviour, pinned on review advice: a pair kept in the
+        # queue ONLY because one side is undated (the other has passed) has
+        # nothing upcoming to rank on - ranking it on the dead date is the
+        # exact bug that put January at the top of a chronological list, so
+        # it sorts with the undated tail instead.
+        undated = Event.objects.create(name='Undated side', is_event=True,
+                                       is_duplicate=False, suppressed=False)
+        mixed = self._pair(self._ev('Past side', -30), undated)
+        dated = self._pair(self._ev('Dated A', 6), self._ev('Dated B', 6))
+        ids = [m['match_id'] for m in self._get()['matches']]
+        self.assertEqual(ids, [dated.id, mixed.id])
 
     def test_ordering_ignores_a_side_that_has_already_passed(self):
         # A pair survives because ONE side is upcoming, but it used to sort by
