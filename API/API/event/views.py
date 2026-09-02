@@ -6,7 +6,8 @@ from .serializers import EventSerializer, FeedbackSerializer
 from .ingest import (build_source_key, coerce_int, normalize_poster_name,
                      normalize_text, resolve_venue, upsert_event)
 from django.db import transaction
-from django.db.models import Q
+from django.db.models import F, Q
+from django.db.models.functions import Coalesce, Least
 from django.utils import timezone
 
 from c_admin.models import Account, AccountDetail
@@ -813,11 +814,18 @@ def date_events(request):
 
         cutoff_date = cutoff_time.date()
 
+        # Same visibility rules as search_events. These two feeds are what
+        # the city pages render, and they previously filtered is_duplicate
+        # only - so rows the extractor had ALREADY classified as not-an-event
+        # were served to the public ("Remodeling Closure", "9.12 event
+        # placeholder"; 11 of them on 2026-09-02). Exclude only KNOWN
+        # non-events: is_event is nullable and NULL means never classified.
         date_events = Event.objects.filter(
-            start_date__date=date, 
+            start_date__date=date,
             start_date__gte=cutoff_date,
-            is_duplicate=False
-        ).all()
+            is_duplicate=False,
+            suppressed=False,
+        ).exclude(is_event=False).all()
 
         events_serializer = EventSerializer(date_events, many=True)
 
@@ -853,11 +861,13 @@ def date_range_events(request):
 
         cutoff_date = cutoff_time.date()
 
+        # See date_events above: same rules, same reason.
         date_events = Event.objects.filter(
             Q(start_date__range=(start_date, end_date)) | Q(end_date__range=(start_date, end_date)),
             start_date__gte=cutoff_date,
-            is_duplicate=False
-        ).all()
+            is_duplicate=False,
+            suppressed=False,
+        ).exclude(is_event=False).all()
 
         events_serializer = EventSerializer(date_events, many=True)
 
@@ -1178,13 +1188,31 @@ def get_event_matches(request):
         # suppression and resurrect a duplicate the owner had already hidden.
         # One base queryset for both the page and the count, so the "N pairs to
         # review" header can never disagree with the list under it.
+        # A pair whose events have BOTH already happened is not a decision
+        # worth anyone's time: measured 2026-09-02, 1,532 of 1,676 pending
+        # pairs were exactly that, which is why the queue read as junk
+        # ("events that have already happened should not be included on the
+        # duplicate page", owner). Undated rows never "pass" and are precisely
+        # what needs a human, so they stay.
+        today = timezone.now().date()
+        still_relevant = (Q(event_a__start_date__date__gte=today)
+                          | Q(event_b__start_date__date__gte=today)
+                          | Q(event_a__start_date__isnull=True)
+                          | Q(event_b__start_date__isnull=True))
         visible = (EventMatch.objects
                    .exclude(event_a__suppressed=True)
-                   .exclude(event_b__suppressed=True))
+                   .exclude(event_b__suppressed=True)
+                   .filter(still_relevant))
+        # Chronological, soonest first (owner: "events on the duplicate page
+        # should be in chronological order"). Undated pairs sort last rather
+        # than leading the list, which is where NULLs would otherwise land.
         matches = (visible.filter(status=status)
                    .select_related('event_a', 'event_a__venue', 'event_a__poster',
                                    'event_b', 'event_b__venue', 'event_b__poster')
-                   .order_by('-score', '-id')[:limit])
+                   .annotate(_soonest=Least(
+                       Coalesce('event_a__start_date', 'event_b__start_date'),
+                       Coalesce('event_b__start_date', 'event_a__start_date')))
+                   .order_by(F('_soonest').asc(nulls_last=True), 'id')[:limit])
         data = [{
             "match_id": m.id,
             "score": m.score,
