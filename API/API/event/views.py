@@ -1068,16 +1068,21 @@ def remove_duplicate_label(request):
         if not event:
             return EventNotFound()
             
-        # Clear BOTH hiding mechanisms. The review flow sets suppressed +
+        # Clear EVERY hiding mechanism. The review flow sets suppressed +
         # canonical alongside is_duplicate, so clearing is_duplicate alone left
         # the event hidden from search/filter and made the UI's "you can
-        # restore it later" untrue.
+        # restore it later" untrue. is_event=False keeps a row out of the
+        # feeds all by itself (since 2026-09-02), so "Restore to site" must
+        # override that verdict too — a restore that leaves the row invisible
+        # is not a restore.
         event.is_duplicate = False
         event.duplicate_link = None
         event.suppressed = False
         event.canonical = None
+        if event.is_event is False:
+            event.is_event = True
         event.save(update_fields=['is_duplicate', 'duplicate_link',
-                                  'suppressed', 'canonical'])
+                                  'suppressed', 'canonical', 'is_event'])
 
         return Success({"status": "success", "message": "Duplicate label removed from event."})
     except Exception as e:
@@ -1114,9 +1119,12 @@ def get_duplicate_events(request):
 
     scope=flagged (default): rows hidden WITHOUT a surviving canonical — the
     old scraper's flags and manual marks. scope=merged: duplicate collapses
-    (canonical set), each reporting what was kept instead. scope=all: both.
-    Whatever the scope, anything listed really is restorable:
-    remove_duplicate_label clears every hiding flag.
+    (canonical set), each reporting what was kept instead. scope=non_event:
+    rows the extractor classified is_event=False, hidden from the feeds by
+    that classification ALONE — the only surface where a misclassification
+    can be seen and reversed, because nothing else lists them. scope=all:
+    flagged + merged. Whatever the scope, anything listed really is
+    restorable: remove_duplicate_label clears every hiding flag.
 
     No start_date floor: a wrongly-hidden event is usually past-dated, and a
     24h window made most of them unreachable. Newest-flagged first, bounded.
@@ -1141,6 +1149,17 @@ def get_duplicate_events(request):
                 .order_by('-created_at'))
         if scope == "merged":
             base = base.filter(canonical__isnull=False)
+        elif scope == "non_event":
+            # Hidden by classification ALONE. Rows that are also duplicates
+            # or suppressed belong to the other scopes; without this surface
+            # a wrong is_event=False verdict was invisible and irreversible
+            # from the admin (review 2026-09-02: "no admin path to flip
+            # is_event back").
+            base = (Event.objects
+                    .filter(is_event=False, is_duplicate=False,
+                            suppressed=False)
+                    .select_related('venue', 'poster', 'canonical')
+                    .order_by('-created_at'))
         elif scope != "all":
             base = base.filter(canonical__isnull=True)
         total = base.count()
@@ -1153,8 +1172,10 @@ def get_duplicate_events(request):
         rows = event_serializer.data
         for item, event in zip(rows, duplicate_events):
             keeper = event.canonical
-            item["hidden_reason"] = ("duplicate" if keeper
-                                     else "flagged_by_scraper")
+            item["hidden_reason"] = (
+                "classified_non_event" if scope == "non_event"
+                else "duplicate" if keeper
+                else "flagged_by_scraper")
             item["kept_instead"] = ({
                 "id": keeper.id,
                 "name": keeper.name,

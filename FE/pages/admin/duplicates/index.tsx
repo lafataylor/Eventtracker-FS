@@ -31,7 +31,7 @@ type ViewMode = 'pairs' | 'flagged';
 // A hidden row carries why it is hidden and, for a collapse, the row it was
 // kept instead of — so a restore decision needs no search on the main page.
 type FlaggedEvent = Event & {
-  hidden_reason?: 'duplicate' | 'flagged_by_scraper';
+  hidden_reason?: 'duplicate' | 'flagged_by_scraper' | 'classified_non_event';
   kept_instead?: { id: number; name: string | null; start_date: string | null;
                    orig_link: string | null } | null;
 };
@@ -57,7 +57,7 @@ const Index = () => {
   // with what was kept instead (see the scope switch below).
   const [flagged, setFlagged] = useState<FlaggedEvent[]>([]);
   const [flaggedTotal, setFlaggedTotal] = useState(0);
-  const [flaggedScope, setFlaggedScope] = useState<'flagged' | 'merged'>('flagged');
+  const [flaggedScope, setFlaggedScope] = useState<'flagged' | 'merged' | 'non_event'>('flagged');
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState(false);
   // A set, not a scalar: resolving two cards at once must keep both disabled
@@ -81,7 +81,7 @@ const Index = () => {
     });
 
   const fetchFlagged = async (loadMoreOffset: number = 0,
-                              scope: 'flagged' | 'merged' = flaggedScope) => {
+                              scope: 'flagged' | 'merged' | 'non_event' = flaggedScope) => {
     if (!(await requestMiddleware(dispatch))) return;
     setIsLoading(true);
     setLoadError(false);
@@ -468,8 +468,9 @@ const Index = () => {
                 scraper's old flags are the restorable ones, and would be
                 buried under ~25k duplicate collapses if merged into one list. */}
             <div className="flex gap-2 mb-4">
-              {([['flagged', 'Flagged as not an event'],
-                 ['merged', 'Hidden as duplicates']] as const).map(([s, label]) => (
+              {([['flagged', 'Flagged (old scraper)'],
+                 ['merged', 'Hidden as duplicates'],
+                 ['non_event', 'Hidden as not an event']] as const).map(([s, label]) => (
                 <button
                   key={s}
                   className={`px-3 py-1 rounded-lg text-sm ${
@@ -527,6 +528,8 @@ const Index = () => {
                 <div className="text-stone-gray">
                   {flaggedScope === 'merged'
                     ? 'No duplicates have been hidden yet.'
+                    : flaggedScope === 'non_event'
+                    ? 'Nothing has been classified as not-an-event.'
                     : 'No previously-flagged events to review.'}
                 </div>
               </div>
@@ -561,6 +564,8 @@ const Index = () => {
                             ? ` (${new Date(event.kept_instead.start_date).toLocaleDateString()})`
                             : ''}
                         </>
+                      ) : event.hidden_reason === 'classified_non_event' ? (
+                        'The extractor decided this is not an event, so it is kept off the site. Restore if it got that wrong.'
                       ) : (
                         'Flagged by the scraper as not an event.'
                       )}
