@@ -180,3 +180,25 @@ placeholder" rows (24 and 29 real events remain); smoke check rc=0.
    has `persistence_day_count: 1`, but NOTHING reads it. The owner likely
    believes old events are being purged. Deleting them is destructive and
    irreversible - Zain's decision, not mine.
+
+## In-chat plan execution (2026-09-02, second window visit)
+- **Monitor installed.** `smoke_check.sh` now runs hourly at :05 from the dev
+  machine's crontab, logging to ~/Documents/lafaslist-smoke.log; the exact
+  cron command was executed once and proven to write the log. The script now
+  uses `--session smoke` so the hourly run and interactive debugging cannot
+  navigate each other's browser away.
+- **Legacy repairs applied on prod** (dry-run first, preflight-gated, flag
+  flips only): the 1 canonical chain re-pointed to its visible end; all 7
+  titled-behind-untitled keepers swapped (ANTI., mtv:ICON Award, RUNNING IT
+  BACK, HAZ LO IMPOSIBLE, Souls of Mischief, LNG/SHT, ALF CHAMPION) with
+  dependents re-pointed; the 42 Jan/Feb-2025 orphans left as-is - none of
+  their duplicate_links matches a surviving event, and they stay reachable in
+  the flagged scope. Invariants now: chains 0, titled-behind-untitled 0.
+- **Non-event recovery scope built, deployed, verified** (merge f3c4543).
+  scope=non_event lists rows hidden by classification alone (14,176 on prod,
+  paginated); restore overrides an explicit is_event=False verdict, pinned so
+  it never touches True or NULL. Driven as a user locally (row 73491 flipped
+  at the DB level) and the scope + context line + restore verified live on
+  production. 198 API tests, tsc rc=0, builds rc=0, smoke rc=0.
+- Still parked on decisions: past-event purge (needs Lafayette's retention
+  number + Zain's OK), served-city filter validation (~3 OpenAI calls).
