@@ -104,3 +104,37 @@ The smoke check is worthless sitting in the repo.
 
 ## Execution record
 - 2026-09-01 (late): plan written. Tasks 1–3 are a deploy queue for work already on `main`; Task 4 is the only item needing a decision; Task 5 is what stops the client being the monitoring system.
+
+## Execution record (2026-09-02, window open)
+- **Tasks 1 + 2 DONE.** API and FE deployed after preflight (idle 4h51m). The
+  dry-run listed only the expected files — no `c_admin/extraction.py`, so the
+  unvalidated city filter correctly stayed off. Verified on production: the
+  clientError endpoint returns `{"recorded": true}` and writes a TIMESTAMPED
+  line; `smoke_check.sh` returns rc=0 on all five pages.
+- **Task 3 DONE — the owner's screenshot is fixed.** Dry-run: 176 merges, all
+  by venue anchor, **0 by score** (proving the guard leaves titled pairs
+  alone), well under the 600 stop-threshold. Ran attended. All four
+  `adiosclosetbazar` Sep-4 rows (73653, 75874, 77107, 77684) now collapse to
+  one keeper (78780).
+- **Invariants: my run is clean; three PRE-EXISTING issues found.** The first
+  invariant query was itself wrong — in Django `canonical__name__isnull=True`
+  across a nullable FK also matches rows with NO canonical, inflating "titled
+  behind untitled" from 7 to 37. Corrected numbers, all predating today:
+  * 42 rows suppressed with no canonical — all from Jan/Feb 2025, all still
+    carrying `duplicate_link`, i.e. an older code path.
+  * 7 titled rows hidden behind an untitled keeper — **0 caused by the venue
+    anchor**; all are `exact_link` score-100 collapses, and 6 have an UNDATED
+    keeper, which the anchor cannot produce (it requires equal non-null dates).
+  * 1 canonical chain (69800 -> 69802 -> 70335): the exact pass linked 69800
+    to 69802 after a score-100 fuzzy merge had already suppressed 69802. The
+    final keeper is visible, so the harm is that the recovery tab would name a
+    hidden row as "kept instead". Worth fixing; not urgent.
+- **Owner round 3 (2026-09-02) — built, not yet deployed** (commits 9a63bf3,
+  7958f9d). Measured first: 1,532 of 1,676 pending pairs (91%) were pairs
+  where BOTH events had already happened, and 11 non-events were servable by
+  the date feed. The queue now hides dead pairs and sorts chronologically
+  (undated last); `date_events` and `date_range_events` now apply the same
+  visibility rules as search. Proved `.exclude(is_event=False)` keeps NULL
+  rows — had it not, every unclassified event would have vanished from the
+  site. 191 tests. Local queue 49 -> 5 pairs; 2026-09-11 feed 6 -> 5 rows with
+  the placeholder gone.
