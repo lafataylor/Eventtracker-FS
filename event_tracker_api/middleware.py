@@ -23,6 +23,8 @@ class CustomAuthenticationMiddleware:
             "admin/execution/",
             "admin/runScraper",
             "event/search/",
+            # a page that has just crashed has no session to offer
+            "event/clientError/",
             "event/locations/",
             "event/favorites/add/",
             "event/favorites/remove/",
