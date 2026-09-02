@@ -138,3 +138,45 @@ The smoke check is worthless sitting in the repo.
   rows — had it not, every unclassified event would have vanished from the
   site. 191 tests. Local queue 49 -> 5 pairs; 2026-09-11 feed 6 -> 5 rows with
   the placeholder gone.
+
+## Owner round 3 — DEPLOYED and verified on production (2026-09-02 06:51 UTC)
+Review found the two mechanisms I was most worried about were correct
+(`.exclude(is_event=False)` compiles to the same SQL as `~Q(...)` and keeps
+NULLs; the Coalesce/Least arrangement defeats SQLite's NULL-propagating min),
+and then found two real bugs in the same code, both now fixed and
+mutation-tested:
+- `today` was UTC while the `__date` lookup casts to America/Los_Angeles, so
+  from ~5pm LA a pair whose only upcoming side was TONIGHT dropped out of the
+  queue. The old tests could not have caught it: they anchored on the same
+  wrong clock as the view.
+- Pairs ranked on the EARLIER of two dates even when it had long passed, so
+  the "chronological" queue opened on 2026-01-05.
+
+Production after deploy: **pending queue 1,676 -> 103**, listed chronologically
+from the soonest; the Sep-12 and Sep-19 feeds no longer serve the "event
+placeholder" rows (24 and 29 real events remain); smoke check rc=0.
+
+### Known, not blocking — carry into the next round
+1. Pairs filtered out as past stay `status='pending'` with no surface and no
+   `include_past` switch, and `unique_together` stops them being recreated. A
+   wrongly-dropped past pair is unreachable. Needs either a `?relevance=all`
+   param or a maintenance sweep so `pending` keeps meaning something.
+2. Hiding `is_event=False` from the public feed has no undo: the recovery tab
+   scopes on `Q(is_duplicate=True) | Q(suppressed=True)` only, so a
+   misclassified event cannot be found or restored by the owner. Folding
+   `is_event=False` into that scope is the fix.
+3. Pre-existing dedupe artifacts (all predate today, none caused by the
+   anchor): 42 rows suppressed with no canonical (Jan-Feb 2025 legacy), 7
+   titled rows behind an untitled keeper (all `exact_link` score-100, 6 with
+   an undated keeper), 1 canonical chain from the exact pass colliding with a
+   score-100 fuzzy merge.
+4. `start_date__gte=cutoff_date` passes a `date` under `USE_TZ` in four views,
+   so the "25 hour" cutoff is really 25h +/- 7h. Pre-existing, harmless, worth
+   a cleanup pass.
+5. No index on `start_date`, and `start_date__date=` compiles to a Python UDF
+   called once per scanned row on every public page load (~40ms/query at 55k
+   rows). Pre-existing; a half-open datetime range would fix it.
+6. The admin settings page says "Delete events after: 1 Day" and prod config
+   has `persistence_day_count: 1`, but NOTHING reads it. The owner likely
+   believes old events are being purged. Deleting them is destructive and
+   irreversible - Zain's decision, not mine.
