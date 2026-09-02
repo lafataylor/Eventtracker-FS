@@ -6,7 +6,7 @@ from .serializers import EventSerializer, FeedbackSerializer
 from .ingest import (build_source_key, coerce_int, normalize_poster_name,
                      normalize_text, resolve_venue, upsert_event)
 from django.db import transaction
-from django.db.models import F, Q
+from django.db.models import Case, DateTimeField, F, Q, When
 from django.db.models.functions import Coalesce, Least
 from django.utils import timezone
 
@@ -1194,7 +1194,12 @@ def get_event_matches(request):
         # ("events that have already happened should not be included on the
         # duplicate page", owner). Undated rows never "pass" and are precisely
         # what needs a human, so they stay.
-        today = timezone.now().date()
+        # localdate(), not now().date(): the __date lookup casts the column
+        # to the project timezone (America/Los_Angeles), so a UTC "today"
+        # disagrees with it for the last 7-8 hours of every LA day. Tonight's
+        # events would drop out of the queue from ~5pm onward - exactly when
+        # the owner would sit down to clear duplicates before that night.
+        today = timezone.localdate()
         still_relevant = (Q(event_a__start_date__date__gte=today)
                           | Q(event_b__start_date__date__gte=today)
                           | Q(event_a__start_date__isnull=True)
@@ -1209,9 +1214,24 @@ def get_event_matches(request):
         matches = (visible.filter(status=status)
                    .select_related('event_a', 'event_a__venue', 'event_a__poster',
                                    'event_b', 'event_b__venue', 'event_b__poster')
+                   # Rank on the date that KEPT the pair alive. Sorting by
+                   # the earlier of the two put a pair whose other side is
+                   # eight months past at the very top, so "chronological"
+                   # opened on January - the opposite of what was asked for.
+                   # A Case with no ELSE yields NULL, so a past side simply
+                   # stops counting.
+                   .annotate(
+                       _a_upcoming=Case(
+                           When(event_a__start_date__date__gte=today,
+                                then=F('event_a__start_date')),
+                           output_field=DateTimeField()),
+                       _b_upcoming=Case(
+                           When(event_b__start_date__date__gte=today,
+                                then=F('event_b__start_date')),
+                           output_field=DateTimeField()))
                    .annotate(_soonest=Least(
-                       Coalesce('event_a__start_date', 'event_b__start_date'),
-                       Coalesce('event_b__start_date', 'event_a__start_date')))
+                       Coalesce('_a_upcoming', '_b_upcoming'),
+                       Coalesce('_b_upcoming', '_a_upcoming')))
                    .order_by(F('_soonest').asc(nulls_last=True), 'id')[:limit])
         data = [{
             "match_id": m.id,

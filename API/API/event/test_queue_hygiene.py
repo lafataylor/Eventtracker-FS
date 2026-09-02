@@ -24,7 +24,10 @@ class DuplicateQueueTests(TestCase):
     def setUp(self):
         u = User.objects.create(email='q@test.dev', usertype='admin')
         self.tok = jwt.encode({'id': u.id}, 'secret', algorithm='HS256')
-        self.now = timezone.now()
+        # LOCAL time: the view's __date lookups cast to America/Los_Angeles,
+        # so anchoring these fixtures on UTC would reproduce the view's own
+        # bug and pass regardless of it.
+        self.now = timezone.localtime(timezone.now())
 
     def _ev(self, name, days):
         return Event.objects.create(
@@ -93,6 +96,32 @@ class DuplicateQueueTests(TestCase):
         ids = [m['match_id'] for m in self._get()['matches']]
         self.assertEqual(ids, [soon.id, mid.id, far.id])
 
+    def test_an_event_later_tonight_still_counts_as_upcoming(self):
+        # Regression: `today` was computed in UTC while the SQL cast the
+        # column to LA time, so from ~5pm LA onward a pair whose only live
+        # side was TONIGHT dropped out of the queue - exactly when the owner
+        # would be clearing duplicates before that night's shows.
+        tonight = self.now.replace(hour=23, minute=30, second=0, microsecond=0)
+        a = Event.objects.create(name='Tonight A', start_date=tonight,
+                                 is_event=True, is_duplicate=False,
+                                 suppressed=False)
+        b = Event.objects.create(name='Tonight B', start_date=tonight,
+                                 is_event=True, is_duplicate=False,
+                                 suppressed=False)
+        m = self._pair(a, b)
+        self.assertIn(m.id, [x['match_id'] for x in self._get()['matches']],
+                      "tonight's pair vanished from the queue")
+
+    def test_ordering_ignores_a_side_that_has_already_passed(self):
+        # A pair survives because ONE side is upcoming, but it used to sort by
+        # the earlier of the two - so a pair whose other side was months ago
+        # led the list and "chronological" opened on last January.
+        stale = self._pair(self._ev('Long Past', -240), self._ev('Next Week', 7))
+        soon = self._pair(self._ev('Soon A', 2), self._ev('Soon B', 2))
+        ids = [m['match_id'] for m in self._get()['matches']]
+        self.assertEqual(ids, [soon.id, stale.id],
+                         'a pair kept alive by a future side must rank on '
+                         'that future date, not on its dead one')
 
 class FeedExcludesNonEventsTests(TestCase):
     """The city pages call event/date/ and event/date/range/. Both filtered
