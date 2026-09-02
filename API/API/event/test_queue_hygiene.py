@@ -64,6 +64,28 @@ class DuplicateQueueTests(TestCase):
         m = self._pair(a, b)
         self.assertIn(m.id, [x['match_id'] for x in self._get()['matches']])
 
+    def test_undated_pairs_sort_after_dated_ones(self):
+        # Least() over two nullable dates returns NULL when both are NULL, and
+        # NULLs sort FIRST by default - which would put the least informative
+        # pairs at the top of the owner's queue.
+        undated_a = Event.objects.create(name='U1', is_event=True,
+                                         is_duplicate=False, suppressed=False)
+        undated_b = Event.objects.create(name='U2', is_event=True,
+                                         is_duplicate=False, suppressed=False)
+        undated = self._pair(undated_a, undated_b)
+        dated = self._pair(self._ev('Dated A', 9), self._ev('Dated B', 9))
+        ids = [m['match_id'] for m in self._get()['matches']]
+        self.assertEqual(ids, [dated.id, undated.id])
+
+    def test_half_dated_pair_sorts_by_the_date_it_has(self):
+        far = self._pair(self._ev('Far A', 20), self._ev('Far B', 20))
+        half_a = self._ev('Half A', 2)
+        half_b = Event.objects.create(name='Half B', is_event=True,
+                                      is_duplicate=False, suppressed=False)
+        half = self._pair(half_a, half_b)
+        ids = [m['match_id'] for m in self._get()['matches']]
+        self.assertEqual(ids, [half.id, far.id])
+
     def test_pairs_are_listed_in_chronological_order(self):
         far = self._pair(self._ev('Far A', 30), self._ev('Far B', 30))
         soon = self._pair(self._ev('Soon A', 2), self._ev('Soon B', 2))
