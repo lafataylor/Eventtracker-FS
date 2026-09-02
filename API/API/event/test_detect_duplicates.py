@@ -854,3 +854,63 @@ class AnchorCliqueTests(TestCase):
         self._run()
         b.refresh_from_db()
         self.assertTrue(b.suppressed)
+
+
+class NonEventRecoveryScopeTests(TestCase):
+    """Hiding is_event=False rows from the feeds (2026-09-02) had no undo: no
+    admin surface listed them, so a wrong classifier verdict was invisible and
+    permanent. scope=non_event is that surface, and Restore overrides the
+    verdict — a restore that leaves the row invisible is not a restore."""
+
+    def setUp(self):
+        from c_auth.models import User
+        import jwt
+        u = User.objects.create(email='ne@test.dev', usertype='admin')
+        self.tok = jwt.encode({'id': u.id}, 'secret', algorithm='HS256')
+        self.non_event = Event.objects.create(
+            name='Remodeling Closure', is_event=False,
+            is_duplicate=False, suppressed=False)
+        self.dup = Event.objects.create(
+            name='Old duplicate', is_event=True, is_duplicate=True,
+            suppressed=False)
+
+    def _scope(self, scope):
+        r = self.client.get(f'/v1/event/getDuplicateEvents/?scope={scope}',
+                            HTTP_AUTHORIZATION='Token ' + self.tok).json()
+        return r.get('data') or r
+
+    def test_non_event_scope_lists_only_classification_hides(self):
+        body = self._scope('non_event')
+        names = [e['name'] for e in body['duplicate_events']]
+        self.assertEqual(names, ['Remodeling Closure'])
+        self.assertEqual(body['duplicate_events'][0]['hidden_reason'],
+                         'classified_non_event')
+
+    def test_other_scopes_do_not_leak_non_events(self):
+        for scope in ('flagged', 'merged', 'all'):
+            names = [e['name']
+                     for e in self._scope(scope)['duplicate_events']]
+            self.assertNotIn('Remodeling Closure', names, scope)
+
+    def test_restore_overrides_the_classifier_verdict(self):
+        r = self.client.post('/v1/event/recoverDuplicate/',
+                             {'event_id': str(self.non_event.id)},
+                             content_type='application/json',
+                             HTTP_AUTHORIZATION='Token ' + self.tok)
+        self.assertEqual(r.status_code, 200)
+        self.non_event.refresh_from_db()
+        self.assertTrue(self.non_event.is_event)
+
+    def test_restoring_a_duplicate_does_not_touch_a_true_verdict(self):
+        # clearing duplicate flags must not flip is_event=True rows to
+        # anything else, and must not invent classifications for NULL rows
+        null_row = Event.objects.create(name='Never classified', is_event=None,
+                                        is_duplicate=True, suppressed=False)
+        for row in (self.dup, null_row):
+            self.client.post('/v1/event/recoverDuplicate/',
+                             {'event_id': str(row.id)},
+                             content_type='application/json',
+                             HTTP_AUTHORIZATION='Token ' + self.tok)
+            row.refresh_from_db()
+        self.assertTrue(self.dup.is_event)
+        self.assertIsNone(null_row.is_event)
