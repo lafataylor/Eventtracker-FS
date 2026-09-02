@@ -1205,7 +1205,7 @@ function EventCreate({ isEdit, onClose, account }: EventCreateProps) {
                           ? eventDetailsDialog.event.ticket_link
                           : eventDetailsDialog.event.link_in_bio
                           ? 'https://instagram.com/' +
-                            eventDetailsDialog.event.poster.user.substring(1)
+                            (eventDetailsDialog.event.poster?.user ?? '').substring(1)
                           : eventDetailsDialog.event.ticket_link
                       }
                       target="_blank"

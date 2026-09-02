@@ -164,8 +164,8 @@ const Index = () => {
       let valA: string | number, valB: string | number;
 
       if (field === 'name') {
-        valA = a.user.toLowerCase();
-        valB = b.user.toLowerCase();
+        valA = (a.user ?? '').toLowerCase();
+        valB = (b.user ?? '').toLowerCase();
         return order === 'asc'
           ? valA.localeCompare(valB)
           : valB.localeCompare(valA);
