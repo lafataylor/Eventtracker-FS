@@ -18,7 +18,20 @@
 #   0 * * * * /path/to/scripts/smoke_check.sh >> /tmp/lafaslist_smoke.log 2>&1
 set -uo pipefail
 
+# Scheduled runs execute a COPY at ~/.local/bin/lafaslist_smoke.sh via the
+# LaunchAgent com.lafaslist.smoke — NOT this file. macOS TCC silently blocks
+# cron/launchd from reading anything under ~/Documents ("Operation not
+# permitted"), which is exactly how the first install "worked" when proven by
+# hand and then never ran once on schedule. After editing this file, reinstall:
+#   cp scripts/smoke_check.sh ~/.local/bin/lafaslist_smoke.sh
+# launchd also ships a bare PATH, where Homebrew's `timeout` and agent-browser
+# do not exist; without the next line every page reports NAVIGATION_FAILED.
+export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
+
 BASE="${SMOKE_BASE_URL:-https://lafaslist.com}"
+# --session smoke everywhere below: the default session is where interactive
+# debugging happens, and an hourly cron navigating it away mid-investigation
+# (or being navigated away itself) makes both unreliable.
 PAGES=("/" "/mexico-city/" "/los-angeles/" "/berlin/" "/bali/")
 PER_PAGE_TIMEOUT=60
 FAILED=0
@@ -57,7 +70,7 @@ fi
 EXPECT_HOST=$(printf '%s' "$BASE" | sed -E 's#^https?://##; s#/.*$##; s#:.*$##')
 
 for page in "${PAGES[@]}"; do
-    if ! timeout "$PER_PAGE_TIMEOUT" "$BROWSER" open "${BASE}${page}" >/dev/null 2>&1; then
+    if ! timeout "$PER_PAGE_TIMEOUT" "$BROWSER" --session smoke open "${BASE}${page}" >/dev/null 2>&1; then
         echo "$(date -u '+%Y-%m-%d %H:%M:%S UTC') FAIL ${page} -> NAVIGATION_FAILED"
         FAILED=1
         continue
@@ -66,7 +79,7 @@ for page in "${PAGES[@]}"; do
     # once events arrived, so checking too early would have reported healthy.
     sleep 8
 
-    verdict=$(timeout "$PER_PAGE_TIMEOUT" "$BROWSER" eval \
+    verdict=$(timeout "$PER_PAGE_TIMEOUT" "$BROWSER" --session smoke eval \
         "(() => {
             // Prove we are looking at the page we asked for, not a browser
             // error page and not the PREVIOUS page's DOM.
