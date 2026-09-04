@@ -11,24 +11,43 @@ days from creation instead:
     exact recovery case the owner raised before agreeing to deletion.
 
 What deletion takes with it, deliberately: EventMatch pairs and Feedback rows
-CASCADE; suppressed twins whose canonical is being purged are pulled into the
-same batch, because canonical is SET_NULL and leaving them would recreate the
-orphaned-husk artifact repaired on 2026-09-02. What it must never touch:
+CASCADE; suppressed twins whose canonical is being purged are pulled in (to
+any depth) and deleted FIRST, because canonical is SET_NULL and a keeper
+deleted before its twin leaves a `suppressed, canonical=NULL` husk — the
+artifact class repaired on 2026-09-02 — which a re-run after a mid-run
+failure would then never recognise. What it must never touch:
 BlacklistedLink — that table doubles as the scraper's "already seen" ledger,
 and losing it would re-ingest (and re-bill) every purged post.
 
-DRY RUN by default. --apply refuses unless the newest file in --backup-dir is
-under 26 hours old: if the nightly backup stopped, the purge stops too.
+DRY RUN by default. --apply first writes its OWN consistent copy of the
+database (sqlite3's online backup API, then PRAGMA quick_check) into
+--backup-dir and refuses to delete anything if that copy cannot be made and
+verified, if free disk is under 1.5x the database size, or if the SCRAPER
+wrote a log row in the last 15 minutes. detect_duplicates writes no log
+rows, so it is kept apart by the shared maintenance lock the cron wrappers
+take (flock on /home/ubuntu/lafaslist-db-maint.lock) plus the schedule gap
+(dedupe 03:37, purge 04:10). The real
+disaster-recovery backup is the daily EBS snapshot (DLM policy
+policy-08449f25f08bb03cd, ~07:52 UTC, verified current 2026-09-04); the
+pre-purge copies (two kept) are the fast local undo. An earlier version
+inferred "a backup exists" from the newest file in the directory, so a stray
+zero-byte README counted — flagged in review, replaced.
+
 Deletes happen in batches so the production SQLite's single write lock is
-held for moments, not minutes — the first run clears a ~40k-row backlog.
+held for moments, not minutes — the first run clears a ~41k-row backlog.
+Deleting does not shrink the file (SQLite reuses freed pages; VACUUM is a
+separate, optional step needing free disk equal to the file size).
 """
+import shutil
+import sqlite3
 import sys
+import threading
 import time
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone as dt_timezone
 from pathlib import Path
 
-from django.core.management.base import BaseCommand
-from django.db import transaction
+from django.core.management.base import BaseCommand, CommandError
+from django.db import connection, transaction
 from django.utils import timezone
 
 from event.dedupe import is_sentinel_date
@@ -36,7 +55,12 @@ from event.models import Event
 
 RETENTION_DAYS = 30
 UNDATED_DAYS = 90
-BACKUP_MAX_AGE_HOURS = 26
+PREPURGE_PREFIX = 'db.sqlite3.prepurge-'
+PREPURGE_KEEP = 2            # yesterday's copy survives today's run: 2 x 600 MB
+MIN_FREE_RATIO = 1.5         # of the live database size
+MIN_FREE_BYTES = 50 * 1024 * 1024
+BACKUP_TIMEOUT_S = 600       # a 600 MB copy takes seconds; ten minutes = wedged
+PIPELINE_IDLE_MINUTES = 15   # same rule as the server's deploy preflight
 
 
 class Command(BaseCommand):
@@ -49,29 +73,27 @@ class Command(BaseCommand):
         parser.add_argument('--undated-days', type=int, default=UNDATED_DAYS)
         parser.add_argument('--batch-size', type=int, default=500)
         parser.add_argument('--backup-dir', default='/home/ubuntu/dbBackups',
-                            help='--apply refuses without a fresh backup here.')
+                            help='--apply writes a verified pre-purge copy here first.')
 
-    def handle(self, *args, **opts):
-        apply = opts['apply']
+    # ------------------------------------------------------------ selection
+    def _select(self, retention_days, undated_days):
+        """Return (dated_ids, sentinel_ids, undated_ids, twin_ids).
+
+        Every date comparison is in the project timezone (America/Los_Angeles),
+        the same clock every read path uses, so "30 days past" means the
+        owner's calendar, not UTC's. Sentinel detection therefore uses the
+        LOCAL calendar date too — a UTC date could read Jan 2 for a Jan 1 LA
+        evening and dodge the branch.
+        """
         now_local = timezone.localtime(timezone.now())
-        dated_cutoff = (now_local - timedelta(days=opts['retention_days'])).date()
-        created_cutoff = now_local - timedelta(days=opts['undated_days'])
+        dated_cutoff = (now_local - timedelta(days=retention_days)).date()
+        created_cutoff = now_local - timedelta(days=undated_days)
 
-        if apply:
-            self._require_fresh_backup(opts['backup_dir'])
-        else:
-            self.stdout.write(self.style.WARNING('DRY RUN — no writes.'))
-
-        # Selection. Sentinel-dated rows are pulled OUT of the dated bucket
-        # and judged by age like undated ones (see module docstring); the
-        # date filter is deliberately on __date in local time, matching every
-        # read path, so "30 days past" means the owner's calendar, not UTC's.
-        dated = (Event.objects
-                 .filter(start_date__date__lt=dated_cutoff)
-                 .only('id', 'start_date', 'created_at'))
         dated_ids, sentinel_ids = [], []
-        for e in dated.iterator(chunk_size=2000):
-            if is_sentinel_date(e.start_date.date()):
+        old_dated = (Event.objects.filter(start_date__date__lt=dated_cutoff)
+                     .only('id', 'start_date', 'created_at'))
+        for e in old_dated.iterator(chunk_size=2000):
+            if is_sentinel_date(timezone.localtime(e.start_date).date()):
                 if e.created_at and e.created_at < created_cutoff:
                     sentinel_ids.append(e.id)
             else:
@@ -80,49 +102,212 @@ class Command(BaseCommand):
                            .filter(start_date__isnull=True,
                                    created_at__lt=created_cutoff)
                            .values_list('id', flat=True))
-
         doomed = set(dated_ids) | set(sentinel_ids) | set(undated_ids)
-        # Hidden twins whose keeper is leaving go with it (canonical is
-        # SET_NULL; orphaning them recreates a repaired artifact class).
-        dependents = list(Event.objects
-                          .filter(suppressed=True, canonical_id__in=doomed)
-                          .exclude(id__in=doomed)
-                          .values_list('id', flat=True))
-        doomed |= set(dependents)
+
+        # Suppressed twins of anything doomed, to ANY depth, computed in
+        # Python: an IN (...) list of ~41k ids trips SQLite's bound-variable
+        # limit on stock builds (32,766) — after the backup was written, before
+        # a single delete. The suppressed set is a few thousand rows.
+        by_canonical = {}
+        for row_id, canon_id in (Event.objects
+                                 .filter(suppressed=True, canonical__isnull=False)
+                                 .values_list('id', 'canonical_id')):
+            by_canonical.setdefault(canon_id, []).append(row_id)
+        # Returned DEEPEST level first: a chain K -> M -> L must delete L
+        # before M before K, or a crash between batches leaves whichever twin
+        # outlived its canonical as a husk. Depth order, not id order - M
+        # usually has the lower id.
+        levels, seen, frontier = [], set(), set(doomed)
+        while frontier:
+            found = set()
+            for canon_id in frontier:
+                for row_id in by_canonical.get(canon_id, ()):
+                    if row_id not in doomed and row_id not in seen:
+                        found.add(row_id)
+            if found:
+                levels.append(found)
+                seen |= found
+            frontier = found
+        twins = [i for level in reversed(levels) for i in sorted(level)]
+        return dated_ids, sentinel_ids, undated_ids, twins
+
+    # ------------------------------------------------------------ handle
+    def handle(self, *args, **opts):
+        apply = opts['apply']
+        if apply:
+            self._require_pipeline_idle()
+            self._take_verified_backup(opts['backup_dir'])
+        else:
+            self.stdout.write(self.style.WARNING('DRY RUN — no writes.'))
+
+        dated_ids, sentinel_ids, undated_ids, twins = self._select(
+            opts['retention_days'], opts['undated_days'])
+        doomed = set(dated_ids) | set(sentinel_ids) | set(undated_ids)
 
         self.stdout.write(f'dated past {opts["retention_days"]}d: {len(dated_ids)}')
         self.stdout.write(f'sentinel-dated older than {opts["undated_days"]}d: '
                           f'{len(sentinel_ids)}')
         self.stdout.write(f'undated older than {opts["undated_days"]}d: '
                           f'{len(undated_ids)}')
-        self.stdout.write(f'suppressed twins of the above: {len(dependents)}')
-        self.stdout.write(f'TOTAL to delete: {len(doomed)} of '
+        self.stdout.write(f'suppressed twins of the above: {len(twins)}')
+        self.stdout.write(f'TOTAL to delete: {len(doomed) + len(twins)} of '
                           f'{Event.objects.count()} events')
         if not apply:
             return
 
+        # Twins FIRST, then everything else, each batch atomic: a keeper that
+        # dies before its twin turns the twin into an orphan husk, and if the
+        # run stops there (lock, OOM, SIGTERM) a re-run cannot recognise it.
+        ordered = twins + sorted(doomed)      # twins are disjoint from doomed
         deleted = 0
-        ids = sorted(doomed)
-        for i in range(0, len(ids), opts['batch_size']):
-            batch = ids[i:i + opts['batch_size']]
+        size = opts['batch_size']
+        for i in range(0, len(ordered), size):
+            batch = ordered[i:i + size]
             with transaction.atomic():
-                # order matters inside a batch too: twins before keepers is
-                # not needed (SET_NULL only fires for rows NOT in the batch,
-                # and dependents were pulled in above), but keep each batch
-                # atomic so a crash mid-run never half-deletes a keeper group.
-                n, _ = Event.objects.filter(id__in=batch).delete()
+                Event.objects.filter(id__in=batch).delete()
             deleted += len(batch)
+            self._after_batch(i // size)
         self.stdout.write(self.style.SUCCESS(
             f'deleted {deleted} events (+ cascaded match/feedback rows)'))
 
-    def _require_fresh_backup(self, backup_dir):
-        d = Path(backup_dir)
-        newest = max((f.stat().st_mtime for f in d.glob('*') if f.is_file()),
-                     default=0)
-        age_h = (time.time() - newest) / 3600 if newest else float('inf')
-        if age_h > BACKUP_MAX_AGE_HOURS:
+    def _after_batch(self, index):
+        """Seam for tests that simulate a failure between batches."""
+
+    # ------------------------------------------------------------ guards
+    def _require_pipeline_idle(self):
+        """Refuse while the scraper/dedupe may be writing.
+
+        The SCRAPER writes a Logs row at every step, so a row younger than
+        PIPELINE_IDLE_MINUTES means "still running" — the same rule the
+        server's deploy preflight uses. This guard sees only the scraper:
+        detect_duplicates writes no Logs rows and is kept apart by the cron
+        wrappers' flock plus the schedule gap. No rows at all means nothing
+        ever ran: fine. An unparsable timestamp refuses rather than guesses.
+        """
+        from c_admin.models import Logs
+        last = Logs.objects.order_by('-id').first()
+        if last is None:
+            return
+        stamp = (last.scraped_at or '').strip()
+        try:
+            when = datetime.strptime(stamp, '%Y-%m-%d %H:%M:%S')
+        except ValueError:
             self.stderr.write(self.style.ERROR(
-                f'REFUSING --apply: newest backup in {backup_dir} is '
-                f'{age_h:.0f}h old (limit {BACKUP_MAX_AGE_HOURS}h). If the '
-                f'nightly backup stopped, deletion stops too.'))
+                f'REFUSING --apply: cannot parse the newest pipeline log '
+                f'timestamp {stamp!r}; will not guess whether a scrape is running.'))
             sys.exit(1)
+        age = datetime.now(dt_timezone.utc).replace(tzinfo=None) - when
+        if age < timedelta(minutes=PIPELINE_IDLE_MINUTES):
+            self.stderr.write(self.style.ERROR(
+                f'REFUSING --apply: pipeline wrote a log row '
+                f'{int(age.total_seconds() // 60)} min ago; a scrape or dedupe '
+                f'may be running and the backup would restart forever.'))
+            sys.exit(1)
+
+    def _live_db_path(self):
+        return str(connection.settings_dict.get('NAME') or '')
+
+    def _run_backup(self, src, dst):
+        # pages=-1: the whole copy in ONE step under one SHARED lock. Chunked
+        # steps restart from zero on every external commit and, measured,
+        # never finish under a writer committing every 250 ms.
+        #
+        # The honest cost: gunicorn has SQLite's default 5 s busy timeout, so
+        # a write arriving during the 5-20 s copy does not wait it out - it
+        # takes PENDING, fails after 5 s with "database is locked" (an HTTP
+        # 500 for that one request), and while it holds PENDING no new reader
+        # on any worker is admitted, so reads stall up to 5 s. Do NOT raise
+        # the timeout to "fix" this: a longer wait stretches the site-wide
+        # read stall to the whole copy. The 04:10 UTC slot (21:10 LA) keeps
+        # the exposure to a stray feedback or favourite write.
+        src.backup(dst, pages=-1)
+
+    def _take_verified_backup(self, backup_dir):
+        """Write a consistent copy of the live database, verify it, rotate.
+
+        Uses sqlite3's online backup API from a FRESH standalone connection
+        (always autocommit), never from Django's: Connection.backup() waits
+        forever when its own connection holds an open write transaction,
+        which hung the test suite on 2026-09-04 and would hang the cron in
+        silence if any caller wrapped this in transaction.atomic(). Hence the
+        guard and the wall-clock bound. Refuses (exit 1), cleaning up any
+        partial file, rather than deleting anything.
+        """
+        if connection.in_atomic_block:
+            raise CommandError('purge_past_events must run outside a '
+                               'transaction: an open write transaction makes '
+                               'the backup wait forever')
+        d = Path(backup_dir)
+        d.mkdir(parents=True, exist_ok=True)
+        live_name = self._live_db_path()
+        live = Path(live_name)
+        live_size = live.stat().st_size if live.is_file() else 0
+
+        required = max(int(MIN_FREE_RATIO * live_size), MIN_FREE_BYTES)
+        free = shutil.disk_usage(d).free
+        if free < required:
+            self.stderr.write(self.style.ERROR(
+                f'REFUSING --apply: {free // 2**20} MB free in {d}, need '
+                f'{required // 2**20} MB for a pre-purge copy of a '
+                f'{live_size // 2**20} MB database.'))
+            sys.exit(1)
+
+        # A hard kill mid-copy (OOM, SIGKILL) leaves prepurge-<ts> plus its
+        # -journal; left alone they would sort as the newest copies and push
+        # yesterday's GOOD copy out of rotation. Clear any such debris first.
+        for journal in d.glob(PREPURGE_PREFIX + '*-journal'):
+            Path(str(journal)[:-len('-journal')]).unlink(missing_ok=True)
+            journal.unlink(missing_ok=True)
+
+        dest = d / f"{PREPURGE_PREFIX}{time.strftime('%Y%m%d-%H%M%S')}"
+        outcome = {}
+
+        def copy():
+            try:
+                src = sqlite3.connect(live_name, uri=live_name.startswith('file:'),
+                                      check_same_thread=False)
+                dst = sqlite3.connect(str(dest), check_same_thread=False)
+                try:
+                    self._run_backup(src, dst)
+                    outcome['verdict'] = dst.execute('PRAGMA quick_check').fetchone()[0]
+                finally:
+                    dst.close(); src.close()
+            except Exception as exc:          # reported, never swallowed
+                outcome['error'] = f'{type(exc).__name__}: {exc}'
+
+        worker = threading.Thread(target=copy, daemon=True)
+        worker.start()
+        worker.join(BACKUP_TIMEOUT_S)
+
+        def discard():
+            dest.unlink(missing_ok=True)
+            Path(str(dest) + '-journal').unlink(missing_ok=True)
+
+        if worker.is_alive():
+            discard()
+            self.stderr.write(self.style.ERROR(
+                f'REFUSING --apply: pre-purge copy did not finish in '
+                f'{BACKUP_TIMEOUT_S}s — something keeps writing to the database.'))
+            sys.exit(1)
+        if 'error' in outcome:
+            discard()
+            self.stderr.write(self.style.ERROR(
+                f'REFUSING --apply: pre-purge copy failed: {outcome["error"]}'))
+            sys.exit(1)
+        verdict = outcome.get('verdict')
+        size = dest.stat().st_size if dest.exists() else 0
+        if verdict != 'ok' or size == 0 or (live_size and size < 0.9 * live_size):
+            discard()
+            self.stderr.write(self.style.ERROR(
+                f'REFUSING --apply: pre-purge copy failed verification '
+                f'(quick_check={verdict!r}, size={size}, live={live_size}).'))
+            sys.exit(1)
+
+        copies = sorted((p for p in d.glob(PREPURGE_PREFIX + '*')
+                         if not p.name.endswith('-journal')),
+                        key=lambda p: p.stat().st_mtime, reverse=True)
+        for old in copies[PREPURGE_KEEP:]:
+            old.unlink()
+        self.stdout.write(f'pre-purge copy: {dest} ({size // 2**20} MB, '
+                          f'quick_check ok); kept {min(len(copies), PREPURGE_KEEP)}')
+        return dest
