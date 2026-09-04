@@ -22,9 +22,11 @@ and losing it would re-ingest (and re-bill) every purged post.
 DRY RUN by default. --apply first writes its OWN consistent copy of the
 database (sqlite3's online backup API, then PRAGMA quick_check) into
 --backup-dir and refuses to delete anything if that copy cannot be made and
-verified, if free disk is under 1.5x the database size, or if the pipeline
-wrote a log row in the last 15 minutes (a scrape or dedupe in flight would
-make the copy restart forever — see _take_verified_backup). The real
+verified, if free disk is under 1.5x the database size, or if the SCRAPER
+wrote a log row in the last 15 minutes. detect_duplicates writes no log
+rows, so it is kept apart by the shared maintenance lock the cron wrappers
+take (flock on /home/ubuntu/lafaslist-db-maint.lock) plus the schedule gap
+(dedupe 03:37, purge 04:10). The real
 disaster-recovery backup is the daily EBS snapshot (DLM policy
 policy-08449f25f08bb03cd, ~07:52 UTC, verified current 2026-09-04); the
 pre-purge copies (two kept) are the fast local undo. An earlier version
@@ -41,7 +43,7 @@ import sqlite3
 import sys
 import threading
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone as dt_timezone
 from pathlib import Path
 
 from django.core.management.base import BaseCommand, CommandError
@@ -58,7 +60,7 @@ PREPURGE_KEEP = 2            # yesterday's copy survives today's run: 2 x 600 MB
 MIN_FREE_RATIO = 1.5         # of the live database size
 MIN_FREE_BYTES = 50 * 1024 * 1024
 BACKUP_TIMEOUT_S = 600       # a 600 MB copy takes seconds; ten minutes = wedged
-PIPELINE_IDLE_MINUTES = 15   # same rule as misc/preflight.sh
+PIPELINE_IDLE_MINUTES = 15   # same rule as the server's deploy preflight
 
 
 class Command(BaseCommand):
@@ -111,16 +113,23 @@ class Command(BaseCommand):
                                  .filter(suppressed=True, canonical__isnull=False)
                                  .values_list('id', 'canonical_id')):
             by_canonical.setdefault(canon_id, []).append(row_id)
-        twins, frontier = set(), set(doomed)
+        # Returned DEEPEST level first: a chain K -> M -> L must delete L
+        # before M before K, or a crash between batches leaves whichever twin
+        # outlived its canonical as a husk. Depth order, not id order - M
+        # usually has the lower id.
+        levels, seen, frontier = [], set(), set(doomed)
         while frontier:
             found = set()
             for canon_id in frontier:
                 for row_id in by_canonical.get(canon_id, ()):
-                    if row_id not in doomed and row_id not in twins:
+                    if row_id not in doomed and row_id not in seen:
                         found.add(row_id)
-            twins |= found
+            if found:
+                levels.append(found)
+                seen |= found
             frontier = found
-        return dated_ids, sentinel_ids, undated_ids, sorted(twins)
+        twins = [i for level in reversed(levels) for i in sorted(level)]
+        return dated_ids, sentinel_ids, undated_ids, twins
 
     # ------------------------------------------------------------ handle
     def handle(self, *args, **opts):
@@ -149,7 +158,7 @@ class Command(BaseCommand):
         # Twins FIRST, then everything else, each batch atomic: a keeper that
         # dies before its twin turns the twin into an orphan husk, and if the
         # run stops there (lock, OOM, SIGTERM) a re-run cannot recognise it.
-        ordered = twins + sorted(doomed - set(twins))
+        ordered = twins + sorted(doomed)      # twins are disjoint from doomed
         deleted = 0
         size = opts['batch_size']
         for i in range(0, len(ordered), size):
@@ -168,11 +177,12 @@ class Command(BaseCommand):
     def _require_pipeline_idle(self):
         """Refuse while the scraper/dedupe may be writing.
 
-        The online backup restarts from page zero whenever another PROCESS
-        commits between steps; under a steady writer it never finishes.
-        The pipeline writes a Logs row at every step, so a row younger than
+        The SCRAPER writes a Logs row at every step, so a row younger than
         PIPELINE_IDLE_MINUTES means "still running" — the same rule the
-        deploy preflight uses. No rows at all means nothing ever ran: fine.
+        server's deploy preflight uses. This guard sees only the scraper:
+        detect_duplicates writes no Logs rows and is kept apart by the cron
+        wrappers' flock plus the schedule gap. No rows at all means nothing
+        ever ran: fine. An unparsable timestamp refuses rather than guesses.
         """
         from c_admin.models import Logs
         last = Logs.objects.order_by('-id').first()
@@ -186,7 +196,7 @@ class Command(BaseCommand):
                 f'REFUSING --apply: cannot parse the newest pipeline log '
                 f'timestamp {stamp!r}; will not guess whether a scrape is running.'))
             sys.exit(1)
-        age = datetime.utcnow() - when
+        age = datetime.now(dt_timezone.utc).replace(tzinfo=None) - when
         if age < timedelta(minutes=PIPELINE_IDLE_MINUTES):
             self.stderr.write(self.style.ERROR(
                 f'REFUSING --apply: pipeline wrote a log row '
@@ -200,9 +210,16 @@ class Command(BaseCommand):
     def _run_backup(self, src, dst):
         # pages=-1: the whole copy in ONE step under one SHARED lock. Chunked
         # steps restart from zero on every external commit and, measured,
-        # never finish under a writer committing every 250 ms. The cost is
-        # that a concurrent COMMIT waits for the copy (seconds); the idle
-        # guard above keeps that window to stray admin writes at 04:00.
+        # never finish under a writer committing every 250 ms.
+        #
+        # The honest cost: gunicorn has SQLite's default 5 s busy timeout, so
+        # a write arriving during the 5-20 s copy does not wait it out - it
+        # takes PENDING, fails after 5 s with "database is locked" (an HTTP
+        # 500 for that one request), and while it holds PENDING no new reader
+        # on any worker is admitted, so reads stall up to 5 s. Do NOT raise
+        # the timeout to "fix" this: a longer wait stretches the site-wide
+        # read stall to the whole copy. The 04:10 UTC slot (21:10 LA) keeps
+        # the exposure to a stray feedback or favourite write.
         src.backup(dst, pages=-1)
 
     def _take_verified_backup(self, backup_dir):
@@ -234,6 +251,13 @@ class Command(BaseCommand):
                 f'{required // 2**20} MB for a pre-purge copy of a '
                 f'{live_size // 2**20} MB database.'))
             sys.exit(1)
+
+        # A hard kill mid-copy (OOM, SIGKILL) leaves prepurge-<ts> plus its
+        # -journal; left alone they would sort as the newest copies and push
+        # yesterday's GOOD copy out of rotation. Clear any such debris first.
+        for journal in d.glob(PREPURGE_PREFIX + '*-journal'):
+            Path(str(journal)[:-len('-journal')]).unlink(missing_ok=True)
+            journal.unlink(missing_ok=True)
 
         dest = d / f"{PREPURGE_PREFIX}{time.strftime('%Y%m%d-%H%M%S')}"
         outcome = {}
@@ -279,7 +303,8 @@ class Command(BaseCommand):
                 f'(quick_check={verdict!r}, size={size}, live={live_size}).'))
             sys.exit(1)
 
-        copies = sorted(d.glob(PREPURGE_PREFIX + '*'),
+        copies = sorted((p for p in d.glob(PREPURGE_PREFIX + '*')
+                         if not p.name.endswith('-journal')),
                         key=lambda p: p.stat().st_mtime, reverse=True)
         for old in copies[PREPURGE_KEEP:]:
             old.unlink()

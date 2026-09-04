@@ -70,7 +70,9 @@ class PurgeSelectionTests(TransactionTestCase):
         # Jan 1 is the extractor's could-not-read-the-date fallback: possibly
         # an UPCOMING event with a misread date - the owner's own edge case -
         # so it gets the 90-day-from-creation clock, not the dated one.
-        jan1 = timezone.datetime(self.now.year, 1, 1, 12, 0,
+        # LAST year's Jan 1: this year's is not yet 30 days past during
+        # January, which made the "gone" assertion vacuous for a month
+        jan1 = timezone.datetime(self.now.year - 1, 1, 1, 12, 0,
                                  tzinfo=self.now.tzinfo)
         kept = Event.objects.create(name='sentinel recent', start_date=jan1,
                                     is_event=True, is_duplicate=False,
@@ -219,6 +221,56 @@ class PurgeSelectionTests(TransactionTestCase):
         self.assertEqual(Event.objects.filter(suppressed=True,
                                               canonical__isnull=True).count(), 0)
 
+    def test_a_crash_inside_a_chain_leaves_no_husk_either(self):
+        # review round 3: twins were ordered by id, so mid could die before
+        # leaf in a chain K -> M -> L; deepest level must go first
+        from unittest import mock
+        from event.management.commands.purge_past_events import Command
+        keeper = self._ev('old keeper', days_past=40)
+        mid = self._ev('mid twin', created_days_ago=3, suppressed=True,
+                       is_duplicate=True, canonical=keeper)
+        leaf = self._ev('leaf twin', created_days_ago=3, suppressed=True,
+                        is_duplicate=True, canonical=mid)
+        self.assertLess(mid.id, leaf.id)
+
+        def die_after_first_batch(self_, index):
+            if index == 0:
+                raise RuntimeError('simulated crash')
+        with mock.patch.object(Command, '_after_batch', die_after_first_batch):
+            with self.assertRaises(RuntimeError):
+                self._run(apply=True, batch_size=1)
+        self.assertFalse(Event.objects.filter(id=leaf.id).exists())
+        self.assertTrue(Event.objects.filter(id=mid.id).exists())
+        self.assertTrue(Event.objects.filter(id=keeper.id).exists())
+        self.assertEqual(Event.objects.filter(suppressed=True,
+                                              canonical__isnull=True).count(), 0)
+
+    def test_a_dead_partial_copy_does_not_evict_yesterdays_good_copy(self):
+        import os
+        d = _fresh_backup_dir()
+        good = Path(d, 'db.sqlite3.prepurge-20260101-000000'); good.write_bytes(b'good')
+        t = time.time() - 86400; os.utime(good, (t, t))
+        # a hard kill mid-copy leaves the base file AND its journal, "newer"
+        # than the good copy
+        Path(d, 'db.sqlite3.prepurge-20260102-000000').write_bytes(b'partial')
+        Path(d, 'db.sqlite3.prepurge-20260102-000000-journal').write_bytes(b'j')
+        self._ev('purgeable', days_past=45)
+        self._run(apply=True, backup_dir=d)
+        names = sorted(p.name for p in Path(d).glob('db.sqlite3.prepurge-*'))
+        self.assertEqual(len(names), 2)
+        self.assertIn('db.sqlite3.prepurge-20260101-000000', names)
+        self.assertFalse(any('20260102' in n for n in names))
+        self.assertFalse(any(n.endswith('-journal') for n in names))
+
+    def test_an_unparsable_pipeline_timestamp_refuses(self):
+        from c_admin.models import Logs
+        Logs.objects.create(status='x', scraped_at=None)
+        self._ev('purgeable', days_past=45)
+        with self.assertRaises(SystemExit):
+            call_command('purge_past_events', '--apply',
+                         backup_dir=_fresh_backup_dir(), stdout=StringIO())
+        self.assertTrue(Event.objects.filter(name='purgeable').exists())
+
     def test_refuses_while_the_pipeline_is_writing(self):
         from c_admin.models import Logs
         Logs.objects.create(status='Step Completed',
@@ -284,7 +336,7 @@ class PurgeSelectionTests(TransactionTestCase):
         # miss the sentinel branch and purge the row 30 days after Jan 1
         import zoneinfo
         la = zoneinfo.ZoneInfo('America/Los_Angeles')
-        jan1_evening = timezone.datetime(self.now.year, 1, 1, 20, 0, tzinfo=la)
+        jan1_evening = timezone.datetime(self.now.year - 1, 1, 1, 20, 0, tzinfo=la)
         kept = Event.objects.create(name='sentinel evening', start_date=jan1_evening,
                                     is_event=True, is_duplicate=False,
                                     suppressed=False)

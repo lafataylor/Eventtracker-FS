@@ -11,6 +11,12 @@
 # manage.py command needs SOME value; nothing here calls OpenAI.
 cd /home/ubuntu/EventTracker-API/API || exit 1
 
+# Shared maintenance lock with run_dedupe.sh: the purge's idle guard sees the
+# scraper's log rows but detect_duplicates writes none, so if dedupe overran
+# into this slot its commit would die "database is locked" against the copy.
+exec 9>/home/ubuntu/lafaslist-db-maint.lock
+flock -n 9 || { echo "$(date -u '+%F %T') UTC skipped: another maintenance job holds the lock"; exit 1; }
+
 LOG=/home/ubuntu/EventTracker-API/API/logs/purge.log
 exec >> "$LOG" 2>&1
 echo "===== $(date -u '+%Y-%m-%d %H:%M:%S') UTC purge starting ====="
