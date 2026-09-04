@@ -12,19 +12,20 @@ from io import StringIO
 from pathlib import Path
 
 from django.core.management import call_command
-from django.test import TestCase
+from django.test import TransactionTestCase
 from django.utils import timezone
 
 from event.models import BlacklistedLink, Event, EventMatch, Feedback, Venue
 
 
 def _fresh_backup_dir():
-    d = tempfile.mkdtemp()
-    Path(d, 'db-backup-now.sqlite3.gz').write_bytes(b'x')
-    return d
+    return tempfile.mkdtemp()
 
 
-class PurgeSelectionTests(TestCase):
+class PurgeSelectionTests(TransactionTestCase):
+    # TransactionTestCase on purpose: TestCase wraps each test in an open
+    # write transaction, and sqlite3's backup API waits forever behind one.
+    # These tests must run the way the cron does - autocommit.
     def setUp(self):
         self.now = timezone.localtime(timezone.now())
 
@@ -124,17 +125,71 @@ class PurgeSelectionTests(TestCase):
             're-ingests the post')
         self.assertTrue(Event.objects.filter(id=kept.id).exists())
 
-    def test_apply_refuses_without_a_fresh_backup(self):
+    def test_apply_writes_a_verified_copy_that_still_holds_the_purged_row(self):
+        # the copy is taken BEFORE deletion, so it is the undo for this run
+        import sqlite3
+        gone = self._ev('about to be purged', days_past=45)
+        d = _fresh_backup_dir()
+        self._run(apply=True, backup_dir=d)
+        copies = sorted(Path(d).glob('db.sqlite3.prepurge-*'))
+        self.assertEqual(len(copies), 1)
+        self.assertFalse(Event.objects.filter(id=gone.id).exists())
+        con = sqlite3.connect(str(copies[0]))
+        try:
+            self.assertEqual(con.execute('PRAGMA quick_check').fetchone()[0], 'ok')
+            held = con.execute('SELECT COUNT(*) FROM event_event WHERE id=?',
+                               (gone.id,)).fetchone()[0]
+        finally:
+            con.close()
+        self.assertEqual(held, 1, 'the pre-purge copy must contain the row '
+                                  'that was then deleted')
+
+    def test_apply_refuses_when_disk_is_short_and_deletes_nothing(self):
+        import collections
+        from unittest import mock
         self._ev('purgeable', days_past=45)
-        stale_dir = tempfile.mkdtemp()
-        p = Path(stale_dir, 'db-old.gz'); p.write_bytes(b'x')
-        two_days_ago = time.time() - 2 * 86400
+        Usage = collections.namedtuple('usage', 'total used free')
+        with mock.patch('shutil.disk_usage',
+                        return_value=Usage(10**12, 10**12 - 2**20, 2**20)):
+            with self.assertRaises(SystemExit):
+                call_command('purge_past_events', '--apply',
+                             backup_dir=_fresh_backup_dir(), stdout=StringIO())
+        self.assertTrue(Event.objects.filter(name='purgeable').exists())
+
+    def test_prepurge_copies_rotate_to_one(self):
         import os
-        os.utime(p, (two_days_ago, two_days_ago))
-        out = StringIO()
-        with self.assertRaises(SystemExit):
-            call_command('purge_past_events', '--apply',
-                         backup_dir=stale_dir, stdout=out)
+        d = _fresh_backup_dir()
+        for i, name in enumerate(('db.sqlite3.prepurge-20260101-000000',
+                                  'db.sqlite3.prepurge-20260102-000000')):
+            p = Path(d, name); p.write_bytes(b'old')
+            t = time.time() - (10 - i) * 86400
+            os.utime(p, (t, t))
+        self._ev('purgeable', days_past=45)
+        self._run(apply=True, backup_dir=d)
+        remaining = sorted(Path(d).glob('db.sqlite3.prepurge-*'))
+        self.assertEqual(len(remaining), 1)
+        self.assertNotIn('20260101', remaining[0].name)
+        self.assertNotIn('20260102', remaining[0].name)
+
+    def test_a_stray_file_in_the_backup_dir_is_not_mistaken_for_a_backup(self):
+        # review finding: the previous check accepted ANY newest file as proof
+        # of a backup; now the command always writes and verifies its own
+        d = _fresh_backup_dir()
+        Path(d, 'README').write_bytes(b'')
+        self._ev('purgeable', days_past=45)
+        self._run(apply=True, backup_dir=d)
+        self.assertEqual(len(list(Path(d).glob('db.sqlite3.prepurge-*'))), 1)
+
+    def test_refuses_inside_a_transaction_instead_of_hanging(self):
+        # the failure mode that hung this suite: an open write transaction on
+        # the source makes sqlite3.backup() retry BUSY forever
+        from django.core.management import CommandError
+        from django.db import transaction
+        self._ev('purgeable', days_past=45)
+        with self.assertRaises(CommandError):
+            with transaction.atomic():
+                call_command('purge_past_events', '--apply',
+                             backup_dir=_fresh_backup_dir(), stdout=StringIO())
         self.assertTrue(Event.objects.filter(name='purgeable').exists())
 
     def test_batching_deletes_everything(self):
