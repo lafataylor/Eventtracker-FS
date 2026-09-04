@@ -202,3 +202,34 @@ placeholder" rows (24 and 29 real events remain); smoke check rc=0.
   production. 198 API tests, tsc rc=0, builds rc=0, smoke rc=0.
 - Still parked on decisions: past-event purge (needs Lafayette's retention
   number + Zain's OK), served-city filter validation (~3 OpenAI calls).
+
+## 2026-09-04 — retention purge: built, reviewed twice, rehearsed; first run gated
+- Owner chose 1 day; talked up to 30 (misread dates are the pipeline's
+  best-documented failure) — he agreed. Undated + Jan-1 sentinel rows: 90 days
+  from creation.
+- **Disk incident, mine:** six 1.1 G FE rollback dirs from my deploys (script
+  never rotated them) took the disk to 92%/2.8 G, under preflight's 3 G floor.
+  Freed to 70%/9.3 G; deploy_fe.sh now keeps one rollback. Long-term consumer
+  is API/posters: 204k local images, 8.7 G, +~600/night, referenced by
+  nothing (0 orig_thumb rows, nginx does not serve them). 191k >30 d = 6.1 G.
+  **Deleting them needs Zain's OK** (proposal: nightly `find -mtime +30 -delete`
+  alongside the purge).
+- Backup truth: NO nightly file backup exists; dbBackups holds deploy
+  snapshots only. Real DR = daily EBS snapshot (DLM policy-08449f25f08bb03cd,
+  ~07:52 UTC, verified current via aws describe-snapshots).
+- Purge now writes its own verified copy (online backup API, quick_check,
+  size sanity, keep 2, 1.5x free-disk check), from a standalone connection in
+  a bounded thread, guarded against atomic blocks (sqlite3.backup waits
+  FOREVER behind an open write txn — hung the suite; would have hung the cron
+  silently). Review round 2 fixed: single-step copy + pipeline-idle guard
+  (chunked copy livelocks under a writer), twins deleted before keepers
+  (SET_NULL husk on mid-run failure), no 41k-element IN lists (SQLite
+  variable limit), chain-depth twins, local-date sentinel check. 19 purge
+  tests / 217 total. Rehearsed for real on the local prod copy (41,607 rows,
+  4.6 s, invariants clean, site renders) and as a no-op night.
+- Prod dry-run: **41,531 of 61,236**. Deployed code on server is the OLDER
+  build (before both review rounds) — do NOT run --apply until main is
+  re-deployed (next window 03:00 UTC).
+- Cron wrapper versioned at scripts/server/run_purge.sh (04:10 UTC slot);
+  install only after the attended first run.
+- Verification review of the round-2 fixes in flight at time of writing.
