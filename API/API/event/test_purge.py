@@ -156,7 +156,7 @@ class PurgeSelectionTests(TransactionTestCase):
                              backup_dir=_fresh_backup_dir(), stdout=StringIO())
         self.assertTrue(Event.objects.filter(name='purgeable').exists())
 
-    def test_prepurge_copies_rotate_to_one(self):
+    def test_prepurge_copies_rotate_to_two(self):
         import os
         d = _fresh_backup_dir()
         for i, name in enumerate(('db.sqlite3.prepurge-20260101-000000',
@@ -167,9 +167,10 @@ class PurgeSelectionTests(TransactionTestCase):
         self._ev('purgeable', days_past=45)
         self._run(apply=True, backup_dir=d)
         remaining = sorted(Path(d).glob('db.sqlite3.prepurge-*'))
-        self.assertEqual(len(remaining), 1)
-        self.assertNotIn('20260101', remaining[0].name)
-        self.assertNotIn('20260102', remaining[0].name)
+        # yesterday's copy must survive today's run: the undo window for the
+        # 41k-row first run is not one day
+        self.assertEqual(len(remaining), 2)
+        self.assertFalse(any('20260101' in p.name for p in remaining))
 
     def test_a_stray_file_in_the_backup_dir_is_not_mistaken_for_a_backup(self):
         # review finding: the previous check accepted ANY newest file as proof
@@ -179,6 +180,116 @@ class PurgeSelectionTests(TransactionTestCase):
         self._ev('purgeable', days_past=45)
         self._run(apply=True, backup_dir=d)
         self.assertEqual(len(list(Path(d).glob('db.sqlite3.prepurge-*'))), 1)
+
+    def test_twins_are_deleted_before_keepers_so_a_crash_leaves_no_husk(self):
+        # review finding: ids were deleted in id order, so a keeper could die
+        # in an earlier batch than its twin; SET_NULL then left the twin a
+        # `suppressed, canonical=NULL` husk that a re-run cannot recognise.
+        from unittest import mock
+        from event.management.commands.purge_past_events import Command
+        keeper = self._ev('old keeper', days_past=40)          # lower id
+        twin = self._ev('hidden twin', created_days_ago=5,     # higher id
+                        suppressed=True, is_duplicate=True, canonical=keeper)
+        self.assertLess(keeper.id, twin.id)
+
+        def die_after_first_batch(self_, index):
+            if index == 0:
+                raise RuntimeError('simulated crash between batches')
+        with mock.patch.object(Command, '_after_batch', die_after_first_batch):
+            with self.assertRaises(RuntimeError):
+                self._run(apply=True, batch_size=1)
+        # batch 0 was the twin, not the keeper; nothing is orphaned
+        self.assertFalse(Event.objects.filter(id=twin.id).exists())
+        self.assertTrue(Event.objects.filter(id=keeper.id).exists())
+        self.assertEqual(Event.objects.filter(suppressed=True,
+                                              canonical__isnull=True).count(), 0)
+        # and a re-run finishes the job
+        self._run(apply=True)
+        self.assertFalse(Event.objects.filter(id=keeper.id).exists())
+
+    def test_twin_chains_are_pulled_in_to_any_depth(self):
+        keeper = self._ev('old keeper', days_past=40)
+        mid = self._ev('mid twin', created_days_ago=3, suppressed=True,
+                       is_duplicate=True, canonical=keeper)
+        leaf = self._ev('leaf twin', created_days_ago=3, suppressed=True,
+                        is_duplicate=True, canonical=mid)
+        self._run(apply=True)
+        for e in (keeper, mid, leaf):
+            self.assertFalse(Event.objects.filter(id=e.id).exists())
+        self.assertEqual(Event.objects.filter(suppressed=True,
+                                              canonical__isnull=True).count(), 0)
+
+    def test_refuses_while_the_pipeline_is_writing(self):
+        from c_admin.models import Logs
+        Logs.objects.create(status='Step Completed',
+                            scraped_at=timezone.now().strftime('%Y-%m-%d %H:%M:%S'))
+        self._ev('purgeable', days_past=45)
+        with self.assertRaises(SystemExit):
+            call_command('purge_past_events', '--apply',
+                         backup_dir=_fresh_backup_dir(), stdout=StringIO())
+        self.assertTrue(Event.objects.filter(name='purgeable').exists())
+
+    def test_runs_once_the_pipeline_has_been_idle(self):
+        from c_admin.models import Logs
+        old = timezone.now() - timedelta(hours=3)
+        Logs.objects.create(status='Completed',
+                            scraped_at=old.strftime('%Y-%m-%d %H:%M:%S'))
+        gone = self._ev('purgeable', days_past=45)
+        self._run(apply=True)
+        self.assertFalse(Event.objects.filter(id=gone.id).exists())
+
+    def test_backup_timeout_refuses_and_leaves_no_partial_file(self):
+        from unittest import mock
+        from event.management.commands import purge_past_events as mod
+        d = _fresh_backup_dir()
+        self._ev('purgeable', days_past=45)
+        def slow(self_, src, dst):
+            time.sleep(1.0)
+        with mock.patch.object(mod, 'BACKUP_TIMEOUT_S', 0.05), \
+             mock.patch.object(mod.Command, '_run_backup', slow):
+            with self.assertRaises(SystemExit):
+                call_command('purge_past_events', '--apply', backup_dir=d,
+                             stdout=StringIO())
+        self.assertEqual(list(Path(d).glob('db.sqlite3.prepurge-*')), [])
+        self.assertTrue(Event.objects.filter(name='purgeable').exists())
+
+    def test_refuses_when_free_disk_is_under_1_5x_the_database(self):
+        # exercised against a real FILE database: in the suite the live DB
+        # is in-memory, so live_size is 0 and only the 50 MB floor fires
+        import collections, sqlite3
+        from unittest import mock
+        from event.management.commands.purge_past_events import Command
+        big = Path(tempfile.mkdtemp(), 'live.sqlite3')
+        con = sqlite3.connect(str(big))
+        con.execute('CREATE TABLE t(x)')
+        con.executemany('INSERT INTO t VALUES (?)', [('x' * 1000,)] * 2000)
+        con.commit(); con.close()
+        live_size = big.stat().st_size
+        Usage = collections.namedtuple('usage', 'total used free')
+        self._ev('purgeable', days_past=45)
+        from event.management.commands import purge_past_events as mod
+        # zero the absolute floor so the RATIO is the binding constraint; the
+        # floor has its own test
+        with mock.patch.object(Command, '_live_db_path', lambda self_: str(big)), \
+             mock.patch.object(mod, 'MIN_FREE_BYTES', 0), \
+             mock.patch('shutil.disk_usage',
+                        return_value=Usage(10**12, 0, int(1.2 * live_size))):
+            with self.assertRaises(SystemExit):
+                call_command('purge_past_events', '--apply',
+                             backup_dir=_fresh_backup_dir(), stdout=StringIO())
+        self.assertTrue(Event.objects.filter(name='purgeable').exists())
+
+    def test_sentinel_is_judged_on_the_local_calendar_date(self):
+        # a Jan-1 evening in LA is Jan 2 in UTC; judging on the UTC date would
+        # miss the sentinel branch and purge the row 30 days after Jan 1
+        import zoneinfo
+        la = zoneinfo.ZoneInfo('America/Los_Angeles')
+        jan1_evening = timezone.datetime(self.now.year, 1, 1, 20, 0, tzinfo=la)
+        kept = Event.objects.create(name='sentinel evening', start_date=jan1_evening,
+                                    is_event=True, is_duplicate=False,
+                                    suppressed=False)
+        self._run(apply=True)
+        self.assertTrue(Event.objects.filter(id=kept.id).exists())
 
     def test_refuses_inside_a_transaction_instead_of_hanging(self):
         # the failure mode that hung this suite: an open write transaction on
