@@ -75,6 +75,15 @@ class Event(models.Model):
         'self', on_delete=models.SET_NULL, null=True, blank=True, related_name='variants')
     suppressed = models.BooleanField(default=False, db_index=True)
 
+    class Meta:
+        indexes = [
+            # Every public feed filters on start_date (day, range, 25h cutoff).
+            # Declared here rather than as db_index=True: on SQLite Django
+            # applies a db_index change by rebuilding the whole table, while
+            # AddIndex is a plain CREATE INDEX on the live production database.
+            models.Index(fields=['start_date'], name='event_start_date_idx'),
+        ]
+
 
 class EventMatch(models.Model):
     """A candidate duplicate pair, surfaced for side-by-side owner review.
