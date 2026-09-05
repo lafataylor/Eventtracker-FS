@@ -2,7 +2,6 @@ import React, { useEffect, useState } from 'react';
 import AdminSideBar from '../../../components/Admin/AdminSideBar';
 
 import Scrollbars from 'react-custom-scrollbars-2';
-import Select from 'react-select';
 import {
   Account,
   KeywordColActivations,
@@ -37,14 +36,6 @@ import {
   showActionDialog,
 } from '../../../store/actions/actionDialog';
 
-const tailwindConfig = require('../../../tailwind.config.js');
-const colors = tailwindConfig.theme.colors;
-
-const sunnyGold = colors['beaming-orange'];
-const midnight = colors['midnight'];
-const slateBlack = colors['slate-black'];
-const mistWhite = colors['mist-white'];
-
 const index = () => {
   const [state, dispatch] = useStore();
   const { selections, loader, actionDialog } = state;
@@ -52,6 +43,9 @@ const index = () => {
   const [lastClickedSection, setLastClickedSection] = useState('');
 
   const [syncOption, setSyncOption] = useState('api');
+  // Retention is no longer editable here (the nightly purge owns it), but
+  // updatePreferences still requires persistence_day_count, so the stored
+  // value is read on load and echoed back unchanged when the prompt is saved.
   const [persistenceOption, setPersistenceOption] = useState(
     Constants.persistenceOptions[0]
   );
@@ -75,58 +69,6 @@ const index = () => {
     [] as string[]
   );
   const [highlightedCol, setHighlightedCol] = useState('');
-
-  const customStyles: Object = {
-    option: (provided: any, state: any) => ({
-      ...provided,
-      color: state.isSelected ? mistWhite : mistWhite,
-      borderRadius: '8px',
-      padding: '10px 20px',
-      backgroundColor: state.isSelected ? slateBlack : 'none',
-      cursor: state.isSelected ? 'auto' : 'pointer',
-      whiteSpace: 'nowrap',
-      fontSize: '0.8rem',
-      '&:active': {
-        backgroundColor: mistWhite,
-      },
-    }),
-    control: (styles: React.CSSProperties) => ({
-      ...styles,
-      backgroundColor: midnight,
-      border: 'none',
-      padding: '4px 5px',
-      borderRadius: '8px',
-      boxShadow: 'none',
-      color: mistWhite,
-    }),
-    menu: (style: React.CSSProperties) => ({
-      ...style,
-      backgroundColor: midnight,
-      borderRadius: '10px',
-      padding: '10px',
-      width: 'max-content',
-      right: 0,
-    }),
-    indicatorSeparator: () => null,
-    dropdownIndicator: (style: React.CSSProperties) => ({
-      ...style,
-      color: mistWhite,
-    }),
-    singleValue: (style: React.CSSProperties) => ({
-      ...style,
-      fontSize: '0.8rem',
-      color: mistWhite,
-      fontWeight: '500',
-    }),
-    valueContainer: (style: React.CSSProperties) => ({
-      ...style,
-      color: mistWhite,
-    }),
-    container: (style: React.CSSProperties) => ({
-      ...style,
-      minWidth: '120px',
-    }),
-  };
 
   useEffect(() => {
     const fetchPreferences = async () => {
@@ -200,9 +142,6 @@ const index = () => {
     if (property == 'use') {
       setSyncOption(newVal);
       data['use'] = newVal;
-    } else if (property == 'persistence_day_count') {
-      setPersistenceOption(newVal);
-      data['persistence_day_count'] = parseInt(newVal.value);
     } else if (property == 'prompt') {
       setPrompt(newVal);
       data['prompt'] = prompt;
@@ -443,31 +382,24 @@ const index = () => {
                   isAlt={lastClickedSection != 'manage'}
                   onClick={() => setLastClickedSection('manage')}
                 >
+                  {/* Retention is fixed by the nightly purge; the old
+                      "delete after N days" dropdown wrote a config value
+                      nothing reads, so the policy is described instead. */}
                   <div className="flex gap-6 pl-10  flex-1 -mt-2 p-6 pt-8 rounded-b-xl z-[1]">
-                    <div className="flex items-center gap-5 self-start">
+                    <div className="flex flex-col gap-3 self-start">
                       <label className="font-medium whitespace-nowrap">
-                        Delete events after:
+                        Events are removed automatically, every night:
                       </label>
-                      <div className="flex flex-col">
-                        <Select
-                          onChange={(newVal) =>
-                            onPreferenceChangedHandler(
-                              newVal,
-                              'persistence_day_count'
-                            )
-                          }
-                          value={persistenceOption}
-                          options={Constants.persistenceOptions}
-                          styles={customStyles}
-                          isSearchable={false}
-                          menuPlacement="auto"
-                          menuPosition="fixed"
-                        />
-                      </div>
-                      <div className="text-[0.75rem]">
-                        *Events will be irreversibly deleted from the database
-                        after the Event Date has passed this set number of days
-                      </div>
+                      <ul className="list-disc pl-5 flex flex-col gap-1 font-normal text-[0.75rem]">
+                        <li>An event leaves the site the day after it happens.</li>
+                        <li>
+                          It is permanently deleted 30 days after its date.
+                        </li>
+                        <li>
+                          Events with no date are deleted 90 days after they
+                          were found.
+                        </li>
+                      </ul>
                     </div>
                   </div>
                 </SettingsSection>
