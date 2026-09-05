@@ -195,8 +195,9 @@ def remove_from_favorites(request):
 def get_favorites(request):
     email = request.GET.get("email")
     
-    current_time = datetime.now()
-    cutoff_time = current_time - EVENT_CUTOFF_TIME
+    # Aware bound: datetime.now() was the server's naive wall clock, which
+    # Django re-interpreted in the project timezone (warning on every call).
+    cutoff_time = timezone.now() - EVENT_CUTOFF_TIME
 
     if validator.is_missing([email]):
         return MissingInformation()
@@ -311,8 +312,8 @@ class AdminEvent(APIView):
                 poster__in=user_accounts).order_by('-timestamp').all()"""
 
 
-            # Get current date and time
-            current_time = datetime.now() - timedelta(hours=24)
+            # Get current date and time (aware; see get_favorites)
+            current_time = timezone.now() - timedelta(hours=24)
             # Calculate the cutoff time for events older than 48 hours
             cutoff_time = current_time - EVENT_CUTOFF_TIME
 
@@ -712,8 +713,12 @@ def search_events(request):
             | Q(city__icontains=query) | Q(state__icontains=query)
             | Q(country__icontains=query))
 
-        current_time = datetime.now()
-        cutoff_date = (current_time - EVENT_CUTOFF_TIME).date()
+        # Aware bounds. datetime.now() was the server's naive wall clock and
+        # .date() truncated the 25h cutoff to a calendar day; Django then
+        # re-interpreted both in the project timezone (warning on every call),
+        # so the window drifted by up to a day. Compare datetime to datetime.
+        current_time = timezone.now()
+        cutoff = current_time - EVENT_CUTOFF_TIME
         # Undated events are kept only if they were scraped recently, so the
         # backlog of old undated rows does not flood results.
         undated_cutoff = current_time - timedelta(days=UNDATED_EVENT_WINDOW_DAYS)
@@ -730,7 +735,7 @@ def search_events(request):
 
         # start_date IS NULL previously excluded the event outright, hiding
         # 2,534 real events from search permanently. Include them when recent.
-        in_window = (Q(start_date__gte=cutoff_date)
+        in_window = (Q(start_date__gte=cutoff)
                      | (Q(start_date__isnull=True)
                         & Q(created_at__gte=undated_cutoff)))
 
@@ -807,12 +812,9 @@ def date_events(request):
         return InvalidParameters()
 
     try:
-        # Get current date and time
-        current_time = datetime.now()
-        # Calculate the cutoff time for events older than 48 hours
-        cutoff_time = current_time - EVENT_CUTOFF_TIME
-
-        cutoff_date = cutoff_time.date()
+        # Aware cutoff, compared datetime to datetime (see search_events):
+        # "not older than 25 hours" now means exactly that.
+        cutoff = timezone.now() - EVENT_CUTOFF_TIME
 
         # Same visibility rules as search_events. These two feeds are what
         # the city pages render, and they previously filtered is_duplicate
@@ -822,7 +824,7 @@ def date_events(request):
         # non-events: is_event is nullable and NULL means never classified.
         date_events = Event.objects.filter(
             start_date__date=date,
-            start_date__gte=cutoff_date,
+            start_date__gte=cutoff,
             is_duplicate=False,
             suppressed=False,
         ).exclude(is_event=False).all()
@@ -854,17 +856,14 @@ def date_range_events(request):
         return InvalidParameters()
 
     try:
-        # Get current date and time
-        current_time = datetime.now()
-        # Calculate the cutoff time for events older than 48 hours
-        cutoff_time = current_time - EVENT_CUTOFF_TIME
-
-        cutoff_date = cutoff_time.date()
+        # Aware cutoff, compared datetime to datetime (see search_events):
+        # "not older than 25 hours" now means exactly that.
+        cutoff = timezone.now() - EVENT_CUTOFF_TIME
 
         # See date_events above: same rules, same reason.
         date_events = Event.objects.filter(
             Q(start_date__range=(start_date, end_date)) | Q(end_date__range=(start_date, end_date)),
-            start_date__gte=cutoff_date,
+            start_date__gte=cutoff,
             is_duplicate=False,
             suppressed=False,
         ).exclude(is_event=False).all()
@@ -898,15 +897,15 @@ def filter_events(request):
     POSSIBLE_FILTER_TYPES = ["date", "price", "artist", "location", "account"]
 
     try:
-        current_time = datetime.now()
-        cutoff_date = (current_time - EVENT_CUTOFF_TIME).date()
+        # Aware cutoff (see search_events).
+        cutoff = timezone.now() - EVENT_CUTOFF_TIME
 
         # Base scope: upcoming, visible events. The date cutoff belongs here,
         # not inside the date branch — otherwise a price/artist/location filter
         # searches the whole 53k-row history instead of upcoming events.
         queryset = (Event.objects
                     .filter(is_duplicate=False, suppressed=False)
-                    .filter(start_date__gte=cutoff_date))
+                    .filter(start_date__gte=cutoff))
 
         # The UI attaches a conjugation ("and"/"or") to each filter. It was
         # ignored, so an "Or" combination silently returned the intersection.
