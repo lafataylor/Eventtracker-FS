@@ -233,3 +233,11 @@ placeholder" rows (24 and 29 real events remain); smoke check rc=0.
 - Cron wrapper versioned at scripts/server/run_purge.sh (04:10 UTC slot);
   install only after the attended first run.
 - Verification review of the round-2 fixes in flight at time of writing.
+- **2026-09-05 03:07 UTC:** reviewed purge code deployed (only the two purge
+  files changed; server file md5-identical to main). Production dry-run with
+  the deployed code: **41,804 of 61,236** = 12,786 dated >30d + 3,559 old
+  sentinel + 24,438 old undated + 1,021 hidden twins. Smoke rc=0 after the
+  gunicorn restart. run_dedupe.sh on the server now takes the shared flock
+  (backup: misc/run_dedupe.sh.bak-20260904); first locked dedupe run is the
+  03:37 cron - check logs/dedupe.log next tick. **--apply and the cron
+  install remain gated on Zain's explicit go.**
