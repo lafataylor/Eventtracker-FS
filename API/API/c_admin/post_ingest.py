@@ -19,6 +19,8 @@ This module does it once, correctly, for both callers:
 
 import logging
 import os
+import re
+import unicodedata
 
 logger = logging.getLogger('django')
 
@@ -274,7 +276,145 @@ def build_payloads(extraction, *, shortcode, post_link, slide_urls,
                                            ordinal=ordinal)
                         if multi_event and not event.recurrence else None),
         ))
-    return payloads
+    return _drop_other_metro_events(payloads, expanded, shortcode)
+
+
+def _drop_other_metro_events(payloads, events, shortcode):
+    """Drop event rows the extractor placed in a metro the site does not serve.
+
+    Owner rule (2026-09-01): "when one post grabs events from a whole tour with
+    other cities I would like to just drop them unless they are cities that are
+    currently on my list", i.e. Berlin, Bali, Los Angeles, Mexico City.
+
+    Only an explicit OTHER drops a row. UNKNOWN, a missing field (older
+    extractions replayed through this path) and every served metro are kept:
+    measured on 14 days of production rows, deciding on the city STRING instead
+    would have deleted ~146 real events whose city is a neighbourhood
+    (Roma Norte, Neukoelln, Seminyak, Hollywood), so this fails open by design.
+
+    Non-event payloads are never dropped: they carry no listing but they are
+    what marks a post as processed, and dropping them would re-bill the same
+    post to OpenAI every night.
+
+    Filtering happens AFTER build_payloads assigned ordinals, so the surviving
+    rows keep the same source_key they would have had — both ingestion paths
+    stay in agreement and a re-scrape still upserts instead of duplicating.
+    """
+    kept = []
+    for payload, event in zip(payloads, events):
+        if payload.get("isEvent") and getattr(event, "metro", None) == "OTHER":
+            area_metro = served_metro_for(getattr(event, "city", None)) \
+                or served_metro_for(getattr(event, "state", None))
+            if area_metro:
+                logger.info(
+                    "[METRO] keeping %s event %r (city=%r) - the model said "
+                    "OTHER but that is a known %s area", shortcode,
+                    event.event_name, event.city, area_metro)
+                kept.append(payload)
+                continue
+            logger.info(
+                "[METRO] dropping %s event %r (city=%r) - outside the served "
+                "cities", shortcode, event.event_name, event.city)
+            continue
+        kept.append(payload)
+    return kept
+
+
+# Code-level safety net under the metro classifier. The prompt lists these
+# areas too, and on 2026-09-05 the model STILL returned OTHER for a Uluwatu
+# post (Bali) during validation - which would have dropped a real Bali event.
+# A row whose city or state names a known area of a served metro is never
+# dropped, whatever the model said. Extend freely: a wrong entry here can only
+# keep an event (fail open), never hide one.
+SERVED_METRO_AREAS = {
+    "Mexico City": (
+        "mexico city", "cdmx", "ciudad de mexico", "df", "roma", "roma norte",
+        "roma sur", "condesa", "hipodromo", "polanco", "juarez",
+        "colonia juarez", "cuauhtemoc", "coyoacan", "centro",
+        "centro historico", "narvarte", "del valle", "napoles", "san rafael",
+        "santa maria la ribera", "doctores", "escandon", "tlalpan",
+        "san angel", "xochimilco", "benito juarez", "miguel hidalgo",
+        "azcapotzalco", "santa fe", "lomas de chapultepec", "anzures",
+        "tabacalera", "obrera", "portales", "san miguel chapultepec",
+        "chapultepec", "tacubaya", "mixcoac", "iztapalapa", "coyoacán"),
+    "Berlin": (
+        "berlin", "kreuzberg", "neukolln", "neukoelln", "friedrichshain",
+        "mitte", "prenzlauer berg", "wedding", "schoneberg", "schoeneberg",
+        "charlottenburg", "moabit", "lichtenberg", "treptow", "alt-treptow",
+        "kopenick", "koepenick", "pankow", "tempelhof", "tiergarten",
+        "gesundbrunnen", "rummelsburg", "oberschoneweide", "marzahn",
+        "spandau", "steglitz", "wilmersdorf", "reinickendorf", "xberg"),
+    "Los Angeles": (
+        "los angeles", "la", "l.a.", "hollywood", "west hollywood",
+        "east hollywood", "north hollywood", "dtla", "downtown",
+        "downtown la", "downtown los angeles", "silver lake", "silverlake",
+        "echo park", "venice", "venice beach", "santa monica", "highland park",
+        "koreatown", "k-town", "ktown", "chinatown", "arts district",
+        "boyle heights", "culver city", "mid-city", "mid city", "los feliz",
+        "frogtown", "glassell park", "eagle rock", "atwater village",
+        "westlake", "pico-union", "inglewood", "long beach", "pasadena",
+        "glendale", "burbank", "malibu", "el sereno", "lincoln heights",
+        "cypress park", "mount washington", "leimert park", "hollywood hills",
+        "fairfax", "melrose", "beverly hills", "west adams", "compton",
+        "san pedro", "marina del rey", "playa del rey", "el segundo",
+        "south la", "south central", "studio city", "sherman oaks",
+        "van nuys", "topanga", "altadena", "monterey park", "alhambra",
+        "santa ana", "anaheim", "orange county", "hawthorne", "gardena",
+        "torrance", "whittier", "pomona", "ontario", "riverside",
+        "san fernando valley", "the valley", "westwood", "brentwood",
+        "sawtelle", "palms", "mar vista", "hermosa beach", "manhattan beach",
+        "redondo beach", "huntington beach", "costa mesa", "irvine",
+        "north hills", "sun valley", "sylmar", "pacoima", "reseda",
+        "canoga park", "woodland hills", "encino", "tarzana", "chatsworth",
+        "northridge", "panorama city", "arleta", "tujunga", "sunland",
+        "la crescenta", "montrose", "south pasadena", "san gabriel",
+        "rosemead", "el monte", "baldwin park", "covina", "west covina",
+        "azusa", "glendora", "claremont", "montclair", "upland",
+        "rancho cucamonga", "fontana", "san bernardino", "downey", "norwalk",
+        "bellflower", "lakewood", "cerritos", "carson", "wilmington",
+        "harbor city", "lomita", "palos verdes", "rolling hills"),
+    "Bali": (
+        "bali", "canggu", "seminyak", "uluwatu", "ubud", "kuta", "legian",
+        "denpasar", "jimbaran", "sanur", "nusa dua", "pererenan", "berawa",
+        "bingin", "padang padang", "kerobokan", "umalas", "tabanan", "gianyar",
+        "nusa penida", "nusa lembongan", "amed", "lovina", "sidemen", "munduk",
+        "kedungu", "balangan", "pecatu", "ungasan", "bukit", "seseh", "cemagi",
+        "tibubeneng", "batu bolong", "echo beach", "nyanyi", "tanah lot",
+        "sayan", "tegallalang", "keramas", "candidasa", "padangbai", "kintamani",
+        "bedugul", "singaraja", "benoa", "tanjung benoa", "petitenget",
+        "batu belig", "kayu aya", "oberoi", "mengwi", "badung", "klungkung"),
+}
+
+# Aliases this short match only the WHOLE normalized string ("la" must not
+# match "La Paz"); longer ones may also appear as a whole phrase inside it
+# ("Colonia Roma Norte", "Uluwatu, Bali").
+_SHORT_ALIAS_LEN = 3
+
+
+def _normalize_place(value):
+    """casefold, strip accents, collapse punctuation to single spaces."""
+    text = unicodedata.normalize("NFKD", str(value))
+    text = "".join(ch for ch in text if not unicodedata.combining(ch))
+    text = re.sub(r"[^a-z0-9]+", " ", text.casefold())
+    return text.strip()
+
+
+def served_metro_for(place):
+    """The served metro whose known areas the free-text place names, or None."""
+    if not place:
+        return None
+    text = _normalize_place(place)
+    if not text:
+        return None
+    padded = f" {text} "
+    for metro, aliases in SERVED_METRO_AREAS.items():
+        for alias in aliases:
+            norm = _normalize_place(alias)
+            if text == norm:
+                return metro
+            if len(norm) > _SHORT_ALIAS_LEN and f" {norm} " in padded:
+                return metro
+    return None
 
 
 def group_slides_by_post(images_for_account):

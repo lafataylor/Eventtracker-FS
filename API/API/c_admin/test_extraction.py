@@ -87,6 +87,9 @@ def mk_event(**over):
         age_barrier=None, ticket_link=None, late=False, link_in_bio=False,
         rsvp_required=False, source_slide_index=None,
         recurrence=None, recurrence_until=None,
+        # Default UNKNOWN: tests that do not care about geography must never
+        # be silently dropped by the served-metro filter.
+        metro="UNKNOWN",
     )
     base.update(over)
     return ExtractedEvent(**base)
