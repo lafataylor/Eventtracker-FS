@@ -29,6 +29,15 @@ OPENAI_API_KEY=not-used-by-this-command \
 STATUS=${PIPESTATUS[0]}
 echo "exit=$STATUS"
 
+# Poster files are needed only on the night they are scraped: every image is
+# uploaded to Firebase before it is used, nothing serves or reads the local
+# copy later (verified 2026-09-05: no reader in scraper.py, no nginx location,
+# no orig_thumb pointing here). Without this the directory grew ~600 files a
+# night to 204k files / 8.7 G. Best effort: it never changes the purge's exit.
+POSTERS=/home/ubuntu/EventTracker-API/API/posters
+find "$POSTERS" -type f -mtime +30 -delete 2>/dev/null
+echo "posters pruned $(date -u '+%T') UTC; $(find "$POSTERS" -type f 2>/dev/null | wc -l) files remain"
+
 # Keep this log bounded; it runs forever.
 if [ -f "$LOG" ] && [ "$(stat -c%s "$LOG")" -gt 10485760 ]; then
     tail -c 2097152 "$LOG" > "$LOG.tmp" && mv "$LOG.tmp" "$LOG"
