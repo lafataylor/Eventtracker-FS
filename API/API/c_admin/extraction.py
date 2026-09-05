@@ -136,8 +136,12 @@ ticket_link.
 
 Set metro per event from where it physically happens. A tour or multi-city \
 announcement has a DIFFERENT metro per stop. A neighbourhood belongs to its metro. \
-Only use OTHER when the event is clearly in a metro that is not Mexico City, \
-Berlin, Los Angeles or Bali; if the location is absent or ambiguous use UNKNOWN.
+Bali means the whole island: any town, village or beach on Bali (Uluwatu, Canggu, \
+Pererenan, Ubud, Seminyak, Kuta, Jimbaran, Sanur, Amed...) is metro Bali. Likewise \
+any neighbourhood or nearby city of Greater Los Angeles, Greater Mexico City or \
+Berlin is that metro. Only use OTHER when the event is clearly in a metro that is \
+not Mexico City, Berlin, Los Angeles or Bali (a different country, island or \
+region); if the location is absent or ambiguous use UNKNOWN.
 
 Caption:
 {caption}

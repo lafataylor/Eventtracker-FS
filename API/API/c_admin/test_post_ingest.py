@@ -344,3 +344,42 @@ class ServedMetroFilterTests(SimpleTestCase):
         keys = {x["name"]: x.get("source_key") for x in unfiltered}
         for row in filtered:
             self.assertEqual(row.get("source_key"), keys[row["name"]])
+
+    # Validation on 2026-09-05 against the real model: a Uluwatu post came back
+    # metro=OTHER although the prompt lists Uluwatu under Bali. The safety net
+    # below keeps any OTHER row whose city/state names a known served area.
+    def test_other_with_a_known_served_area_is_kept(self):
+        p = self._payloads([
+            mk_event(event_name="Motel Mexicola Uluwatu Grand Opening",
+                     city="Uluwatu", metro="OTHER"),
+            mk_event(event_name="Rave", city="Neukölln", metro="OTHER"),
+            mk_event(event_name="Dinner", city="Colonia Roma Norte",
+                     metro="OTHER"),
+            mk_event(event_name="Beach day", city=None, state="Bali",
+                     metro="OTHER"),
+            mk_event(event_name="Show", city="Highland Park, Los Angeles",
+                     metro="OTHER"),
+        ])
+        self.assertEqual(len(p), 5)
+
+    def test_other_with_an_unknown_place_still_drops(self):
+        p = self._payloads([
+            mk_event(event_name="Hamburg show", city="Hamburg", metro="OTHER"),
+            mk_event(event_name="No city", city=None, metro="OTHER"),
+            # "la" is an alias only as the whole string, never inside "La Paz"
+            mk_event(event_name="La Paz show", city="La Paz", metro="OTHER"),
+            mk_event(event_name="Kept", city="Kreuzberg", metro="OTHER"),
+        ])
+        self.assertEqual([x["name"] for x in p], ["Kept"])
+
+    def test_served_metro_for_matching_rules(self):
+        from c_admin.post_ingest import served_metro_for
+        self.assertEqual(served_metro_for("Uluwatu"), "Bali")
+        self.assertEqual(served_metro_for("uluwatu, bali"), "Bali")
+        self.assertEqual(served_metro_for("Neukölln"), "Berlin")
+        self.assertEqual(served_metro_for("CDMX"), "Mexico City")
+        self.assertEqual(served_metro_for("LA"), "Los Angeles")
+        self.assertIsNone(served_metro_for("La Paz"))
+        self.assertIsNone(served_metro_for("Hamburg"))
+        self.assertIsNone(served_metro_for(None))
+        self.assertIsNone(served_metro_for("   "))
