@@ -1283,21 +1283,27 @@ function EventDetails({ isEdit, locationName }: EventDetailsProps) {
                     {eventDetailsDialog.event.poster.user}
                     <br />
                     <br />
-                    {eventDetailsDialog.event.ticket_link && (
+                    {/* The original link is the Instagram post the event was
+                        found in (orig_link). This block used to render
+                        ticket_link, which only LOOKED right because the old
+                        extractor wrote the post URL into ticket_link; since
+                        2026-08-30 ticket_link holds a real ticket/bio URL, so
+                        the "original" link pointed at linktr.ee pages. */}
+                    {eventDetailsDialog.event.orig_link && (
                       <div className="flex items-center gap-1 justify-end">
                         Original event link:{' '}
                         <a
-                          href={eventDetailsDialog.event.ticket_link}
+                          href={eventDetailsDialog.event.orig_link}
                           target="_blank"
                           rel="noopener noreferrer"
                           className="text-beaming-orange underline  max-w-full truncate"
                         >
-                          {eventDetailsDialog.event.ticket_link.length > 30
-                            ? `${eventDetailsDialog.event.ticket_link.substring(
+                          {eventDetailsDialog.event.orig_link.length > 30
+                            ? `${eventDetailsDialog.event.orig_link.substring(
                                 0,
                                 30
                               )}...`
-                            : eventDetailsDialog.event.ticket_link}
+                            : eventDetailsDialog.event.orig_link}
                         </a>
                       </div>
                     )}
@@ -1337,12 +1343,18 @@ function EventDetails({ isEdit, locationName }: EventDetailsProps) {
                           : eventDetailsDialog.event.link_in_bio
                           ? 'https://instagram.com/' +
                             (eventDetailsDialog.event.poster?.user ?? '').substring(1)
-                          : eventDetailsDialog.event.ticket_link
+                          : // No ticket link known: send people to the post
+                            // itself rather than rendering a dead button (the
+                            // old extractor's post-URL fallback did the same).
+                            eventDetailsDialog.event.orig_link
                       }
                       target="_blank"
                       rel="noopener noreferrer"
                       className="bg-beaming-orange text-midnight hover:bg-gradient-to-r from-beaming-orange-dark to-beaming-orange-light border-beaming-orange-dark   flex w-[90%] justify-center items-center rounded-lg border-2 gap-4 p-3 font-medium self-end hover:cursor-pointer mt-4 mb-2"
-                      title={eventDetailsDialog.event.ticket_link}
+                      title={
+                        eventDetailsDialog.event.ticket_link ||
+                        eventDetailsDialog.event.orig_link
+                      }
                     >
                       <GrShare className="w-5 h-5 font-bold text-slate-black" />
                       <span className="font-semibold">
