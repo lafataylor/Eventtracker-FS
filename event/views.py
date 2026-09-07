@@ -17,7 +17,7 @@ from c_auth.authentication import get_uid_from_token
 from event_tracker_api.response import *
 
 from dateutil.parser import parse
-from datetime import datetime, timedelta
+from datetime import datetime, time, timedelta
 
 import json
 import re
@@ -97,6 +97,31 @@ def _log_safe(value, limit):
     return _LOG_UNSAFE.sub(' ', value[:limit])
 
 EVENT_CUTOFF_TIME = timedelta(hours=25)
+
+
+def local_day_bounds(first_day, last_day=None):
+    """Half-open aware bounds [start, end) covering whole LOCAL calendar days.
+
+    Both feeds below are asked about calendar days ("what is on the 12th?")
+    but store an aware instant, so the day has to be turned into a range in
+    the project timezone. Doing it here rather than with ``__date=`` or
+    ``__range=`` fixes two things:
+
+    * ``__range=(date, date)`` read the bare dates as MIDNIGHT, so the upper
+      bound fell at the START of the end day: every event later that day was
+      missing, and a single-day range returned nothing at all.
+    * ``__date=`` compiles to a per-row Python function on SQLite
+      (``django_datetime_cast_date``), which no index can serve. A plain
+      range comparison uses ``event_start_date_idx``.
+
+    ``last_day`` defaults to ``first_day`` (a single day). The end bound is
+    the midnight AFTER ``last_day``, so that day is fully included.
+    """
+    if last_day is None:
+        last_day = first_day
+    start = timezone.make_aware(datetime.combine(first_day, time.min))
+    end = timezone.make_aware(datetime.combine(last_day + timedelta(days=1), time.min))
+    return start, end
 
 # Events with no extracted start_date are still real events (2,534 of them in
 # production). They are included in search when recently scraped rather than
@@ -822,9 +847,14 @@ def date_events(request):
         # were served to the public ("Remodeling Closure", "9.12 event
         # placeholder"; 11 of them on 2026-09-02). Exclude only KNOWN
         # non-events: is_event is nullable and NULL means never classified.
+        day_start, day_end = local_day_bounds(date)
+        # One lower bound, not two: the day's start unless the 25-hour cutoff
+        # is later (asking for today, part of which is already too old).
+        lower = max(day_start, cutoff)
+
         date_events = Event.objects.filter(
-            start_date__date=date,
-            start_date__gte=cutoff,
+            start_date__gte=lower,
+            start_date__lt=day_end,
             is_duplicate=False,
             suppressed=False,
         ).exclude(is_event=False).all()
@@ -861,8 +891,14 @@ def date_range_events(request):
         cutoff = timezone.now() - EVENT_CUTOFF_TIME
 
         # See date_events above: same rules, same reason.
+        # Half-open bounds so the END DAY is included: the old
+        # __range=(start, end) stopped at midnight ON the end day, which made
+        # a single-day range return nothing and every range miss its last day.
+        window_start, window_end = local_day_bounds(start_date, end_date)
+
         date_events = Event.objects.filter(
-            Q(start_date__range=(start_date, end_date)) | Q(end_date__range=(start_date, end_date)),
+            Q(start_date__gte=window_start, start_date__lt=window_end)
+            | Q(end_date__gte=window_start, end_date__lt=window_end),
             start_date__gte=cutoff,
             is_duplicate=False,
             suppressed=False,
