@@ -361,6 +361,15 @@ SERVED_METRO_AREAS = {
         "van nuys", "topanga", "altadena", "monterey park", "alhambra",
         "santa ana", "anaheim", "orange county", "hawthorne", "gardena",
         "torrance", "whittier", "pomona", "ontario", "riverside",
+        # High-desert venues the LA accounts programme and the site has always
+        # carried: Pioneertown alone supplied 78 events (44 still upcoming),
+        # every one tagged forLocation='Los Angeles'. The model is not wrong
+        # that they sit outside the LA metro, so this is a SCOPE question for
+        # the owner rather than a model error - kept here meanwhile because a
+        # dropped post is not re-offered, making the drop the irreversible
+        # direction. Remove these four lines if the owner says desert shows
+        # do not belong on the LA page.
+        "pioneertown", "joshua tree", "yucca valley", "twentynine palms",
         "san fernando valley", "the valley", "westwood", "brentwood",
         "sawtelle", "palms", "mar vista", "hermosa beach", "manhattan beach",
         "redondo beach", "huntington beach", "costa mesa", "irvine",
