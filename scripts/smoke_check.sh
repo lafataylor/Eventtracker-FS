@@ -62,6 +62,16 @@ if [ -z "$BROWSER" ]; then
     exit 2
 fi
 
+# Release the browser when this run ends, however it ends. A session persists
+# between runs by design, so the hourly check was reusing one Chrome for as
+# long as the machine stayed awake: on 2026-09-07 that session had been alive
+# six hours and the agent-browser processes together held 1.7 GB on the dev
+# machine. Closing costs a cold start (seconds, against runs that already take
+# minutes) and caps the cost at one run. The trap runs no `exit`, so the
+# script's own exit status is preserved.
+cleanup() { "$BROWSER" --session smoke close >/dev/null 2>&1 || true; }
+trap cleanup EXIT
+
 # The expected host, so a page that never loaded cannot pass. A failed
 # navigation lands on chrome-error://chromewebdata, whose body text is 129-162
 # characters — comfortably past any "is it empty" threshold, containing
