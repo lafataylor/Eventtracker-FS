@@ -372,6 +372,19 @@ class ServedMetroFilterTests(SimpleTestCase):
         ])
         self.assertEqual([x["name"] for x in p], ["Kept"])
 
+    def test_desert_venues_the_la_accounts_programme_are_kept(self):
+        # Found on the filter's first production night (2026-09-07): a
+        # Pioneertown show was dropped, though the site has carried 78 events
+        # from there, all tagged for the Los Angeles page. Pending the owner's
+        # scope call, they stay - a dropped post is never offered again.
+        p = self._payloads([
+            mk_event(event_name="Arlo Parks with Baird", city="Pioneertown",
+                     metro="OTHER"),
+            mk_event(event_name="Desert show", city="Joshua Tree",
+                     metro="OTHER"),
+        ])
+        self.assertEqual(len(p), 2)
+
     def test_served_metro_for_matching_rules(self):
         from c_admin.post_ingest import served_metro_for
         self.assertEqual(served_metro_for("Uluwatu"), "Bali")
