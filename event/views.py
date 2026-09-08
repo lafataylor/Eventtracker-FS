@@ -896,10 +896,16 @@ def date_range_events(request):
         # a single-day range return nothing and every range miss its last day.
         window_start, window_end = local_day_bounds(start_date, end_date)
 
+        # The cutoff belongs INSIDE each branch. ANDing start_date__gte=cutoff
+        # outside the group made the end_date branch unreachable: anything that
+        # STARTED more than 25 hours ago was excluded before its end_date could
+        # be considered, so a festival, exhibition or residency vanished from
+        # the range feed for its whole run except the first day.
+        lower = max(window_start, cutoff)
+
         date_events = Event.objects.filter(
-            Q(start_date__gte=window_start, start_date__lt=window_end)
-            | Q(end_date__gte=window_start, end_date__lt=window_end),
-            start_date__gte=cutoff,
+            Q(start_date__gte=lower, start_date__lt=window_end)
+            | Q(end_date__gte=lower, end_date__lt=window_end),
             is_duplicate=False,
             suppressed=False,
         ).exclude(is_event=False).all()
@@ -975,13 +981,20 @@ def filter_events(request):
                         end = datetime.strptime(values[1], '%m/%d/%Y').date()
                     except (ValueError, TypeError):
                         return InvalidParameters()
-                    clause = Q(start_date__range=[start, end])
+                    # Half-open local-day bounds, exactly as the two feeds do
+                    # (see local_day_bounds): the plain-date __range put the
+                    # upper bound at midnight ON the end day, so the public
+                    # filter lost everything on the last day the visitor
+                    # picked, and the same day twice matched nothing at all.
+                    lo, hi = local_day_bounds(start, end)
+                    clause = Q(start_date__gte=lo, start_date__lt=hi)
                 elif condition == "equal" and values:
                     try:
                         day = datetime.strptime(values[0], '%m/%d/%Y').date()
                     except (ValueError, TypeError):
                         return InvalidParameters()
-                    clause = Q(start_date__date=day)
+                    lo, hi = local_day_bounds(day)
+                    clause = Q(start_date__gte=lo, start_date__lt=hi)
                 else:
                     # Malformed date filter: reject rather than quietly
                     # returning everything.
