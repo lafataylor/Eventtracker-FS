@@ -85,6 +85,11 @@ class Command(BaseCommand):
         parser.add_argument("--all-advanced", action="store_true",
                             help="select every account whose last_run advanced since --since, "
                                  "not only those with a logged quota failure")
+        parser.add_argument("--accounts",
+                            help="comma-separated account names to recover instead of the "
+                                 "quota-failure selection, for posts lost to a cause the Logs "
+                                 "table does not record (e.g. the 2026-09-08 metro filter, which "
+                                 "dropped seven real Berlin events from one holzmarkt_25 roundup)")
         parser.add_argument("--apply", action="store_true", help="write; default is a dry run")
 
     def handle(self, *args, **opts):
@@ -106,7 +111,20 @@ class Command(BaseCommand):
                 advanced[row.account] = row
 
         failures = accounts_with_quota_failures(since)
-        if opts["all_advanced"]:
+        if opts["accounts"]:
+            named = [a.strip() for a in opts["accounts"].split(",") if a.strip()]
+            if not named:
+                raise CommandError("--accounts was given but lists no account")
+            # Naming an account that never advanced is almost always a typo,
+            # and silently recovering nothing would look like success.
+            missing = [a for a in named if a not in advanced]
+            if missing:
+                raise CommandError(
+                    "these accounts did not advance since --since, so there is "
+                    "nothing to move back (check the spelling): "
+                    + ", ".join(sorted(missing)))
+            selected = sorted(set(named))
+        elif opts["all_advanced"]:
             selected = sorted(advanced)
         else:
             selected = sorted(a for a in advanced if a in failures)

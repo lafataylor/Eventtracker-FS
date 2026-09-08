@@ -87,6 +87,28 @@ class RecoverSkippedPostsTests(TestCase):
             self.run_cmd("--apply")
         self.assertEqual(self.last_run("partial"), epoch("2026-09-04 22:05"))
 
+    def test_named_accounts_are_recovered_regardless_of_quota_failures(self):
+        # For posts lost to a cause the Logs table does not record - the
+        # 2026-09-08 metro filter dropped seven real Berlin events from one
+        # holzmarkt_25 roundup, and no quota line was written for it.
+        out = self.run_cmd("--accounts", "healthy", "--apply")
+        self.assertIn("1 selected", out)
+        self.assertEqual(self.last_run("healthy"), epoch(RESET_TO))
+        # the quota-failure account is NOT swept in when accounts are named
+        self.assertEqual(self.last_run("partial"), epoch("2026-09-04 22:05"))
+
+    def test_a_misspelled_account_is_refused_rather_than_a_silent_no_op(self):
+        with self.assertRaises(CommandError) as ctx:
+            self.run_cmd("--accounts", "holzmarkt_52", "--apply")
+        self.assertIn("holzmarkt_52", str(ctx.exception))
+        self.assertEqual(self.last_run("partial"), epoch("2026-09-04 22:05"))
+
+    def test_an_account_that_never_advanced_is_refused(self):
+        # allfailed retries by itself; moving it back would widen the window
+        # for nothing and hide a mistaken request.
+        with self.assertRaises(CommandError):
+            self.run_cmd("--accounts", "allfailed", "--apply")
+
     def test_rejects_a_reset_point_after_since(self):
         with self.assertRaises(CommandError):
             call_command("recover_skipped_posts", "--since", SINCE, "--reset-to", "2026-09-04 21:00",
