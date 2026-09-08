@@ -363,9 +363,12 @@ class ServedMetroFilterTests(SimpleTestCase):
         self.assertEqual(len(p), 5)
 
     def test_other_with_an_unknown_place_still_drops(self):
+        # The "No city" case that used to live here asserted the opposite and
+        # was wrong: production showed on 2026-09-08 that a metro=OTHER with
+        # no location is a broken verdict, not a foreign event. It now has its
+        # own test, test_other_without_any_location_is_kept.
         p = self._payloads([
             mk_event(event_name="Hamburg show", city="Hamburg", metro="OTHER"),
-            mk_event(event_name="No city", city=None, metro="OTHER"),
             # "la" is an alias only as the whole string, never inside "La Paz"
             mk_event(event_name="La Paz show", city="La Paz", metro="OTHER"),
             mk_event(event_name="Kept", city="Kreuzberg", metro="OTHER"),
@@ -384,6 +387,37 @@ class ServedMetroFilterTests(SimpleTestCase):
                      metro="OTHER"),
         ])
         self.assertEqual(len(p), 2)
+
+    def test_other_without_any_location_is_kept(self):
+        # 2026-09-08: a holzmarkt_25 roundup (a Berlin venue) came back with
+        # metro=OTHER and no city on every row, so all seven real Berlin
+        # events were dropped and the post yielded nothing. An OTHER with no
+        # location contradicts the prompt, which says answer UNKNOWN when the
+        # location is absent, and nothing in the row can corroborate it.
+        p = self._payloads([
+            mk_event(event_name="SPREEMARKT X GEORGIAN CULTURE", city=None,
+                     metro="OTHER"),
+            mk_event(event_name="10 Jahre Jubilaeumskonzert", city=None,
+                     state=None, metro="OTHER"),
+        ])
+        self.assertEqual(len(p), 2)
+
+    def test_other_with_a_city_still_drops(self):
+        # The case the filter exists for is unaffected: tour stops name their
+        # cities, and those keep dropping.
+        p = self._payloads([
+            mk_event(event_name="HOER ON TOUR - Melbourne", city="Melbourne",
+                     metro="OTHER"),
+            mk_event(event_name="Kept", city="Kreuzberg", metro="OTHER"),
+        ])
+        self.assertEqual([x["name"] for x in p], ["Kept"])
+
+    def test_other_with_only_a_state_still_drops(self):
+        p = self._payloads([
+            mk_event(event_name="Somewhere in Bavaria", city=None,
+                     state="Bavaria", metro="OTHER"),
+        ])
+        self.assertEqual(p, [])
 
     def test_served_metro_for_matching_rules(self):
         from c_admin.post_ingest import served_metro_for
