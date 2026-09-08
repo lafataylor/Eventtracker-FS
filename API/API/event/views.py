@@ -17,6 +17,7 @@ from c_auth.authentication import get_uid_from_token
 from event_tracker_api.response import *
 
 from dateutil.parser import parse
+from rapidfuzz import fuzz
 from datetime import datetime, time, timedelta
 
 import json
@@ -137,6 +138,26 @@ SEARCH_RESULT_LIMIT = 500
 # already visibility-filtered events in Python — same pattern and rationale as
 # PRICE_SCAN_LIMIT.
 SEARCH_SCAN_LIMIT = 5000
+
+# Typo tolerance, the second half of ticket 3. It is a FALLBACK, not a
+# widening: it runs only when a query has almost nothing to show, so a search
+# that already works is returned untouched rather than padded with near
+# misses. rapidfuzz is already a dependency (event/dedupe.py scores duplicate
+# pairs with it) and is installed on the server, so this needs no new package
+# and no search engine.
+# Cost guard, not a quality one: below this the score threshold already
+# rejects everything (a 3-character pattern has to be almost exact to score),
+# so this only avoids paying for a rescan on queries too short to help.
+FUZZY_MIN_QUERY_LEN = 4
+# rapidfuzz partial_ratio, 0-100. Measured against this data on 2026-09-08:
+# real typos land 80-92 ("tecno"/techno 80.0, "dettmen"/Dettmann 85.7,
+# "zennerr"/Zenner 92.3) while unrelated queries top out at 46 ("helsinki"
+# against every fixture row: 33-46). 80 sits in that gap and catches the
+# single-deleted-letter case, which scores lowest because partial_ratio takes
+# the SHORTER string as the pattern - so a query missing a letter is the
+# hardest kind to match, and the most common kind to type.
+FUZZY_MIN_SCORE = 80
+FUZZY_FALLBACK_MAX = 5        # only help a query returning fewer than this
 
 # Price lives in a free-text CharField, so range filtering has to parse each
 # value in Python. Cap how many rows that scan touches per request.
@@ -808,9 +829,46 @@ def search_events(request):
                     if len(extra_ids) >= SEARCH_RESULT_LIMIT:
                         break
 
+        matched = matches_text | Q(id__in=extra_ids)
+
+        # Typo fallback. Only when the query has all but failed: scoring every
+        # scanned row costs nothing on a healthy search because we never get
+        # here, and a thin result set is exactly the case where the visitor
+        # has misspelled a venue ("zennerr", "zebulom") and currently sees an
+        # empty page. Exact and substring hits are found above and are always
+        # included; these are added to them, never in place of them.
+        if (len(squashed_q) >= FUZZY_MIN_QUERY_LEN
+                and Event.objects.filter(matched & visibility).count()
+                < FUZZY_FALLBACK_MAX):
+            fuzzy_ids = []
+            rescan = (Event.objects.filter(visibility)
+                      .select_related('poster')
+                      .order_by('-timestamp')
+                      .only('id', 'name', 'artist', 'genres', 'offering',
+                            'opener', 'host', 'promoter', 'forLocation',
+                            'poster__user')[:SEARCH_SCAN_LIMIT])
+            for e in rescan:
+                fields = (e.name, e.artist, e.genres, e.offering, e.opener,
+                          e.host, e.promoter, e.forLocation,
+                          e.poster.user if e.poster else None)
+                # partial_ratio, not ratio: the query is usually one word
+                # against a whole title ("zennerr" vs "zennersunsetsession"),
+                # so the best-matching window is what matters, not the length
+                # difference. Fields are scored one by one for the same reason
+                # they are squashed one by one above.
+                for f in fields:
+                    if not f:
+                        continue
+                    if fuzz.partial_ratio(squashed_q, squash(f)) >= FUZZY_MIN_SCORE:
+                        fuzzy_ids.append(e.id)
+                        break
+                if len(fuzzy_ids) >= SEARCH_RESULT_LIMIT:
+                    break
+            if fuzzy_ids:
+                matched = matched | Q(id__in=fuzzy_ids)
+
         user_events = (Event.objects
-                       .filter((matches_text | Q(id__in=extra_ids))
-                               & visibility)
+                       .filter(matched & visibility)
                        .select_related('venue', 'poster')
                        .order_by('-timestamp')[:SEARCH_RESULT_LIMIT])
 
