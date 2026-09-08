@@ -303,13 +303,30 @@ def _drop_other_metro_events(payloads, events, shortcode):
     kept = []
     for payload, event in zip(payloads, events):
         if payload.get("isEvent") and getattr(event, "metro", None) == "OTHER":
-            area_metro = served_metro_for(getattr(event, "city", None)) \
-                or served_metro_for(getattr(event, "state", None))
+            city = getattr(event, "city", None)
+            state = getattr(event, "state", None)
+            area_metro = served_metro_for(city) or served_metro_for(state)
             if area_metro:
                 logger.info(
                     "[METRO] keeping %s event %r (city=%r) - the model said "
                     "OTHER but that is a known %s area", shortcode,
                     event.event_name, event.city, area_metro)
+                kept.append(payload)
+                continue
+            # An OTHER with no location at all is not evidence. The prompt
+            # tells the model to answer UNKNOWN when the location is absent,
+            # so this combination is a broken verdict, and nothing in the row
+            # can corroborate it. On 2026-09-08 it cost seven real events from
+            # ONE holzmarkt_25 roundup - a Berlin venue on the Spree, titles
+            # like 'SPREEMARKT X GEORGIAN CULTURE' and 'Jubiläumskonzert' -
+            # leaving that post with nothing. Tour stops, the case this filter
+            # exists for, do name their cities (Hamburg, Melbourne, Sydney):
+            # 22 of the 30 real drops carried one, and those still drop.
+            if not (city or state):
+                logger.info(
+                    "[METRO] keeping %s event %r - the model said OTHER but "
+                    "gave no location to corroborate it", shortcode,
+                    event.event_name)
                 kept.append(payload)
                 continue
             logger.info(
