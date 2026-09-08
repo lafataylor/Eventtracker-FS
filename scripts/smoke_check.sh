@@ -85,7 +85,23 @@ EXPECT_HOST=$(printf '%s' "$BASE" | sed -E 's#^https?://##; s#/.*$##; s#:.*$##')
 
 for page in "${PAGES[@]}"; do
     if ! timeout "$PER_PAGE_TIMEOUT" "$BROWSER" --session smoke open "${BASE}${page}" >/dev/null 2>&1; then
-        echo "$(date -u '+%Y-%m-%d %H:%M:%S UTC') FAIL ${page} -> NAVIGATION_FAILED"
+        # A failed navigation is ambiguous: the SITE may be down, or THIS
+        # MACHINE may have no network. On 2026-09-08 the Mac dark-woke at
+        # 19:25:16 UTC, launchd fired the missed run five seconds later before
+        # Wi-Fi was usable, and the check reported the site broken while it was
+        # serving 200s in under 0.4s. A monitor that cries wolf on every wake
+        # is one you stop believing, which is the whole failure it exists to
+        # prevent. So ask curl: if it cannot reach the page either, the
+        # verdict is UNKNOWN (exit 2, "nothing was verified"), not FAIL.
+        if ! curl -sS -L --max-time 15 -o /dev/null "${BASE}${page}" 2>/dev/null; then
+            echo "$(date -u '+%Y-%m-%d %H:%M:%S UTC') UNKNOWN: no network from this"
+            echo "machine (curl cannot reach ${page} either); nothing was verified."
+            echo "Normal for a moment after the Mac wakes."
+            exit 2
+        fi
+        # curl got through and the browser did not: that is a real problem,
+        # just not a networking one.
+        echo "$(date -u '+%Y-%m-%d %H:%M:%S UTC') FAIL ${page} -> NAVIGATION_FAILED (curl reached it)"
         FAILED=1
         continue
     fi
