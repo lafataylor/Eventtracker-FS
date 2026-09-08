@@ -69,7 +69,11 @@ fi
 # machine. Closing costs a cold start (seconds, against runs that already take
 # minutes) and caps the cost at one run. The trap runs no `exit`, so the
 # script's own exit status is preserved.
-cleanup() { "$BROWSER" --session smoke close >/dev/null 2>&1 || true; }
+# Bounded like every other browser call: a wedged agent-browser is the most
+# likely reason this session ever needed closing, and an unbounded close would
+# hang the run forever instead of ending it (`|| true` does not help - it only
+# swallows the status once the command finally returns).
+cleanup() { timeout 20 "$BROWSER" --session smoke close >/dev/null 2>&1 || true; }
 trap cleanup EXIT
 
 # The expected host, so a page that never loaded cannot pass. A failed

@@ -322,11 +322,11 @@ def _drop_other_metro_events(payloads, events, shortcode):
             # leaving that post with nothing. Tour stops, the case this filter
             # exists for, do name their cities (Hamburg, Melbourne, Sydney):
             # 22 of the 30 real drops carried one, and those still drop.
-            if not (city or state):
+            if not (names_a_place(city) or names_a_place(state)):
                 logger.info(
                     "[METRO] keeping %s event %r - the model said OTHER but "
-                    "gave no location to corroborate it", shortcode,
-                    event.event_name)
+                    "gave no location to corroborate it (city=%r)", shortcode,
+                    event.event_name, city)
                 kept.append(payload)
                 continue
             logger.info(
@@ -423,6 +423,23 @@ def _normalize_place(value):
     text = "".join(ch for ch in text if not unicodedata.combining(ch))
     text = re.sub(r"[^a-z0-9]+", " ", text.casefold())
     return text.strip()
+
+
+# What the model writes into a free-text city field when the flyer does not
+# say where the event is. These are truthy strings, so testing the raw value
+# would treat them as a location and let the row be dropped - the same loss as
+# an empty city, just harder to see.
+_PLACEHOLDER_PLACES = frozenset({
+    "", "tba", "tbd", "tba tbd", "na", "n a", "none", "null", "nil",
+    "unknown", "unspecified", "not specified", "not stated", "not listed",
+    "undisclosed", "secret", "secret location", "location tba",
+    "venue tba", "to be announced", "to be confirmed", "various",
+})
+
+
+def names_a_place(value):
+    """True when the free-text value actually names somewhere."""
+    return _normalize_place(value) not in _PLACEHOLDER_PLACES if value else False
 
 
 def served_metro_for(place):

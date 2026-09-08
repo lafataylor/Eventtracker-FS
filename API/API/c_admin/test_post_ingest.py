@@ -402,6 +402,18 @@ class ServedMetroFilterTests(SimpleTestCase):
         ])
         self.assertEqual(len(p), 2)
 
+    def test_other_with_a_placeholder_location_is_kept(self):
+        # Same loss as the holzmarkt_25 incident, one step removed: these are
+        # truthy strings, so the "no location" guard let them through to the
+        # drop, but none of them names a place. The city field is free text
+        # from the model, which writes these when a flyer omits the venue.
+        for placeholder in ("TBA", "tbd", "N/A", "Unknown", "none", "-", "  "):
+            p = self._payloads([
+                mk_event(event_name=f"gig ({placeholder})", city=placeholder,
+                         metro="OTHER"),
+            ])
+            self.assertEqual(len(p), 1, f"dropped on city={placeholder!r}")
+
     def test_other_with_a_city_still_drops(self):
         # The case the filter exists for is unaffected: tour stops name their
         # cities, and those keep dropping.
