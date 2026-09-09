@@ -83,24 +83,32 @@ trap cleanup EXIT
 # entry or a refused connection reported "all 5 pages render" indefinitely.
 EXPECT_HOST=$(printf '%s' "$BASE" | sed -E 's#^https?://##; s#/.*$##; s#:.*$##')
 
+# Any bad verdict is ambiguous: the SITE may be down, or THIS MACHINE may have
+# no network. On 2026-09-08 the Mac dark-woke at 19:25:16 UTC, launchd fired
+# the missed run five seconds later before Wi-Fi was usable, and the check
+# reported the site broken while it was serving 200s in under 0.4s. A monitor
+# that cries wolf on every wake is one you stop believing, which is the whole
+# failure it exists to prevent.
+#
+# The first version of this guard only covered a FAILED navigation, and a
+# second wake on 2026-09-09 slipped straight past it: the browser's `open`
+# SUCCEEDED, landed on a blank page, and the host check then reported
+# "WRONG_HOST:" with an empty host — the same false alarm through a different
+# door. So the rule is general now: before calling anything a failure, ask
+# curl. No network anywhere means UNKNOWN (exit 2, "nothing was verified").
+bail_if_offline() {
+    curl -sS -L --max-time 15 -o /dev/null "${BASE}${1}" 2>/dev/null && return 0
+    echo "$(date -u '+%Y-%m-%d %H:%M:%S UTC') UNKNOWN: no network from this"
+    echo "machine (curl cannot reach ${1} either); nothing was verified."
+    echo "Normal for a moment after the Mac wakes."
+    exit 2
+}
+
 for page in "${PAGES[@]}"; do
     if ! timeout "$PER_PAGE_TIMEOUT" "$BROWSER" --session smoke open "${BASE}${page}" >/dev/null 2>&1; then
-        # A failed navigation is ambiguous: the SITE may be down, or THIS
-        # MACHINE may have no network. On 2026-09-08 the Mac dark-woke at
-        # 19:25:16 UTC, launchd fired the missed run five seconds later before
-        # Wi-Fi was usable, and the check reported the site broken while it was
-        # serving 200s in under 0.4s. A monitor that cries wolf on every wake
-        # is one you stop believing, which is the whole failure it exists to
-        # prevent. So ask curl: if it cannot reach the page either, the
-        # verdict is UNKNOWN (exit 2, "nothing was verified"), not FAIL.
-        if ! curl -sS -L --max-time 15 -o /dev/null "${BASE}${page}" 2>/dev/null; then
-            echo "$(date -u '+%Y-%m-%d %H:%M:%S UTC') UNKNOWN: no network from this"
-            echo "machine (curl cannot reach ${page} either); nothing was verified."
-            echo "Normal for a moment after the Mac wakes."
-            exit 2
-        fi
-        # curl got through and the browser did not: that is a real problem,
-        # just not a networking one.
+        bail_if_offline "$page"
+        # curl got through and the browser did not: a real problem, just not a
+        # networking one.
         echo "$(date -u '+%Y-%m-%d %H:%M:%S UTC') FAIL ${page} -> NAVIGATION_FAILED (curl reached it)"
         FAILED=1
         continue
@@ -130,9 +138,14 @@ for page in "${PAGES[@]}"; do
         })()" 2>/dev/null | tr -d '"')
 
     if [ -z "$verdict" ]; then
+        bail_if_offline "$page"
         echo "$(date -u '+%Y-%m-%d %H:%M:%S UTC') FAIL ${page} -> NO_RESPONSE_FROM_BROWSER"
         FAILED=1
     elif [ "$verdict" != "ok" ]; then
+        # Same guard as a failed navigation: an offline machine produces
+        # WRONG_HOST (empty host) and NO_CONTENT just as readily as a broken
+        # site does, and only curl can tell them apart.
+        bail_if_offline "$page"
         echo "$(date -u '+%Y-%m-%d %H:%M:%S UTC') FAIL ${page} -> ${verdict}"
         FAILED=1
     fi
