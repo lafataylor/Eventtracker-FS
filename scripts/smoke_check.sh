@@ -29,9 +29,10 @@ set -uo pipefail
 export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
 
 BASE="${SMOKE_BASE_URL:-https://lafaslist.com}"
-# --session smoke everywhere below: the default session is where interactive
-# debugging happens, and an hourly cron navigating it away mid-investigation
-# (or being navigated away itself) makes both unreliable.
+# A dedicated browser session (SESSION, below) rather than the default one:
+# the default session is where interactive debugging happens, and an hourly
+# job navigating it away mid-investigation (or being navigated away itself)
+# makes both unreliable.
 PAGES=("/" "/mexico-city/" "/los-angeles/" "/berlin/" "/bali/")
 PER_PAGE_TIMEOUT=60
 FAILED=0
@@ -62,6 +63,21 @@ if [ -z "$BROWSER" ]; then
     exit 2
 fi
 
+# The expected host, so a page that never loaded cannot pass. A failed
+# navigation lands on chrome-error://chromewebdata, whose body text is 129-162
+# characters — comfortably past any "is it empty" threshold, containing
+# neither "Application error" nor our marker. Before this check, a dead DNS
+# entry or a refused connection reported "all 5 pages render" indefinitely.
+EXPECT_HOST=$(printf '%s' "$BASE" | sed -E 's#^https?://##; s#/.*$##; s#:.*$##')
+
+# The session name is derived from the host, not fixed, so a run against a
+# different BASE cannot disturb the production monitor. On 2026-09-09 a test
+# run against example.com shared the single "smoke" session with the hourly
+# LaunchAgent; the scheduled run inherited that page and wrote
+# "FAIL /bali/ -> WRONG_HOST:example.com" into the log a human reads. My own
+# testing must never be able to forge a production alarm.
+SESSION="smoke-${EXPECT_HOST}"
+
 # Release the browser when this run ends, however it ends. A session persists
 # between runs by design, so the hourly check was reusing one Chrome for as
 # long as the machine stayed awake: on 2026-09-07 that session had been alive
@@ -73,15 +89,8 @@ fi
 # likely reason this session ever needed closing, and an unbounded close would
 # hang the run forever instead of ending it (`|| true` does not help - it only
 # swallows the status once the command finally returns).
-cleanup() { timeout 20 "$BROWSER" --session smoke close >/dev/null 2>&1 || true; }
+cleanup() { timeout 20 "$BROWSER" --session "$SESSION" close >/dev/null 2>&1 || true; }
 trap cleanup EXIT
-
-# The expected host, so a page that never loaded cannot pass. A failed
-# navigation lands on chrome-error://chromewebdata, whose body text is 129-162
-# characters — comfortably past any "is it empty" threshold, containing
-# neither "Application error" nor our marker. Before this check, a dead DNS
-# entry or a refused connection reported "all 5 pages render" indefinitely.
-EXPECT_HOST=$(printf '%s' "$BASE" | sed -E 's#^https?://##; s#/.*$##; s#:.*$##')
 
 # Any bad verdict is ambiguous: the SITE may be down, or THIS MACHINE may have
 # no network. On 2026-09-08 the Mac dark-woke at 19:25:16 UTC, launchd fired
@@ -109,7 +118,7 @@ network_reaches() {
 # function so a failing page can simply be tried again (see the retry below).
 check_page() {
     local page="$1"
-    if ! timeout "$PER_PAGE_TIMEOUT" "$BROWSER" --session smoke open "${BASE}${page}" >/dev/null 2>&1; then
+    if ! timeout "$PER_PAGE_TIMEOUT" "$BROWSER" --session "$SESSION" open "${BASE}${page}" >/dev/null 2>&1; then
         network_reaches "$page" || { echo "OFFLINE"; return; }
         echo "NAVIGATION_FAILED (curl reached it)"
         return
@@ -118,7 +127,7 @@ check_page() {
     # once events arrived, so checking too early would have reported healthy.
     sleep 8
 
-    verdict=$(timeout "$PER_PAGE_TIMEOUT" "$BROWSER" --session smoke eval \
+    verdict=$(timeout "$PER_PAGE_TIMEOUT" "$BROWSER" --session "$SESSION" eval \
         "(() => {
             // Prove we are looking at the page we asked for, not a browser
             // error page and not the PREVIOUS page's DOM.
