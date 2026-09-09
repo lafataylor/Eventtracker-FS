@@ -96,22 +96,23 @@ EXPECT_HOST=$(printf '%s' "$BASE" | sed -E 's#^https?://##; s#/.*$##; s#:.*$##')
 # "WRONG_HOST:" with an empty host — the same false alarm through a different
 # door. So the rule is general now: before calling anything a failure, ask
 # curl. No network anywhere means UNKNOWN (exit 2, "nothing was verified").
-bail_if_offline() {
-    curl -sS -L --max-time 15 -o /dev/null "${BASE}${1}" 2>/dev/null && return 0
-    echo "$(date -u '+%Y-%m-%d %H:%M:%S UTC') UNKNOWN: no network from this"
-    echo "machine (curl cannot reach ${1} either); nothing was verified."
-    echo "Normal for a moment after the Mac wakes."
-    exit 2
+# A pure predicate on purpose. It used to print and `exit 2` itself, which
+# silently stopped working once check_page moved into a $( ) command
+# substitution: that runs in a subshell, so the exit killed only the subshell
+# and the UNKNOWN text was captured as the page's verdict. The caller runs in
+# the real shell and owns the exit.
+network_reaches() {
+    curl -sS -L --max-time 15 -o /dev/null "${BASE}${1}" 2>/dev/null
 }
 
-for page in "${PAGES[@]}"; do
+# One page, one verdict: echoes "ok" or the reason it failed. Kept as a
+# function so a failing page can simply be tried again (see the retry below).
+check_page() {
+    local page="$1"
     if ! timeout "$PER_PAGE_TIMEOUT" "$BROWSER" --session smoke open "${BASE}${page}" >/dev/null 2>&1; then
-        bail_if_offline "$page"
-        # curl got through and the browser did not: a real problem, just not a
-        # networking one.
-        echo "$(date -u '+%Y-%m-%d %H:%M:%S UTC') FAIL ${page} -> NAVIGATION_FAILED (curl reached it)"
-        FAILED=1
-        continue
+        network_reaches "$page" || { echo "OFFLINE"; return; }
+        echo "NAVIGATION_FAILED (curl reached it)"
+        return
     fi
     # Hydration plus the first data fetch. The 2026-09-01 crash only appeared
     # once events arrived, so checking too early would have reported healthy.
@@ -138,16 +139,46 @@ for page in "${PAGES[@]}"; do
         })()" 2>/dev/null | tr -d '"')
 
     if [ -z "$verdict" ]; then
-        bail_if_offline "$page"
-        echo "$(date -u '+%Y-%m-%d %H:%M:%S UTC') FAIL ${page} -> NO_RESPONSE_FROM_BROWSER"
-        FAILED=1
+        network_reaches "$page" || { echo "OFFLINE"; return; }
+        echo "NO_RESPONSE_FROM_BROWSER"
     elif [ "$verdict" != "ok" ]; then
         # Same guard as a failed navigation: an offline machine produces
         # WRONG_HOST (empty host) and NO_CONTENT just as readily as a broken
         # site does, and only curl can tell them apart.
-        bail_if_offline "$page"
-        echo "$(date -u '+%Y-%m-%d %H:%M:%S UTC') FAIL ${page} -> ${verdict}"
-        FAILED=1
+        network_reaches "$page" || { echo "OFFLINE"; return; }
+        echo "$verdict"
+    else
+        echo "ok"
+    fi
+}
+
+for page in "${PAGES[@]}"; do
+    verdict=$(check_page "$page")
+    if [ "$verdict" = "OFFLINE" ]; then
+        echo "$(date -u '+%Y-%m-%d %H:%M:%S UTC') UNKNOWN: no network from this"
+        echo "machine (curl cannot reach ${page} either); nothing was verified."
+        echo "Normal for a moment after the Mac wakes."
+        exit 2
+    fi
+    if [ "$verdict" != "ok" ]; then
+        # Try once more before crying wolf. network_reaches only proves the
+        # site is REACHABLE, not that the connection is healthy: on 2026-09-09
+        # a degraded link around a sleep cycle let curl through in 19 s while
+        # the browser starved and reported NO_CONTENT on two pages, with the
+        # server answering every request in 0.2 s the whole time. That was the
+        # third false alarm in two days from the same cause. A genuinely broken
+        # page fails twice; a network blip does not.
+        sleep 5
+        verdict=$(check_page "$page")
+        if [ "$verdict" = "OFFLINE" ]; then
+            echo "$(date -u '+%Y-%m-%d %H:%M:%S UTC') UNKNOWN: no network from this"
+            echo "machine (curl cannot reach ${page} either); nothing was verified."
+            exit 2
+        fi
+        if [ "$verdict" != "ok" ]; then
+            echo "$(date -u '+%Y-%m-%d %H:%M:%S UTC') FAIL ${page} -> ${verdict} (twice)"
+            FAILED=1
+        fi
     fi
 done
 
