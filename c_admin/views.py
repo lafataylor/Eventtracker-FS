@@ -184,6 +184,47 @@ class AdminAccounts(APIView):
 
             return ServerProcessingError(message="Error during account deletion: "+str(e))
 
+TRACKING_STATUS = "Tracking"
+
+
+def accounts_to_scrape(usernames):
+    """The accounts a run should actually fetch, honouring Account.status.
+
+    `status` has existed since the model was written and nothing read it:
+    cronRun.py asks admin/accounts/ for every account with no filter, and the
+    admin table prints "Tracking" as literal text whatever the row says. So
+    retiring an account by setting its status silently did nothing, and the
+    only other option was deleting the row - which cascades through
+    Event.poster and would take all of that account's events with it.
+
+    Filtering here rather than in the listing endpoint keeps retired accounts
+    visible in the admin UI and needs no change to cronRun.py on the server.
+
+    A username with no Account row is still passed through: that was the
+    previous behaviour and the scraper relies on it. A NULL status means the
+    model default, i.e. Tracking.
+    """
+    selected = []
+    for username in usernames:
+        rows = list(Account.objects.filter(user=username))
+        if not rows:
+            selected.append({'user': username, 'forLocation': None})
+            continue
+        # The same handle can exist more than once with different cities; the
+        # account is live if ANY of its rows is still tracking, and only the
+        # live rows' locations are carried forward.
+        live = [a for a in rows if (a.status or TRACKING_STATUS) == TRACKING_STATUS]
+        if not live:
+            logger.info("[ACCOUNTS] skipping %r: no row is still Tracking", username)
+            continue
+        locations = sorted({a.forLocation for a in live if a.forLocation})
+        selected.append({
+            'user': username,
+            'forLocation': ','.join(locations) if locations else None,
+        })
+    return selected
+
+
 class AdminRunScraper(APIView):
     def download_images_thread(self, accounts, session_id, headers, config, exec_id):
         try:
@@ -206,29 +247,7 @@ class AdminRunScraper(APIView):
                 if not accounts:
                     raise ValueError('No accounts to scrape')
 
-                # Fetch full account objects instead of just usernames
-                full_accounts = []
-                for account_username in accounts:
-                    account_objs = Account.objects.filter(user=account_username).all()
-                    if account_objs:
-                        # Collect all forLocation values from multiple accounts
-                        for_locations = [
-                            acc.forLocation for acc in account_objs 
-                            if acc.forLocation
-                        ]
-                        # Combine locations (remove duplicates)
-                        combined_location = ','.join(set(for_locations)) if for_locations else None
-                        
-                        full_accounts.append({
-                            'user': account_username,
-                            'forLocation': combined_location
-                        })
-                    else:
-                        # If account doesn't exist, still use dict format so scraper loop sees all accounts
-                        full_accounts.append({
-                            'user': account_username,
-                            'forLocation': None
-                        })
+                full_accounts = accounts_to_scrape(accounts)
 
                 exec_id = get_exec()
 
