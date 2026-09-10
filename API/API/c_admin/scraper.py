@@ -1585,9 +1585,13 @@ def save_logs(logs: dict):
 
 
 def get_headers():
+    # Deliberately OUTSIDE the try below: that block returns [] on any
+    # exception, so a missing credential would be indistinguishable from a
+    # healthy run that found nothing, and ingestion would stop silently.
+    email, password = admin_credentials()
     data = {
-        "email": ADMIN_EMAIL,
-        "password": ADMIN_PASSWORD
+        "email": email,
+        "password": password
     }
     headers = {
         "Content-Type": "application/json",

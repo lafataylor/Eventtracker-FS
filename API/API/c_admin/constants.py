@@ -1,11 +1,32 @@
 # secret
+import os as _os
+
 BASE_URL = 'https://www.instagram.com/'
 LOGIN_URL = BASE_URL + 'accounts/login/ajax/'
 LOGOUT_URL = BASE_URL + 'accounts/logout/'
 #STORIES_UA = 'Instagram 123.0.0.21.114 (iPhone; CPU iPhone OS 11_4 like Mac OS X; en_US; en-US; scale=2.00; 750x1334) AppleWebKit/605.1.15'
 STORIES_UA = "Mozilla/5.0 (iPhone; CPU iPhone OS 11_2_6 like Mac OS X) AppleWebKit/604.5.6 (KHTML, like Gecko) Mobile/15D100 Instagram 37.0.0.9.96 (iPhone7,2; iOS 11_2_6; pt_PT; pt-PT; scale=2.34; gamut=normal; 750x1331)"
-ADMIN_EMAIL = "dummy_@gmail.com"
-ADMIN_PASSWORD = "dummy_"
+# The scraper logs itself into this API to save events (see
+# scraper.get_headers). These are real site admin credentials and this file is
+# tracked in a PUBLIC repository, so they are read from the environment and
+# nothing is stored here. Owner request, 2026-09-10.
+#
+# Read at CALL time, never at import: a module-level lookup that raises would
+# take down every manage.py command and the test suite the moment the variable
+# is absent, which is how OPENAI_API_KEY once made unrelated commands fail with
+# an opaque error. On the server they are set in the gunicorn systemd unit
+# alongside the other keys, and cronRun.py already reads the same two names.
+def admin_credentials():
+    """(email, password) for the scraper's own login. Raises if unset."""
+    email = _os.getenv("ADMIN_EMAIL", "").strip()
+    password = _os.getenv("ADMIN_PASSWORD", "").strip()
+    missing = [n for n, v in (("ADMIN_EMAIL", email),
+                              ("ADMIN_PASSWORD", password)) if not v]
+    if missing:
+        raise RuntimeError(
+            "Missing " + " and ".join(missing) + ". The scraper cannot log in "
+            "to save events. Set them in the gunicorn service environment.")
+    return email, password
 
 # api
 LOGIN_USER = "malik.steed"
@@ -22,7 +43,6 @@ ACCESS_TOKEN = "IGQVJVWWY1VC11dnhNN3hVZAXFqMXpKM3o1Uk9pSGc1X1d3S1NtT1h3eFJmU01zN
 # the default stays the prod domain. Locally this MUST be overridden to the
 # local API (EVENT_API_HOST in .env) or a dev machine will write into the
 # production database.
-import os as _os
 # The trailing slash is normalised on purpose (same convention as
 # FE/services/apiClient.tsx): endpoints below concatenate HOST + VERSION, so
 # HOST must end in exactly one '/'. Without this, EVENT_API_HOST set without a
