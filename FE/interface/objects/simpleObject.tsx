@@ -111,6 +111,9 @@ export interface Event {
   is_duplicate?: boolean;
   duplicate_link?: string;
   forLocation?: string;
+  // Every occurrence of this event's recurring series that was in the same
+  // list, soonest first; the API returns one card per series (event/series.py).
+  series_ids?: number[];
 }
 
 export interface Feedback {

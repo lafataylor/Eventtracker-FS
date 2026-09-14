@@ -3,6 +3,7 @@ from rest_framework.views import APIView
 
 from .models import Event, Venue, Execution, Feedback, FavoritesData, BlacklistedLink, EventMatch
 from .serializers import EventSerializer, FeedbackSerializer
+from .series import collapse_series
 from .ingest import (build_source_key, coerce_int, normalize_poster_name,
                      normalize_text, resolve_venue, upsert_event)
 from django.db import transaction
@@ -366,7 +367,10 @@ class AdminEvent(APIView):
             # Make all posts shared for now, but only grab ones before the cutoff time
             _events = Event.objects.filter(timestamp__gte=cutoff_time).order_by('-timestamp').all()
 
-            event_serializer = EventSerializer(_events, many=True)
+            # One row per recurring series, carrying every occurrence's id
+            # (event.series): a night's scrape used to list its expansions
+            # twelve rows in a row here.
+            event_serializer = EventSerializer(collapse_series(_events), many=True)
 
             response_data = event_serializer.data
             return Success(response_data, status=True)
@@ -872,7 +876,8 @@ def search_events(request):
                        .select_related('venue', 'poster')
                        .order_by('-timestamp')[:SEARCH_RESULT_LIMIT])
 
-        events_serializer = EventSerializer(user_events, many=True)
+        # One card per recurring series (event.series), in every list.
+        events_serializer = EventSerializer(collapse_series(user_events), many=True)
         return Success(events_serializer.data, status=True)
     except Exception as e:
         # Was a bare `except: user_events = []`, which turned any query error
@@ -917,7 +922,8 @@ def date_events(request):
             suppressed=False,
         ).exclude(is_event=False).all()
 
-        events_serializer = EventSerializer(date_events, many=True)
+        # One card per recurring series (event.series), in every list.
+        events_serializer = EventSerializer(collapse_series(date_events), many=True)
 
         response_data = events_serializer.data
         return Success(response_data, status=True)
@@ -968,7 +974,8 @@ def date_range_events(request):
             suppressed=False,
         ).exclude(is_event=False).all()
 
-        events_serializer = EventSerializer(date_events, many=True)
+        # One card per recurring series (event.series), in every list.
+        events_serializer = EventSerializer(collapse_series(date_events), many=True)
 
         response_data = events_serializer.data
         return Success(response_data, status=True)
@@ -1127,7 +1134,8 @@ def filter_events(request):
         # set before applying the limit.
         events = (queryset.select_related('venue', 'poster')
                   .order_by('-timestamp')[:SEARCH_RESULT_LIMIT])
-        return Success(EventSerializer(events, many=True).data, status=True)
+        # One card per recurring series (event.series), in every list.
+        return Success(EventSerializer(collapse_series(events), many=True).data, status=True)
     except Exception as e:
         logger.error(f"An error occurred during event filtering: {e}")
         return ServerProcessingError()
@@ -1331,9 +1339,18 @@ def get_event_matches(request):
                           | Q(event_b__start_date__date__gte=today)
                           | Q(event_a__start_date__isnull=True)
                           | Q(event_b__start_date__isnull=True))
+        # ...and the two other ways a row stops being a listing: hidden by
+        # the older is_duplicate flag, or classified not-an-event. Either
+        # leaves the reviewer comparing a real event with a card no visitor
+        # can see (12 of the 218 pairs shown on 2026-09-14). is_event NULL
+        # means never classified and stays, as everywhere else.
         visible = (EventMatch.objects
                    .exclude(event_a__suppressed=True)
                    .exclude(event_b__suppressed=True)
+                   .exclude(event_a__is_duplicate=True)
+                   .exclude(event_b__is_duplicate=True)
+                   .exclude(event_a__is_event=False)
+                   .exclude(event_b__is_event=False)
                    .filter(still_relevant))
         # Chronological, soonest first (owner: "events on the duplicate page
         # should be in chronological order"). Undated pairs sort last rather

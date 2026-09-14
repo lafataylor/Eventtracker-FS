@@ -297,3 +297,33 @@ class CarouselIngestTests(TestCase):
         obj.refresh_from_db()
         self.assertTrue(obj.is_duplicate)   # still hidden
         self.assertTrue(obj.suppressed)
+
+
+class RecurrenceHorizonTests(TestCase):
+    """The occurrence cap is a COUNT, sized for a weekly series (12 = ~3
+    months). Applied to a monthly series it reached a year ahead: on
+    2026-09-14 one wellness studio's schedule post ("Alquimia de Sales") had
+    become 86 upcoming rows, twelve months of Sound Bath, Breathwork and
+    Silencio Total each. Cap by TIME instead, so every cadence stops ~3
+    months out and the weekly case is unchanged."""
+
+    def test_monthly_series_stops_three_months_out(self):
+        from c_admin.extraction import expand_recurring
+        series = mk_event(event_name="Sound Bath", start_date="09-04-2026",
+                          recurrence="monthly")
+        dates = [e.start_date for e in expand_recurring([series])]
+        self.assertEqual(dates, ["09-04-2026", "10-04-2026", "11-04-2026", "12-04-2026"])
+
+    def test_biweekly_series_stops_at_the_same_horizon(self):
+        from c_admin.extraction import expand_recurring
+        series = mk_event(event_name="Fortnightly", start_date="09-01-2026",
+                          recurrence="biweekly")
+        dates = [e.start_date for e in expand_recurring([series])]
+        self.assertEqual(len(dates), 7)                # 0..84 days
+        self.assertEqual(dates[-1], "11-24-2026")      # 12-08 would be past 3 months
+
+    def test_weekly_series_still_gets_twelve_weeks(self):
+        from c_admin.extraction import expand_recurring, MAX_OCCURRENCES
+        series = mk_event(event_name="Every Thursday", start_date="09-03-2026",
+                          recurrence="weekly")
+        self.assertEqual(len(expand_recurring([series])), MAX_OCCURRENCES)

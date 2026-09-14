@@ -240,6 +240,10 @@ def extract_events(client, image_urls, caption="", biography="", external_url=""
 
 RECURRENCE_STEPS = {'weekly': 7, 'biweekly': 14, 'monthly': 30}
 MAX_OCCURRENCES = 12  # ~3 months of a weekly series
+# The count cap was sized for a weekly series; applied to a MONTHLY one it
+# reached a year ahead (2026-09-14: one studio's schedule post had become 86
+# upcoming rows, twelve months of each class). Every cadence also stops here.
+MAX_HORIZON_MONTHS = 3
 
 
 def expand_recurring(events, max_occurrences=MAX_OCCURRENCES):
@@ -293,6 +297,7 @@ def expand_recurring(events, max_occurrences=MAX_OCCURRENCES):
             expanded.append(event)
             continue
 
+        horizon = start + relativedelta(months=MAX_HORIZON_MONTHS)
         for n in range(max_occurrences):
             if recurrence == 'monthly':
                 # Calendar months, not 30-day hops: a Jan 31 series must not
@@ -301,6 +306,8 @@ def expand_recurring(events, max_occurrences=MAX_OCCURRENCES):
             else:
                 occurrence = start + timedelta(days=RECURRENCE_STEPS[recurrence] * n)
             if until and occurrence > until:
+                break
+            if occurrence > horizon:
                 break
             expanded.append(event.model_copy(update={
                 'start_date': occurrence.strftime('%m-%d-%Y'),
