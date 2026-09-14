@@ -914,3 +914,67 @@ class NonEventRecoveryScopeTests(TestCase):
             row.refresh_from_db()
         self.assertTrue(self.dup.is_event)
         self.assertIsNone(null_row.is_event)
+
+
+class NamelessProgrammeNightsTests(TestCase):
+    """A programme post with no titles: lokschuppenberlin Dcsm426tWgF
+    (ingested 2026-09-01) listed PHASE:ONE on the 15th, SIGNALS on the 16th,
+    F90 on the 18th and NEER on the 19th. Four events. The exact pass allows
+    one day of date drift between re-scrapes of one post, so consecutive
+    nights clustered together and, both sides being nameless with text, were
+    queued as "same Instagram post" pairs. Scored 0, they sorted to the very
+    top of the owner's review page (2026-09-14: 11 of the first rows).
+
+    Different artists on different dates is positive evidence of two events,
+    the same kind the rule already accepts from two different titles."""
+
+    def _row(self, key, artist, day, **kw):
+        base = dict(shortcode='LOK1', source_key=key, name=None, artist=artist,
+                    start_date=timezone.now() + timedelta(days=day),
+                    is_duplicate=False, suppressed=False, is_event=True,
+                    orig_link='https://www.instagram.com/p/LOK1/',
+                    orig_thumb='https://img/%s.jpg' % key)
+        base.update(kw)
+        return Event.objects.create(**base)
+
+    def test_different_artists_on_different_nights_are_left_alone(self):
+        self._row('LOK1__0__5', 'PHASE:ONE', 1)
+        self._row('LOK1__0__6', 'SIGNALS', 2)
+        call_command('detect_duplicates', '--exact')
+        self.assertEqual(EventMatch.objects.count(), 0)
+        self.assertEqual(Event.objects.filter(suppressed=True).count(), 0)
+
+    def test_same_artist_a_day_apart_still_goes_to_review(self):
+        # The one-day tolerance exists for re-scrape date drift; with the
+        # same artist there is no evidence of two events, so a human decides.
+        self._row('LOK1__0__5', 'PHASE:ONE', 1)
+        self._row('LOK1__0__6', 'PHASE:ONE', 2)
+        call_command('detect_duplicates', '--exact')
+        self.assertEqual(EventMatch.objects.filter(status='pending').count(), 1)
+
+    def test_different_artists_on_the_same_night_still_go_to_review(self):
+        # Two rooms, or one event split across slides: not ours to decide.
+        self._row('LOK1__0__5', 'PHASE:ONE', 1)
+        self._row('LOK1__0__6', 'SIGNALS', 1)
+        call_command('detect_duplicates', '--exact')
+        self.assertEqual(EventMatch.objects.filter(status='pending').count(), 1)
+
+    def test_a_pending_pair_between_distinct_nights_is_closed(self):
+        # The 25 such pairs already in the owner's queue must not stay there
+        # after the rule that queued them is corrected.
+        a = self._row('LOK1__0__5', 'PHASE:ONE', 1)
+        b = self._row('LOK1__0__6', 'SIGNALS', 2)
+        stale = EventMatch.objects.create(event_a=a, event_b=b, score=0.0,
+                                          match_type='exact_link', status='pending')
+        call_command('detect_duplicates', '--exact')
+        stale.refresh_from_db()
+        self.assertEqual(stale.status, 'rejected')
+
+    def test_an_owner_decision_on_such_a_pair_is_kept(self):
+        a = self._row('LOK1__0__5', 'PHASE:ONE', 1)
+        b = self._row('LOK1__0__6', 'SIGNALS', 2)
+        decided = EventMatch.objects.create(event_a=a, event_b=b, score=0.0,
+                                            match_type='exact_link', status='confirmed')
+        call_command('detect_duplicates', '--exact')
+        decided.refresh_from_db()
+        self.assertEqual(decided.status, 'confirmed')

@@ -218,6 +218,17 @@ def same_post_is_redundant(a, b):
         # where extraction named one slide and not the other (72% of rows are
         # nameless). Not enough certainty to auto-hide — queue for review.
         return False
+    if not a['name'] and not b['name'] and a['artist'] and b['artist'] \
+            and a['date'] and b['date'] and a['date'] != b['date'] \
+            and fuzz.token_set_ratio(a['artist'], b['artist']) < MIN_TITLE_SIM:
+        # No titles, but a different artist on a different date: a programme
+        # post with one act per night (lokschuppenberlin, 2026-09-01: four
+        # acts on four nights, queued as four "same post" pairs that sorted
+        # to the top of the owner's page). Positive evidence of two events,
+        # as two different titles would be. The one-day tolerance below is
+        # for date drift between re-scrapes of ONE event; drift does not
+        # change the artist.
+        return False
     if a['date'] and b['date'] and abs((a['date'] - b['date']).days) > 1:
         return False            # same post, different dates -> distinct dates
     return True
