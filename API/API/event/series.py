@@ -16,10 +16,22 @@ keeper carries series_ids (every occurrence that was in the result, soonest
 first) so the admin page can act on the whole series at once.
 
 What counts as one series: the expansions are model_copy()s of ONE extracted
-event, identical in every field except start_date/end_date. So the key is the
-post plus every field a visitor can see. Two rows of one post that differ in
-title, artist, host or start time are different events (a roundup, or a
-programme post with no titles and one act per night) and are all kept.
+event, identical in every field except start_date/end_date. The key is the
+post plus the fields that identify an event to a visitor: title, artist, host
+and start time. Two rows of one post that differ in any of those are
+different events (a roundup, or a programme post with no titles and one act
+per night) and are all kept. Not in the key, on purpose:
+
+* the date - that is the whole point; and a roundup that lists one title on
+  several nights is one card too (owner: "a max of one event with the same
+  title");
+* the carousel slide - a flyer slide and a lineup slide of one post can each
+  yield the event, and the list must not show it twice while the nightly
+  exact pass catches up;
+* venue text, price, genres - they drift between two extractions of one post
+  and would split a series into two cards, while a real second event on one
+  post differs in a primary field.
+
 Cross-post repeats are the dedupe's job, with its own evidence rules: a title
 alone must never collapse two posts.
 """
@@ -32,8 +44,8 @@ def _norm(value):
 def series_key(event):
     """Identity of the series a row belongs to; a row with no post is its own."""
     post = event.shortcode or event.orig_link or ('id', event.id)
-    return (post, event.source_slide_index, _norm(event.name),
-            _norm(event.artist), _norm(event.host), _norm(event.start_time))
+    return (post, _norm(event.name), _norm(event.artist), _norm(event.host),
+            _norm(event.start_time))
 
 
 def _starts_before(a, b):

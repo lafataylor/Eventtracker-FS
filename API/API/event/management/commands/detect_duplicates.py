@@ -8,6 +8,9 @@ Usage:
 --exact  groups rows that share an Instagram shortcode (certain re-scrapes),
          keeps the most complete row as canonical, and suppresses the rest
          (recoverable: suppressed=True + canonical set, never deleted).
+         Also closes, as rejected, pending same-post pairs whose rows the
+         current rule places in different clusters (distinct events that an
+         earlier, looser rule had queued).
 --fuzzy  finds same-event/different-post pairs and queues them as pending
          EventMatch rows for side-by-side owner review — nothing is suppressed
          automatically, because these are uncertain by nature.

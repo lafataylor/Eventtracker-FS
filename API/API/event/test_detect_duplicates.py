@@ -386,6 +386,41 @@ class ResolveDeleteBothTests(TestCase):
         self.assertTrue(BlacklistedLink.objects.filter(
             url='https://ig/p/JUNK/').exists())
 
+    def test_admin_delete_blacklists_when_the_only_other_row_has_passed(self):
+        # Deleting a recurring series from the admin page deletes every FUTURE
+        # occurrence; the past ones stay until the purge, but nobody can see
+        # them and nothing refreshes them, so they must not hold the post
+        # open: without the blacklist a recovery re-scrape would put the
+        # deleted dates straight back.
+        from event.models import BlacklistedLink
+        shared = 'https://ig/p/SERIES/'
+        past = Event.objects.create(name='weekly', orig_link=shared, is_event=True,
+                                    start_date=timezone.now() - timedelta(days=10))
+        future = [Event.objects.create(name='weekly', orig_link=shared, is_event=True,
+                                       start_date=timezone.now() + timedelta(days=7 * i))
+                  for i in (1, 2)]
+        r = self.client.delete('/v1/admin/event/',
+                               {'events': [e.id for e in future]},
+                               content_type='application/json',
+                               HTTP_AUTHORIZATION='Token ' + self.tok)
+        self.assertEqual(r.status_code, 200)
+        self.assertTrue(Event.objects.filter(id=past.id).exists())
+        self.assertFalse(Event.objects.filter(id__in=[e.id for e in future]).exists())
+        self.assertTrue(BlacklistedLink.objects.filter(url=shared).exists())
+
+    def test_delete_both_blacklists_when_the_third_row_has_passed(self):
+        # Same rule on the review page's delete_both.
+        from event.models import BlacklistedLink
+        shared = 'https://ig/p/SHARED/'
+        for ev in (self.a, self.b):
+            ev.orig_link = shared
+            ev.save(update_fields=['orig_link'])
+        Event.objects.create(name='C', orig_link=shared, is_event=True,
+                             start_date=timezone.now() - timedelta(days=10))
+        r = self._resolve('delete_both')
+        self.assertEqual(r.status_code, 200)
+        self.assertTrue(BlacklistedLink.objects.filter(url=shared).exists())
+
 
 class RecoveryScopeTests(TestCase):
     """The recovery list must be able to answer "what was this hidden behind?"
@@ -978,3 +1013,19 @@ class NamelessProgrammeNightsTests(TestCase):
         call_command('detect_duplicates', '--exact')
         decided.refresh_from_db()
         self.assertEqual(decided.status, 'confirmed')
+
+    def test_two_non_events_still_collapse_whatever_their_artists(self):
+        # Decided in review 2026-08-31 (PR #4): two rows BOTH classified
+        # not-an-event collapse without review even when secondary fields
+        # differ, because neither can appear anywhere and review would be a
+        # choice between two invisible rows. The programme-nights rule must
+        # not reopen that: with no listing on either side there is no second
+        # event to protect. (The pinned test survived the rule only because
+        # 'DJ A' / 'DJ B' score 75; these two score 27.)
+        keeper = self._row('LOK1__0__5', 'Bass Collective', 1, is_event=False)
+        self._row('LOK1__0__6', 'Ambient Sunrise', 2, is_event=False)
+        call_command('detect_duplicates', '--exact')
+        self.assertEqual(EventMatch.objects.filter(status='pending').count(), 0)
+        hidden = Event.objects.filter(suppressed=True)
+        self.assertEqual(hidden.count(), 1)
+        self.assertEqual(hidden.get().canonical_id, keeper.id)

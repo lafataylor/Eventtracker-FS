@@ -107,6 +107,15 @@ class CollapseSeriesTests(SeriesFixtureMixin, TestCase):
         kept = collapse_series([z, second, a, first])
         self.assertEqual([e.name for e in kept], ['Zebra', 'Wednesday Night at Tonal', 'Alpha'])
 
+    def test_two_slides_of_one_post_describing_one_event_collapse(self):
+        # A flyer slide and a lineup slide of one carousel can each yield the
+        # same event. The exact pass hides one overnight; the list must not
+        # wait for it (owner screenshot 2026-09-14: two identical "September
+        # Nights at Attika" cards side by side, one post).
+        a = self._ev('September Nights at Attika', self.day, slide=0)
+        b = self._ev('September Nights at Attika', self.day, slide=1)
+        self.assertEqual([e.id for e in collapse_series([a, b])], [a.id])
+
 
 class SeriesInFeedsTests(SeriesFixtureMixin, TestCase):
     def setUp(self):
@@ -154,3 +163,40 @@ class SeriesInFeedsTests(SeriesFixtureMixin, TestCase):
         # This endpoint answers with the bare row, not the {status, data} wrapper.
         res = self.client.get('/v1/event/', {'id': str(self.second.id)})
         self.assertEqual(res.json()['series_ids'], [self.second.id])
+
+
+class SeriesAndResultCapTests(SeriesFixtureMixin, TestCase):
+    """The result cap must count CARDS, not rows. Applied to rows before the
+    collapse, a couple of recurring series could fill it with their copies
+    and push distinct matching events out of the response entirely."""
+
+    def setUp(self):
+        super().setUp()
+        self.first, self.second = self._series()
+        self.other = self._ev('Tonal Records Showcase', self.day + timedelta(days=2),
+                              shortcode='OTHER')
+        # The series copies are the newest rows (ingested last); the distinct
+        # event is older, so a row-level cap of 2 would take the two copies.
+        Event.objects.filter(id__in=[self.first.id, self.second.id]).update(
+            timestamp=timezone.now() + timedelta(minutes=5))
+        Event.objects.filter(id=self.other.id).update(
+            timestamp=timezone.now() - timedelta(days=1))
+
+    def test_search_fills_the_cap_with_distinct_cards(self):
+        from unittest import mock
+        with mock.patch('event.views.SEARCH_RESULT_LIMIT', 2):
+            res = self.client.get('/v1/event/search/', {'query': 'tonal'})
+        self.assertEqual({r['name'] for r in self._rows(res)},
+                         {'Wednesday Night at Tonal', 'Tonal Records Showcase'})
+
+    def test_filter_fills_the_cap_with_distinct_cards(self):
+        from unittest import mock
+        with mock.patch('event.views.SEARCH_RESULT_LIMIT', 2):
+            res = self.client.post(
+                '/v1/event/filter/',
+                {'filters': [{'type': 'date', 'condition': 'between',
+                              'values': [self.day.strftime('%m/%d/%Y'),
+                                         self.week_later.strftime('%m/%d/%Y')]}]},
+                content_type='application/json')
+        self.assertEqual({r['name'] for r in self._rows(res)},
+                         {'Wednesday Night at Tonal', 'Tonal Records Showcase'})
