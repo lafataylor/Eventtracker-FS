@@ -276,7 +276,36 @@ def build_payloads(extraction, *, shortcode, post_link, slide_urls,
                                            ordinal=ordinal)
                         if multi_event and not event.recurrence else None),
         ))
-    return _drop_other_metro_events(payloads, expanded, shortcode)
+    # Metro first: it drops rows and needs isEvent intact to know which are
+    # listings. The no-date rule then hides among the survivors.
+    kept = _drop_other_metro_events(payloads, expanded, shortcode)
+    kept_events = [ev for pl, ev in zip(payloads, expanded) if pl in kept]
+    return _hide_undated_events(kept, kept_events, shortcode)
+
+
+def _hide_undated_events(payloads, events, shortcode):
+    """An extracted event with neither a start nor an end date is stored as
+    not-an-event.
+
+    Owner rule (2026-09-18): "if something doesn't have a start or end date,
+    it should not make it through, this is a new problem". It was new: the
+    old scraper refused to save anything missing 11 or more fields, so a row
+    with nothing but a picture never existed; the structured path saved 75
+    such rows as events in two weeks, and the admin list showed them as blank
+    rows. Hidden rather than dropped: the payload still reaches the server so
+    the post counts as processed (not re-billed), the row is still there if
+    the post is re-read with a date, and purge_past_events removes it after
+    90 days like every other non-event.
+    """
+    for payload, event in zip(payloads, events):
+        if not payload.get("isEvent"):
+            continue
+        if getattr(event, "start_date", None) or getattr(event, "end_date", None):
+            continue
+        logger.info("[NODATE] %s: %r has no start or end date; stored as not an event",
+                    shortcode, getattr(event, "event_name", None))
+        payload["isEvent"] = False
+    return payloads
 
 
 def _drop_other_metro_events(payloads, events, shortcode):

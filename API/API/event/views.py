@@ -99,6 +99,11 @@ def _log_safe(value, limit):
     return _LOG_UNSAFE.sub(' ', value[:limit])
 
 EVENT_CUTOFF_TIME = timedelta(hours=25)
+# How long a multi-day run may keep listing after its first day. A festival
+# is a few days; anything longer with an end date is an extraction mistake
+# ("Lightning in a Bottle" stored as Aug 21 to Sep 18 sat under Today for a
+# month, 2026-09-18) or an exhibition the owner wants on its opening day only.
+SHORT_RUN = timedelta(days=3)
 
 
 def local_day_bounds(first_day, last_day=None):
@@ -380,21 +385,28 @@ class AdminEvent(APIView):
         uid = get_uid_from_token(token=token)
 
         try:
-            """user_accounts = Account.objects.filter(
-                created_by=uid,
-            ).exclude(id=uid).all()
-
-            _events = Event.objects.filter(
-                poster__in=user_accounts).order_by('-timestamp').all()"""
-
-
-            # Get current date and time (aware; see get_favorites)
-            current_time = timezone.now() - timedelta(hours=24)
-            # Calculate the cutoff time for events older than 48 hours
-            cutoff_time = current_time - EVENT_CUTOFF_TIME
-
-            # Make all posts shared for now, but only grab ones before the cutoff time
-            _events = Event.objects.filter(timestamp__gte=cutoff_time).order_by('-timestamp').all()
+            # An inbox of what is coming up, not a dump. Until 2026-09-18 this
+            # filtered on `timestamp` (49 hours back), which is the event's
+            # start date, so it served every future row plus two past days,
+            # hid nothing (521 rows already hidden as duplicates, 25
+            # not-an-event, 31 undated on that day), and ran one query per
+            # venue and poster: 3,235 rows, 3.8 MB, 8.5 s. Owner: "events
+            # should automatically stop showing as soon as they ended",
+            # "if something doesn't have a start or end date it should not
+            # make it through".
+            #
+            # Listed: starts today (project timezone) or later, or a SHORT run
+            # that started within the last few days and has not ended.
+            # Undated rows fail both branches on purpose.
+            today_start, _ = local_day_bounds(timezone.localdate())
+            listed = (Q(start_date__gte=today_start)
+                      | Q(end_date__gte=today_start,
+                          start_date__gte=today_start - SHORT_RUN))
+            _events = (Event.objects
+                       .filter(listed, is_duplicate=False, suppressed=False)
+                       .exclude(is_event=False)
+                       .select_related('venue', 'poster')
+                       .order_by('start_date', 'id'))
 
             # One row per recurring series, carrying every occurrence's id
             # (event.series): a night's scrape used to list its expansions
@@ -955,7 +967,7 @@ def date_events(request):
             start_date__lt=day_end,
             is_duplicate=False,
             suppressed=False,
-        ).exclude(is_event=False).all()
+        ).select_related('venue', 'poster').exclude(is_event=False).all()
 
         # One card per recurring series (event.series), in every list.
         events_serializer = EventSerializer(collapse_series(date_events), many=True)
@@ -1002,12 +1014,17 @@ def date_range_events(request):
         # the range feed for its whole run except the first day.
         lower = max(window_start, cutoff)
 
+        # The end_date branch is for a SHORT run (a festival) that started a
+        # few days before the window: anything longer lists on its start day
+        # only. Without the bound, "Lightning in a Bottle" stored as Aug 21
+        # to Sep 18 sat under Today for a month (owner, 2026-09-18).
         date_events = Event.objects.filter(
             Q(start_date__gte=lower, start_date__lt=window_end)
-            | Q(end_date__gte=lower, end_date__lt=window_end),
+            | Q(end_date__gte=lower, end_date__lt=window_end,
+                start_date__gte=window_start - SHORT_RUN),
             is_duplicate=False,
             suppressed=False,
-        ).exclude(is_event=False).all()
+        ).select_related('venue', 'poster').exclude(is_event=False).all()
 
         # One card per recurring series (event.series), in every list.
         events_serializer = EventSerializer(collapse_series(date_events), many=True)
@@ -1045,9 +1062,13 @@ def filter_events(request):
         # Base scope: upcoming, visible events. The date cutoff belongs here,
         # not inside the date branch — otherwise a price/artist/location filter
         # searches the whole 53k-row history instead of upcoming events.
-        queryset = (Event.objects
-                    .filter(is_duplicate=False, suppressed=False)
-                    .filter(start_date__gte=cutoff))
+        queryset = Event.objects.filter(is_duplicate=False, suppressed=False)
+        # An explicit date filter names the days it wants, past or not: the
+        # admin asking for "Event Date is 08/21/2026" got nothing because
+        # the cutoff excluded it (owner, 2026-09-18). Without one, the scope
+        # stays upcoming so a price/artist filter does not scan history.
+        if not any((f.get("type") == "date") for f in filters if isinstance(f, dict)):
+            queryset = queryset.filter(start_date__gte=cutoff)
 
         # The UI attaches a conjugation ("and"/"or") to each filter. It was
         # ignored, so an "Or" combination silently returned the intersection.
