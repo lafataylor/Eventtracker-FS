@@ -76,6 +76,26 @@ function EventCard({
         day: 'numeric',
       };
 
+      // A run that ends on a later day shows both ends ("Fri, Aug 21 – Sun,
+      // Aug 23, 2026"), so a multi-day listing is never mistaken for a
+      // wrong date (owner 2026-09-18: an event under Today that "says it
+      // starts on the 21st").
+      if (event.end_date) {
+        const end = new Date(event.end_date);
+        const sameDay =
+          end.getFullYear() === date.getFullYear() &&
+          end.getMonth() === date.getMonth() &&
+          end.getDate() === date.getDate();
+        if (!sameDay && end > date) {
+          const startPart = date.toLocaleDateString('en-US', {
+            weekday: 'short',
+            month: 'short',
+            day: 'numeric',
+          });
+          return `${startPart} – ${end.toLocaleDateString('en-US', formattingOptions)}`;
+        }
+      }
+
       return date.toLocaleDateString('en-US', formattingOptions);
     }
 

@@ -15,22 +15,25 @@ falls on that day, because only that one is in the result to begin with. The
 keeper carries series_ids (every occurrence that was in the result, soonest
 first) so the admin page can act on the whole series at once.
 
-What counts as one series: the expansions are model_copy()s of ONE extracted
-event, identical in every field except start_date/end_date. The key is the
-post plus the fields that identify an event to a visitor: title, artist, host
-and start time. Two rows of one post that differ in any of those are
-different events (a roundup, or a programme post with no titles and one act
-per night) and are all kept. Not in the key, on purpose:
+What counts as one series: one post, one title. A titled post that lists
+"Sunset Music Sessions" on twelve dates with a different guest each week is
+one listing (owner: "a max of one event with the same title"). An UNTITLED
+post is one listing per flyer image: the owner's "Familiar Feelings" case was
+five nameless rows of one flyer on five dates, and he deleted them by hand.
+Two rows of one post with different titles are different events (a roundup)
+and are all kept. Not in the key, on purpose:
 
-* the date - that is the whole point; and a roundup that lists one title on
-  several nights is one card too (owner: "a max of one event with the same
-  title");
-* the carousel slide - a flyer slide and a lineup slide of one post can each
-  yield the event, and the list must not show it twice while the nightly
-  exact pass catches up;
-* venue text, price, genres - they drift between two extractions of one post
-  and would split a series into two cards, while a real second event on one
-  post differs in a primary field.
+* the date - that is the whole point;
+* the carousel slide for titled rows - a flyer slide and a lineup slide of
+  one post can each yield the event, and the list must not show it twice
+  while the nightly exact pass catches up;
+* artist, host, start time, venue text, price - they vary per night of a
+  series or drift between two extractions, and would split one listing
+  into many; a real second event on one post has its own title or its own
+  flyer.
+
+A nameless row with no flyer image is its own listing: there is nothing to
+group it by, and hiding it behind another row would be a guess.
 
 Cross-post repeats are the dedupe's job, with its own evidence rules: a title
 alone must never collapse two posts.
@@ -44,8 +47,10 @@ def _norm(value):
 def series_key(event):
     """Identity of the series a row belongs to; a row with no post is its own."""
     post = event.shortcode or event.orig_link or ('id', event.id)
-    return (post, _norm(event.name), _norm(event.artist), _norm(event.host),
-            _norm(event.start_time))
+    name = _norm(event.name)
+    if name:
+        return (post, 'title', name)
+    return (post, 'flyer', event.orig_thumb or ('id', event.id))
 
 
 def _starts_before(a, b):

@@ -80,11 +80,34 @@ class CollapseSeriesTests(SeriesFixtureMixin, TestCase):
         b = self._ev('Breathwork', self.week_later)
         self.assertEqual({e.id for e in collapse_series([a, b])}, {a.id, b.id})
 
-    def test_nameless_rows_with_different_artists_are_all_kept(self):
-        # A programme post with no titles: one artist per night.
+    def test_nameless_rows_from_one_flyer_are_one_card_whatever_the_lineup(self):
+        # Owner 2026-09-18 ("Familiar Feelings", five nameless rows of one
+        # flyer, different dates, deleted by hand): an untitled post is one
+        # listing per flyer image, even when the acts differ per night. The
+        # date filter still finds each night; the list shows the flyer once.
+        a = self._ev(None, self.day, artist='PHASE:ONE', orig_thumb='https://img/flyer.jpg')
+        b = self._ev(None, self.week_later, artist='SIGNALS', orig_thumb='https://img/flyer.jpg')
+        kept = collapse_series([a, b])
+        self.assertEqual([e.id for e in kept], [a.id])
+        self.assertEqual(kept[0].series_ids, [a.id, b.id])
+
+    def test_nameless_rows_from_different_slides_stay_apart(self):
+        # Two slides of one carousel, no titles: two flyers, two listings.
+        a = self._ev(None, self.day, artist='PHASE:ONE', orig_thumb='https://img/slide0.jpg')
+        b = self._ev(None, self.week_later, artist='SIGNALS', orig_thumb='https://img/slide1.jpg')
+        self.assertEqual({e.id for e in collapse_series([a, b])}, {a.id, b.id})
+
+    def test_nameless_rows_with_no_image_never_collapse_with_each_other(self):
         a = self._ev(None, self.day, artist='PHASE:ONE')
         b = self._ev(None, self.week_later, artist='SIGNALS')
         self.assertEqual({e.id for e in collapse_series([a, b])}, {a.id, b.id})
+
+    def test_titled_rows_of_one_post_collapse_whatever_the_lineup(self):
+        # "Sunset Music Sessions" with a different guest each week is one
+        # listing, not twelve.
+        a = self._ev('Sunset Music Sessions', self.day, artist='DJ A', start_time='05:00 PM')
+        b = self._ev('Sunset Music Sessions', self.week_later, artist='DJ B', start_time='06:00 PM')
+        self.assertEqual([e.id for e in collapse_series([a, b])], [a.id])
 
     def test_same_title_from_different_posts_is_not_collapsed(self):
         # Cross-post duplicates are the dedupe's job, with its own evidence
