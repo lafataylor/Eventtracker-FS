@@ -181,3 +181,28 @@ answer has never cost anyone a client. Guessing has.
 - Puerto Escondido, 12 events, waiting on his answer.
 - The database is 578 MB and 96% of that is old debug logs, which makes every
   backup slow. Half a day to fix. He said hold.
+
+---
+
+## 11. "Is the backend set up for AI-assisted development?" (asked 2026-09-18)
+
+**Short answer for the call:** it is now. Four things make a project usable by
+an AI coding assistant, and the repo has them as of today: a briefing file
+the assistant reads by itself (`AGENTS.md`), one-command setup (`make
+setup`), a real test suite (300+ tests, three seconds), and a local copy that
+cannot reach the live site or spend credits.
+
+**What to show him:** open `docs/AI-ASSISTED-DEVELOPMENT.md` and walk the
+"First time" section. If he wants to see it live, run `make setup` in a fresh
+clone on your screen (about 3 minutes), then `claude` and ask it "explain how
+a post becomes an event on the site". That one question shows the briefing
+working.
+
+**The honest caveats:** he needs a Claude Pro or Max subscription; his
+changes go through a pull request and your deploy, never straight to the
+site; the assistant is a good junior developer, not a replacement for review
+on the scraper or the duplicate rules.
+
+**What is NOT live yet (do not oversell):** the duplicates fix (one card per
+recurring series, review-page cleanup) is built, reviewed and green on PR #5
+but not deployed. Say so plainly and give a time.
