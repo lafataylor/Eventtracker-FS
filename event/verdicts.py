@@ -28,25 +28,24 @@ def keep_over(keep, drop):
      .update(canonical=keep, duplicate_link=keep.orig_link or f"event_{keep.id}"))
 
 
-def propagate_series_verdict(keep, drop, verdict):
-    """Carry one verdict to the other dates of the same two posts.
+def carry_rejection_to_other_dates(a, b):
+    """The owner said `a` and `b` are NOT duplicates: say the same for the
+    other dates of the same two posts.
 
     The Essex Club Thursday (five accounts, one party, expanded weekly) was
-    queued once per week: the owner judged the same pair ten times. A pending
-    pair whose sides are later occurrences of the same two series gets the
-    same verdict: 'keep' hides the occurrence matching `drop` behind the one
-    matching `keep`; 'reject' marks it not a duplicate. Deletion never
-    carries: it is irreversible, and the series delete on the events page is
-    the deliberate way to do that.
+    queued once per week: the owner judged the same pair ten times. Only
+    PENDING pairs are touched, so a date he already decided keeps its own
+    verdict. Keeps travel through carry_keep_to_other_dates (they also cover
+    occurrences no pair links); deletion never carries: it is irreversible,
+    and the series delete on the events page is the deliberate way to do it.
     """
-    keep_key, drop_key = series_key(keep), series_key(drop)
+    a_key, b_key = series_key(a), series_key(b)
     # Both sides in ONE series (two rows of one post with one title, a
-    # same-post pair): there are no "other dates of the same two posts" to
-    # carry to, and keying both sides identically would map them to a single
-    # event and hide it behind itself. Caught in self-review before deploy.
-    if keep_key == drop_key:
+    # same-post pair): there are no "other dates of the same two posts", and
+    # spreading the verdict would reject every other pair of that post.
+    if a_key == b_key:
         return 0
-    posts = [x for x in (keep.shortcode, drop.shortcode) if x]
+    posts = [x for x in (a.shortcode, b.shortcode) if x]
     if len(posts) < 2:
         return 0
     siblings = (EventMatch.objects.filter(status='pending')
@@ -54,16 +53,9 @@ def propagate_series_verdict(keep, drop, verdict):
                 .select_related('event_a', 'event_b'))
     done = 0
     for m in siblings:
-        pair = {series_key(m.event_a): m.event_a, series_key(m.event_b): m.event_b}
-        if len(pair) != 2 or set(pair) != {keep_key, drop_key}:
+        if {series_key(m.event_a), series_key(m.event_b)} != {a_key, b_key}:
             continue
-        if verdict == 'keep':
-            if pair[keep_key].suppressed:
-                continue        # the owner hid that occurrence; never un-hide it
-            keep_over(pair[keep_key], pair[drop_key])
-            m.status = 'confirmed'
-        else:
-            m.status = 'rejected'
+        m.status = 'rejected'
         m.reviewed_at = timezone.now()
         m.save(update_fields=['status', 'reviewed_at'])
         done += 1
@@ -78,8 +70,10 @@ def decided_sibling_verdict(a, b):
     Returns ('keep', keeper, loser) or ('reject', None, None) or None. Used by
     the nightly pass before queuing a new occurrence pair: the Essex Club
     Thursday came back as a fresh pending pair every week after the owner had
-    judged it. reviewed_at set means a human clicked; machine merges (NULL)
-    are not copied, so one auto-merge cannot silently spread.
+    judged it. reviewed_at set means the verdict is the owner's, given
+    directly or carried from one he gave on another date; NULL is a
+    score-based machine merge, and those are never copied, so one auto-merge
+    cannot silently spread.
     """
     a_key, b_key = series_key(a), series_key(b)
     if a_key == b_key:          # one series on both sides: nothing to inherit
@@ -135,8 +129,9 @@ def carry_keep_to_other_dates(keep, losers):
     B-C, nothing pairs C with A, and carrying only the keeper's own pairs
     left C on the site as a visible duplicate every week (review of PR #7).
     A hidden occurrence of the keeper is never used (and never un-hidden),
-    a week the keeper does not play is left alone, and a loser in the
-    keeper's own series is skipped. Recoverable like every other merge.
+    a week the keeper does not play is left alone, a loser in the keeper's
+    own series is skipped, and a date the owner already called "not
+    duplicates" is never touched. Recoverable like every other merge.
     """
     keep_key = series_key(keep)
     keepers = {}
@@ -155,9 +150,15 @@ def carry_keep_to_other_dates(keep, losers):
             keeper = keepers.get(_local_day(occ))
             if not keeper or keeper.id == occ.id:
                 continue
+            # An owner verdict is never overridden, and that holds for a
+            # carried verdict too: if he said "not duplicates" for THIS date
+            # (two different parties that week only), a keep carried over
+            # from another date does not outrank it (review of PR #8).
+            between = (Q(event_a=keeper, event_b=occ) | Q(event_a=occ, event_b=keeper))
+            if EventMatch.objects.filter(between, status='rejected').exists():
+                continue
             keep_over(keeper, occ)
-            (EventMatch.objects.filter(status='pending')
-             .filter(Q(event_a=keeper, event_b=occ) | Q(event_a=occ, event_b=keeper))
+            (EventMatch.objects.filter(between, status='pending')
              .update(status='confirmed', reviewed_at=timezone.now()))
             done += 1
     return done

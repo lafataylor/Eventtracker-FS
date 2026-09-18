@@ -43,6 +43,8 @@ def register(request):
     if not validator.is_valid([[email, str], [password, str]]):
         return InvalidParameters()
 
+    # Stored lowercase, so two accounts can never differ only by case.
+    email = email.strip().lower()
     serializer = UserSerializer(data={
         "id":str(uuid.uuid4().int), 
         "email": email, 
@@ -58,6 +60,21 @@ def register(request):
         "jwtToken": jwt_token,
         "refreshToken": refresh_token
     })
+
+def user_for_login(email):
+    """The account for an address as a person typed it.
+
+    Exactly as typed wins; otherwise the case is ignored and the oldest
+    account answers. SQLite's unique index is case-sensitive, so two accounts
+    CAN differ only by case, and a bare case-insensitive lookup checked the
+    password against whichever came first (review of PR #8). Production had
+    no such pair on 2026-09-18, and new registrations are stored lowercase
+    so none can appear.
+    """
+    email = email.strip()
+    return (User.objects.filter(email=email).first()
+            or User.objects.filter(email__iexact=email).order_by('id').first())
+
 
 @api_view(["POST"])
 def login(request):
@@ -76,7 +93,7 @@ def login(request):
     # An email address is not case-sensitive: the owner typed his with a
     # capital first letter (phones do that) and the exact match answered
     # "user not found" (end-to-end pass, 2026-09-18). The password stays exact.
-    user = User.objects.filter(email__iexact=email.strip()).first()
+    user = user_for_login(email)
 
     if not user:
         return UserNotFound()
@@ -111,6 +128,8 @@ def user_register(request):
     if not validator.is_valid([[email, str], [password, str]]):
         return InvalidParameters()
 
+    # Stored lowercase, so two accounts can never differ only by case.
+    email = email.strip().lower()
     serializer = UserSerializer(data={
         "id": str(uuid.uuid4().int),
         "email": email,
@@ -152,7 +171,7 @@ def user_login(request):
     # An email address is not case-sensitive: the owner typed his with a
     # capital first letter (phones do that) and the exact match answered
     # "user not found" (end-to-end pass, 2026-09-18). The password stays exact.
-    user = User.objects.filter(email__iexact=email.strip()).first()
+    user = user_for_login(email)
 
     if not user:
         return UserNotFound()
