@@ -9,22 +9,14 @@ import InfoOverlay from '../../../components/Admin/InfoOverlay';
 import EventDetails from '../../../components/Dashboard/EventDetails';
 import {
   requestMiddleware,
-  readEventMatches,
-  resolveEventMatch,
+  readEventMatchGroups,
+  resolveEventMatchGroup,
   readAdminDuplicates,
   recoverDuplicate,
   deleteEvents,
 } from '../../../services/lib/admin';
 import { HIDE_INFO_OVERLAY, SHOW_INFO_OVERLAY } from '../../../store/actions/type';
 import { Event } from '../../../interface/objects/simpleObject';
-
-interface Match {
-  match_id: number;
-  score: number;
-  match_type: string;
-  event_a: Event;
-  event_b: Event;
-}
 
 type ViewMode = 'pairs' | 'flagged';
 
@@ -36,11 +28,26 @@ type FlaggedEvent = Event & {
                    orig_link: string | null } | null;
 };
 
-const MATCH_LABEL: Record<string, string> = {
-  fuzzy: 'Similar event',
-  exact_link: 'Same Instagram post',
-  phash: 'Similar flyer',
-};
+// The review page as GROUPS (owner 2026-09-18: "they should all be grouped
+// together if they have any similarity especially image, or similar title,
+// or similar date and location"). A group is every pending pair on one day
+// connected through shared events, plus events on that day with the
+// identical flyer. One decision per group instead of one per pair.
+interface GroupPair {
+  match_id: number;
+  event_a_id: number;
+  event_b_id: number;
+  score: number;
+  match_type: string;
+}
+interface Group {
+  key: number;
+  soonest: string | null;
+  events: Event[];
+  pairs: GroupPair[];
+}
+const PAGE_SIZE = 20;
+
 
 const Index = () => {
   const [state, dispatch] = useStore();
@@ -48,7 +55,8 @@ const Index = () => {
   const { overlay } = auth;
 
   const [view, setView] = useState<ViewMode>('pairs');
-  const [matches, setMatches] = useState<Match[]>([]);
+  const [groups, setGroups] = useState<Group[]>([]);
+  const [totalGroups, setTotalGroups] = useState(0);
   const [pendingTotal, setPendingTotal] = useState(0);
   // "Previously flagged": single events the OLD scraper hid via is_duplicate
   // before that auto-flagging was retired. Kept as a recovery path so an event
@@ -150,21 +158,19 @@ const Index = () => {
     }
   };
 
-  const fetchMatches = async () => {
+  const fetchGroups = async (offset: number = 0) => {
     if (!(await requestMiddleware(dispatch))) return;
-    setIsLoading(true);
+    if (offset === 0) setIsLoading(true);
     setLoadError(false);
     try {
-      const res = await readEventMatches('pending', 50);
+      const res = await readEventMatchGroups(PAGE_SIZE, offset);
       if (res.status === 200) {
-        setMatches(res.data?.matches || []);
+        const page: Group[] = res.data?.groups || [];
+        setGroups((prev) => (offset === 0 ? page : [...prev, ...page]));
+        setTotalGroups(res.data?.total_groups || 0);
         setPendingTotal(res.data?.pending_total || 0);
-        // A new batch means new match_ids; a selection carried over from the
-        // old batch would count (and confirm against) pairs not on screen.
-        setSelectedPairs(new Set());
+        if (offset === 0) setSelectedGroups(new Set());
       } else {
-        // Not thrown by the interceptor but not success either — surface it
-        // rather than silently render an empty "all caught up" screen.
         setLoadError(true);
         notify('Could not load duplicates. Please refresh.', true);
       }
@@ -177,91 +183,46 @@ const Index = () => {
   };
 
   useEffect(() => {
-    // Clear any in-flight busy state from the other view so a stale id can't
-    // disable a button here (the two views key busy state on different ids).
     setBusyIds(new Set());
-    if (view === 'pairs') fetchMatches();
+    if (view === 'pairs') fetchGroups(0);
     else fetchFlagged();
   }, [view]);
 
-  // Refetch the next page when the current batch of 50 empties but more remain
-  // server-side. Done as an effect on committed state (not inside resolve)
-  // so concurrent resolutions can't read a stale snapshot and show a false
-  // "all caught up".
-  useEffect(() => {
-    if (view === 'pairs' && !isLoading && !loadError
-        && matches.length === 0 && pendingTotal > 0) {
-      fetchMatches();
-    }
-  }, [view, matches.length, pendingTotal, isLoading, loadError]);
-
-  const resolve = async (match: Match,
-                         action: 'keep_a' | 'keep_b' | 'not_duplicate' | 'delete_both') => {
+  // One verdict for a whole group. The server hides, rejects or deletes
+  // every member and carries the verdict to the other dates of the same
+  // posts, so the group (and its later-week twins) leave the list together.
+  const resolveGroup = async (g: Group, action: 'keep' | 'keep_all' | 'delete_all', keepId?: number) => {
+    if (action === 'delete_all' &&
+        !window.confirm(`Delete all ${g.events.length} events of this group? Their posts will be blacklisted. This cannot be undone.`)) return;
     if (!(await requestMiddleware(dispatch))) return;
-    setBusyIds((prev) => new Set(prev).add(match.match_id));
+    setBusyIds((prev) => new Set(prev).add(g.key));
     try {
-      await resolveEventMatch(match.match_id, action);
-      // Events that this verdict removed from circulation: the suppressed
-      // loser for keep_*, BOTH events for delete_both, none for not_duplicate.
-      const goneIds =
-        action === 'keep_a' ? [match.event_b.id]
-        : action === 'keep_b' ? [match.event_a.id]
-        : action === 'delete_both' ? [match.event_a.id, match.event_b.id]
-        : [];
-      // Drop the resolved pair AND any other pending pair that references a
-      // now-gone event — otherwise a sibling pair would still offer to
-      // "keep" it and silently un-hide (or crash on) it.
-      //
-      // Kept pure: React may invoke state updaters more than once (StrictMode
-      // does), so no side effects are allowed inside them — an earlier version
-      // decremented pendingTotal inside the updater and double-counted.
-      const keepPair = (m: Match) =>
-        m.match_id !== match.match_id &&
-        !goneIds.includes(m.event_a.id) &&
-        !goneIds.includes(m.event_b.id);
-      // One filter pass; both state updates derive from it. Updaters stay
-      // pure (StrictMode re-invokes them), and pendingTotal is an optimistic
-      // display value that self-heals on the next fetch; the empty-batch
-      // refetch is handled by the effect above, on committed state.
-      const next = matches.filter(keepPair);
-      setMatches(next);
-      // Drop the same pairs from the selection, or the "N selected" badge
-      // (and a later bulk action's confirm count) would count pairs that no
-      // longer exist.
-      setSelectedPairs((prev) => {
-        const kept = new Set(prev);
-        matches.forEach((m) => { if (!keepPair(m)) kept.delete(m.match_id); });
-        return kept;
-      });
-      setPendingTotal((n) => Math.max(0, n - (matches.length - next.length)));
+      await resolveEventMatchGroup(g.pairs.map((p) => p.match_id), action, keepId);
+      setGroups((prev) => prev.filter((x) => x.key !== g.key));
+      setTotalGroups((n) => Math.max(0, n - 1));
+      setPendingTotal((n) => Math.max(0, n - g.pairs.length));
+      setSelectedGroups((prev) => { const next = new Set(prev); next.delete(g.key); return next; });
       notify(
-        action === 'not_duplicate'
-          ? 'Marked as not duplicates — both kept.'
-          : action === 'delete_both'
-          ? 'Both deleted; their posts are blacklisted.'
-          : 'Duplicate hidden. You can restore it later.',
+        action === 'keep_all' ? 'Kept all of them.'
+        : action === 'delete_all' ? 'All deleted; their posts are blacklisted.'
+        : 'Kept one, hid the rest. You can restore them later.',
         false
       );
     } catch (error) {
       notify('Could not save your choice. Please try again.', true);
     } finally {
-      setBusyIds((prev) => {
-        const next = new Set(prev);
-        next.delete(match.match_id);
-        return next;
-      });
+      setBusyIds((prev) => { const next = new Set(prev); next.delete(g.key); return next; });
     }
   };
 
   // --- bulk selection (owner: "select multiple / select all and delete") ---
-  const [selectedPairs, setSelectedPairs] = useState<Set<number>>(new Set());
+  const [selectedGroups, setSelectedGroups] = useState<Set<number>>(new Set());
   const [selectedFlagged, setSelectedFlagged] = useState<Set<number>>(new Set());
   const [bulkBusy, setBulkBusy] = useState(false);
-
-  const togglePair = (id: number) =>
-    setSelectedPairs((prev) => {
+  const toggleGroup = (key: number) =>
+    setSelectedGroups((prev) => {
       const next = new Set(prev);
-      next.has(id) ? next.delete(id) : next.add(id);
+      next.has(key) ? next.delete(key) : next.add(key);
       return next;
     });
   const toggleFlagged = (id: number) =>
@@ -271,60 +232,34 @@ const Index = () => {
       return next;
     });
 
-  // Bulk = a sequential loop over the existing per-item endpoint, then one
-  // refetch. Sequential on purpose: SQLite serialises writes anyway, and a
-  // parallel burst just turns into lock contention server-side.
-  const bulkResolvePairs = async (action: 'not_duplicate' | 'delete_both') => {
-    // Selection can only ever hold visible (non-clustered) pairs, but filter
-    // through visiblePairs anyway so a cluster pair can never slip into a
-    // bulk delete — cluster candidates are resolved only via their own card.
-    const ids = visiblePairs.filter((m) => selectedPairs.has(m.match_id));
-    if (ids.length === 0) return;
-    if (action === 'delete_both' &&
-        !window.confirm(`Delete BOTH events of ${ids.length} selected pair${ids.length === 1 ? '' : 's'}? ` +
+  // Bulk = a sequential loop over the group endpoint, then one refetch.
+  // Sequential on purpose: SQLite serialises writes anyway.
+  const bulkGroups = async (action: 'keep_all' | 'delete_all') => {
+    const picked = groups.filter((g) => selectedGroups.has(g.key));
+    if (picked.length === 0) return;
+    if (action === 'delete_all' &&
+        !window.confirm(`Delete every event of ${picked.length} selected group${picked.length === 1 ? '' : 's'}? ` +
                         'Their Instagram posts will be blacklisted so the nightly scan cannot re-add them. ' +
                         'This cannot be undone.')) return;
     if (!(await requestMiddleware(dispatch))) return;
     setBulkBusy(true);
     let ok = 0, failed = 0;
-    // Two selected pairs can share an event — deleting pair (A,B) cascades
-    // away pair (B,C) server-side (EventMatch FKs are CASCADE), so resolving
-    // (B,C) afterwards would 404. The owner confirmed deleting BOTH events of
-    // EVERY selected pair, so for a cascaded pair the not-yet-deleted event
-    // is deleted directly instead of being silently spared; a 404 from a
-    // pair someone else resolved counts as done, not failed.
-    const goneEventIds = new Set<number>();
-    for (const m of ids) {
-      const stale = [m.event_a, m.event_b].filter((e) => goneEventIds.has(e.id));
+    for (const g of picked) {
       try {
-        if (action === 'delete_both' && stale.length > 0) {
-          const remaining = [m.event_a, m.event_b].filter((e) => !goneEventIds.has(e.id));
-          if (remaining.length > 0) {
-            await deleteEvents({ events: remaining.map((e) => String(e.id)) });
-          }
-          remaining.forEach((e) => goneEventIds.add(e.id));
-          ok++;
-          continue;
-        }
-        await resolveEventMatch(m.match_id, action);
+        await resolveEventMatchGroup(g.pairs.map((p) => p.match_id), action);
         ok++;
-        if (action === 'delete_both') {
-          goneEventIds.add(m.event_a.id);
-          goneEventIds.add(m.event_b.id);
-        }
       } catch (error) {
         if ((error as any)?.response?.status === 404) ok++;
         else failed++;
       }
     }
-    setSelectedPairs(new Set());
+    setSelectedGroups(new Set());
     setBulkBusy(false);
     notify(failed === 0
-      ? `${ok} pair${ok === 1 ? '' : 's'} ${action === 'delete_both' ? 'deleted' : 'marked not duplicates'}.`
+      ? `${ok} group${ok === 1 ? '' : 's'} ${action === 'delete_all' ? 'deleted' : 'kept'}.`
       : `${ok} done, ${failed} failed — the rest are still in the list.`, failed > 0);
-    fetchMatches();
+    fetchGroups(0);
   };
-
   const bulkFlagged = async (kind: 'restore' | 'delete') => {
     const ids = flagged.filter((e) => selectedFlagged.has(e.id)).map((e) => e.id);
     if (ids.length === 0) return;
@@ -350,68 +285,6 @@ const Index = () => {
     fetchFlagged(0);
   };
 
-  // --- cluster view (owner: "a duplicate that is more than just one pair —
-  // show that all in one row / section") ---
-  // Pending same-post pairs that share a shortcode are one story: N candidate
-  // rows for one Instagram post. Grouping is display-only; the actions below
-  // DELETE the rejected candidates (via the blacklisting delete) rather than
-  // chaining keep_a/keep_b client-side, which would recreate the
-  // hidden-behind-a-hidden-row chains the backend works to prevent.
-  const clusters: { key: string; events: Event[]; pairs: Match[] }[] = [];
-  const clusteredPairIds = new Set<number>();
-  {
-    const byPost = new Map<string, Match[]>();
-    for (const m of matches) {
-      const sc = (m.event_a as any).shortcode;
-      if (m.match_type === 'exact_link' && sc && sc === (m.event_b as any).shortcode) {
-        byPost.set(sc, [...(byPost.get(sc) || []), m]);
-      }
-    }
-    byPost.forEach((pairs, key) => {
-      if (pairs.length < 2) return;
-      const events = new Map<number, Event>();
-      pairs.forEach((m) => { events.set(m.event_a.id, m.event_a); events.set(m.event_b.id, m.event_b); });
-      clusters.push({ key, events: Array.from(events.values()), pairs });
-      pairs.forEach((m) => clusteredPairIds.add(m.match_id));
-    });
-  }
-
-  // The pair list, checkboxes, and select-all all work on this, NOT on raw
-  // `matches`: cluster pairs render only inside their cluster card (which has
-  // no checkbox), so selecting them via "Select all" would let a bulk
-  // "Delete both of each" silently delete every candidate of a cluster —
-  // including the keeper the card tells the owner to pick.
-  const visiblePairs = matches.filter((m) => !clusteredPairIds.has(m.match_id));
-
-  const clusterKeep = async (cluster: { events: Event[]; pairs: Match[] }, keeper: Event) => {
-    const losers = cluster.events.filter((e) => e.id !== keeper.id);
-    if (!window.confirm(`Keep "${keeper.name || 'this one'}" and delete the other ` +
-                        `${losers.length} candidate${losers.length === 1 ? '' : 's'} of this post? ` +
-                        'Deleted ones cannot be restored.')) return;
-    if (!(await requestMiddleware(dispatch))) return;
-    setBulkBusy(true);
-    try {
-      // The server spares the shared post link from blacklisting while the
-      // keeper survives (survivor check in AdminEvent.delete), so the
-      // nightly scrape can still refresh the kept event.
-      await deleteEvents({ events: losers.map((e) => String(e.id)) });
-      // The keeper may carry a stale is_duplicate/suppressed flag from the
-      // old scraper or an earlier sibling verdict; with its pairs gone there
-      // would be no way left to clear it. Un-hide it explicitly.
-      try {
-        await recoverDuplicate(String(keeper.id));
-      } catch {
-        // Losers are gone either way; worst case the keeper shows up under
-        // "Previously flagged" where Restore still works.
-      }
-      notify(`Kept "${keeper.name || 'untitled'}", deleted ${losers.length}.`, false);
-    } catch {
-      notify('Could not delete the other candidates. Please try again.', true);
-    }
-    setBulkBusy(false);
-    fetchMatches();
-  };
-
   return (
     <div className="w-full flex h-full font-montserrat">
       <AdminSideBar currentPage="duplicates" />
@@ -420,7 +293,7 @@ const Index = () => {
           <div className="text-5xl font-bold px-3">Duplicates</div>
           {!isLoading && view === 'pairs' && (
             <div className="text-lg text-stone-gray self-end pb-1">
-              {pendingTotal} pair{pendingTotal === 1 ? '' : 's'} to review
+              {totalGroups} group{totalGroups === 1 ? '' : 's'} to review ({pendingTotal} pair{pendingTotal === 1 ? '' : 's'})
             </div>
           )}
         </nav>
@@ -443,7 +316,7 @@ const Index = () => {
 
         <p className="mt-4 px-3 text-stone-gray max-w-3xl">
           {view === 'pairs'
-            ? 'These look like the same event posted twice. Compare them, then keep the better one — the other is hidden from the site (and can be restored).'
+            ? 'Each group is one event the system found more than once, by title, place, date or the same flyer. Keep one (the rest are hidden, restorable), keep all, or delete all. A decision also covers the other dates of the same posts.'
             : 'Events currently hidden as duplicates by the automatic scraper. If any is a real event that should be live, restore it.'}
         </p>
 
@@ -457,7 +330,7 @@ const Index = () => {
               <div className="text-xl">Couldn’t load duplicates.</div>
               <button
                 className="py-2 px-6 rounded-lg bg-beaming-orange text-black font-semibold"
-                onClick={() => (view === 'pairs' ? fetchMatches() : fetchFlagged())}
+                onClick={() => (view === 'pairs' ? fetchGroups(0) : fetchFlagged())}
               >
                 Try again
               </button>
@@ -599,158 +472,99 @@ const Index = () => {
               </div>
             )}
             </>
-          ) : matches.length === 0 ? (
+          ) : groups.length === 0 ? (
             <div className="w-full h-64 flex flex-col items-center justify-center gap-2">
               <div className="text-2xl font-bold">All caught up 🎉</div>
               <div className="text-stone-gray">No duplicates left to review.</div>
             </div>
           ) : (
-            <div className="flex flex-col gap-8 max-w-5xl">
+            <div className="flex flex-col gap-8 max-w-6xl">
               {/* Bulk toolbar */}
               <div className="flex items-center gap-3 flex-wrap">
                 <label className="flex items-center gap-2 text-sm cursor-pointer">
                   <input
                     type="checkbox"
-                    checked={selectedPairs.size > 0 && selectedPairs.size === visiblePairs.length}
+                    checked={selectedGroups.size > 0 && selectedGroups.size === groups.length}
                     onChange={(e) =>
-                      setSelectedPairs(e.target.checked
-                        ? new Set(visiblePairs.map((m) => m.match_id))
+                      setSelectedGroups(e.target.checked
+                        ? new Set(groups.map((g) => g.key))
                         : new Set())}
                   />
-                  Select all on page
+                  Select all loaded
                 </label>
-                {selectedPairs.size > 0 && (
+                {selectedGroups.size > 0 && (
                   <>
-                    <span className="text-stone-gray text-sm">{selectedPairs.size} selected</span>
+                    <span className="text-stone-gray text-sm">{selectedGroups.size} selected</span>
                     <button
                       className="py-1 px-3 rounded-lg border border-stone-gray text-off-white hover:border-beaming-orange disabled:opacity-50 text-sm"
-                      onClick={() => bulkResolvePairs('not_duplicate')}
+                      onClick={() => bulkGroups('keep_all')}
                       disabled={bulkBusy}
                     >
-                      Not duplicates
+                      Keep all of each
                     </button>
                     <button
                       className="py-1 px-3 rounded-lg border border-stone-gray text-off-white hover:border-red-500 hover:text-red-400 disabled:opacity-50 text-sm"
-                      onClick={() => bulkResolvePairs('delete_both')}
+                      onClick={() => bulkGroups('delete_all')}
                       disabled={bulkBusy}
                     >
-                      Delete both of each
+                      Delete all of each
                     </button>
                     {bulkBusy && <Spinner colorClass="text-beaming-orange" size={18} />}
                   </>
                 )}
               </div>
 
-              {/* Whole-post clusters: several candidates of ONE Instagram
-                  post shown in one section instead of pair-by-pair. */}
-              {clusters.map((c) => (
-                <div key={`cluster-${c.key}`} className="p-6 bg-stone-gray bg-opacity-20 rounded-2xl border border-beaming-orange border-opacity-40">
-                  <div className="flex items-center gap-3 mb-4">
-                    <span className="text-beaming-orange font-bold uppercase text-sm tracking-wide">
-                      Same Instagram post
-                    </span>
-                    <span className="text-stone-gray text-sm">
-                      {c.events.length} candidates — keep one, the rest are deleted
-                    </span>
-                  </div>
-                  <div className="flex flex-wrap gap-4">
-                    {c.events.map((ev) => (
-                      <div key={ev.id} className="flex flex-col items-center gap-3">
-                        <div className="w-56">
-                          <EventCard event={ev} disabled={false} isFavorite={false} />
-                        </div>
-                        <button
-                          className="py-2 px-4 w-56 rounded-lg bg-beaming-orange text-black font-semibold disabled:opacity-50"
-                          onClick={() => clusterKeep(c, ev)}
-                          disabled={bulkBusy}
-                        >
-                          Keep this one
-                        </button>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              ))}
-
-              {visiblePairs.map((m) => {
-                const busy = busyIds.has(m.match_id) || bulkBusy;
+              {groups.map((g) => {
+                const busy = busyIds.has(g.key) || bulkBusy;
+                const best = g.pairs.reduce((m, p) => Math.max(m, p.score), 0);
+                const samePost = g.pairs.some((p) => p.match_type === 'exact_link');
                 return (
-                  <div
-                    key={m.match_id}
-                    className="p-6 bg-stone-gray bg-opacity-20 rounded-2xl"
-                  >
-                    <div className="flex items-center gap-3 mb-4">
+                  <div key={g.key} className="p-6 bg-stone-gray bg-opacity-20 rounded-2xl">
+                    <div className="flex items-center gap-3 mb-4 flex-wrap">
                       <input
                         type="checkbox"
-                        checked={selectedPairs.has(m.match_id)}
-                        onChange={() => togglePair(m.match_id)}
+                        checked={selectedGroups.has(g.key)}
+                        onChange={() => toggleGroup(g.key)}
                       />
                       <span className="text-beaming-orange font-bold uppercase text-sm tracking-wide">
-                        {MATCH_LABEL[m.match_type] || 'Possible duplicate'}
+                        {g.events.length} listings, one event
                       </span>
-                      {/* A same-post pair is not scored by similarity: the
-                          two rows come from ONE Instagram post, which is the
-                          evidence. Printing "0% match" for those read as "the
-                          system is 0% sure" (owner feedback 2026-08-30). Only
-                          cross-post (fuzzy) pairs carry a meaningful score. */}
                       <span className="text-stone-gray text-sm">
-                        {m.match_type === 'exact_link'
-                          ? 'system unsure which to keep'
-                          : `${Math.round(m.score)}% match`}
+                        {samePost ? 'same Instagram post' : `up to ${Math.round(best)}% match`}
+                        {g.soonest ? ` · ${new Date(g.soonest + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}` : ''}
                       </span>
+                      <span className="flex-1" />
+                      <button
+                        className="py-2 px-4 rounded-lg border border-stone-gray text-off-white hover:border-beaming-orange disabled:opacity-50 whitespace-nowrap"
+                        onClick={() => resolveGroup(g, 'keep_all')}
+                        disabled={busy}
+                      >
+                        Keep all
+                      </button>
+                      <button
+                        className="py-2 px-4 rounded-lg border border-stone-gray text-off-white hover:border-red-500 hover:text-red-400 disabled:opacity-50 whitespace-nowrap"
+                        onClick={() => resolveGroup(g, 'delete_all')}
+                        disabled={busy}
+                      >
+                        Delete all
+                      </button>
                     </div>
 
-                    <div className="flex flex-col md:flex-row items-stretch gap-4">
-                      {/* Event A */}
-                      <div className="flex-1 flex flex-col items-center gap-3">
-                        <div className="w-64">
-                          <EventCard event={m.event_a} disabled={false} isFavorite={false} />
+                    <div className="flex flex-wrap gap-4">
+                      {g.events.map((ev) => (
+                        <div key={ev.id} className="flex flex-col items-center gap-3">
+                          <div className="w-56">
+                            <EventCard event={ev} disabled={false} isFavorite={false} />
+                          </div>
+                          <button
+                            className="py-2 px-4 w-56 rounded-lg bg-beaming-orange text-black font-semibold disabled:opacity-50"
+                            onClick={() => resolveGroup(g, 'keep', ev.id)}
+                            disabled={busy}
+                          >
+                            Keep this one
+                          </button>
                         </div>
-                        <button
-                          className="py-2 px-4 w-64 rounded-lg bg-beaming-orange text-black font-semibold disabled:opacity-50"
-                          onClick={() => resolve(m, 'keep_a')}
-                          disabled={busy}
-                        >
-                          Keep this one
-                        </button>
-                      </div>
-
-                      {/* Middle divider / whole-pair verdicts */}
-                      <div className="flex md:flex-col items-center justify-center gap-3 px-2">
-                        <span className="text-stone-gray font-bold">vs</span>
-                        <button
-                          className="py-2 px-4 rounded-lg border border-stone-gray text-off-white hover:border-beaming-orange disabled:opacity-50 whitespace-nowrap"
-                          onClick={() => resolve(m, 'not_duplicate')}
-                          disabled={busy}
-                        >
-                          Not duplicates
-                        </button>
-                        <button
-                          className="py-2 px-4 rounded-lg border border-stone-gray text-off-white hover:border-red-500 hover:text-red-400 disabled:opacity-50 whitespace-nowrap"
-                          onClick={() => {
-                            if (window.confirm('Delete BOTH events of this pair? Their posts will be blacklisted. This cannot be undone.')) {
-                              resolve(m, 'delete_both');
-                            }
-                          }}
-                          disabled={busy}
-                        >
-                          Delete both
-                        </button>
-                      </div>
-
-                      {/* Event B */}
-                      <div className="flex-1 flex flex-col items-center gap-3">
-                        <div className="w-64">
-                          <EventCard event={m.event_b} disabled={false} isFavorite={false} />
-                        </div>
-                        <button
-                          className="py-2 px-4 w-64 rounded-lg bg-beaming-orange text-black font-semibold disabled:opacity-50"
-                          onClick={() => resolve(m, 'keep_b')}
-                          disabled={busy}
-                        >
-                          Keep this one
-                        </button>
-                      </div>
+                      ))}
                     </div>
 
                     {busy && (
@@ -761,6 +575,19 @@ const Index = () => {
                   </div>
                 );
               })}
+
+              {/* Owner: "when you get to the bottom of the page it should load more events" */}
+              {groups.length < totalGroups && (
+                <div className="flex justify-center">
+                  <button
+                    className="py-2 px-6 rounded-lg border border-stone-gray text-off-white hover:border-beaming-orange disabled:opacity-50"
+                    onClick={() => fetchGroups(groups.length)}
+                    disabled={bulkBusy}
+                  >
+                    Load more ({groups.length} of {totalGroups})
+                  </button>
+                </div>
+              )}
             </div>
           )}
         </div>
