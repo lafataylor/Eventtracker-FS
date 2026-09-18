@@ -442,3 +442,48 @@ class ServedMetroFilterTests(SimpleTestCase):
         self.assertIsNone(served_metro_for("Hamburg"))
         self.assertIsNone(served_metro_for(None))
         self.assertIsNone(served_metro_for("   "))
+
+
+class NoDateNoListingTests(SimpleTestCase):
+    """Owner rule (2026-09-18): "if something doesn't have a start or end
+    date, it should not make it through, this is a new problem". It was new:
+    the old scraper refused to save an event missing 11 or more fields, so a
+    row with nothing but a picture never existed; the structured path saved
+    75 such rows as events in two weeks. An extracted event with neither
+    date is now stored as not-an-event: never on the site, never in the
+    admin list, still in the database (and purged after 90 days) in case the
+    post is re-read."""
+
+    def _payloads(self, events, post_type="single"):
+        return build_payloads(PostExtraction(post_type=post_type, events=events),
+                              shortcode="NODATE", post_link="L", slide_urls=["s0"])
+
+    def test_an_event_with_no_dates_is_stored_as_not_an_event(self):
+        p = self._payloads([mk_event(event_name="Mystery Night", start_date=None, end_date=None)])
+        self.assertEqual(len(p), 1)
+        self.assertFalse(p[0]["isEvent"])
+
+    def test_a_picture_only_row_is_stored_as_not_an_event(self):
+        p = self._payloads([mk_event(event_name=None, artists=[], start_date=None)])
+        self.assertFalse(p[0]["isEvent"])
+
+    def test_a_dated_event_is_untouched(self):
+        p = self._payloads([mk_event(event_name="Dated", start_date="10-02-2026")])
+        self.assertTrue(p[0]["isEvent"])
+
+    def test_an_end_date_alone_is_enough(self):
+        p = self._payloads([mk_event(event_name="Ends", start_date=None, end_date="10-02-2026")])
+        self.assertTrue(p[0]["isEvent"])
+
+    def test_a_roundup_keeps_its_dated_events_and_hides_the_undated_one(self):
+        p = self._payloads([mk_event(event_name="A", start_date="10-02-2026", source_slide_index=0),
+                            mk_event(event_name="B", start_date=None, source_slide_index=0)],
+                           post_type="roundup")
+        by_name = {x["name"]: x["isEvent"] for x in p}
+        self.assertEqual(by_name, {"A": True, "B": False})
+
+    def test_the_row_still_carries_its_key_so_a_rescrape_updates_it(self):
+        # Hidden, not dropped: the payload must still reach the server so the
+        # post counts as processed and is not re-billed every night.
+        p = self._payloads([mk_event(event_name="Mystery Night", start_date=None)])
+        self.assertTrue(p[0].get("shortcode"))

@@ -3,7 +3,8 @@ from rest_framework.views import APIView
 
 from .models import Event, Venue, Execution, Feedback, FavoritesData, BlacklistedLink, EventMatch
 from .serializers import EventSerializer, FeedbackSerializer
-from .series import collapse_series
+from .series import collapse_series, series_key
+from .verdicts import carry_keep_to_other_dates, keep_over, propagate_series_verdict
 from .ingest import (build_source_key, coerce_int, normalize_poster_name,
                      normalize_text, resolve_venue, upsert_event)
 from django.db import transaction
@@ -99,6 +100,11 @@ def _log_safe(value, limit):
     return _LOG_UNSAFE.sub(' ', value[:limit])
 
 EVENT_CUTOFF_TIME = timedelta(hours=25)
+# How long a multi-day run may keep listing after its first day. A festival
+# is a few days; anything longer with an end date is an extraction mistake
+# ("Lightning in a Bottle" stored as Aug 21 to Sep 18 sat under Today for a
+# month, 2026-09-18) or an exhibition the owner wants on its opening day only.
+SHORT_RUN = timedelta(days=3)
 
 
 def local_day_bounds(first_day, last_day=None):
@@ -380,21 +386,28 @@ class AdminEvent(APIView):
         uid = get_uid_from_token(token=token)
 
         try:
-            """user_accounts = Account.objects.filter(
-                created_by=uid,
-            ).exclude(id=uid).all()
-
-            _events = Event.objects.filter(
-                poster__in=user_accounts).order_by('-timestamp').all()"""
-
-
-            # Get current date and time (aware; see get_favorites)
-            current_time = timezone.now() - timedelta(hours=24)
-            # Calculate the cutoff time for events older than 48 hours
-            cutoff_time = current_time - EVENT_CUTOFF_TIME
-
-            # Make all posts shared for now, but only grab ones before the cutoff time
-            _events = Event.objects.filter(timestamp__gte=cutoff_time).order_by('-timestamp').all()
+            # An inbox of what is coming up, not a dump. Until 2026-09-18 this
+            # filtered on `timestamp` (49 hours back), which is the event's
+            # start date, so it served every future row plus two past days,
+            # hid nothing (521 rows already hidden as duplicates, 25
+            # not-an-event, 31 undated on that day), and ran one query per
+            # venue and poster: 3,235 rows, 3.8 MB, 8.5 s. Owner: "events
+            # should automatically stop showing as soon as they ended",
+            # "if something doesn't have a start or end date it should not
+            # make it through".
+            #
+            # Listed: starts today (project timezone) or later, or a SHORT run
+            # that started within the last few days and has not ended.
+            # Undated rows fail both branches on purpose.
+            today_start, _ = local_day_bounds(timezone.localdate())
+            listed = (Q(start_date__gte=today_start)
+                      | Q(end_date__gte=today_start,
+                          start_date__gte=today_start - SHORT_RUN))
+            _events = (Event.objects
+                       .filter(listed, is_duplicate=False, suppressed=False)
+                       .exclude(is_event=False)
+                       .select_related('venue', 'poster')
+                       .order_by('start_date', 'id'))
 
             # One row per recurring series, carrying every occurrence's id
             # (event.series): a night's scrape used to list its expansions
@@ -955,7 +968,7 @@ def date_events(request):
             start_date__lt=day_end,
             is_duplicate=False,
             suppressed=False,
-        ).exclude(is_event=False).all()
+        ).select_related('venue', 'poster').exclude(is_event=False).all()
 
         # One card per recurring series (event.series), in every list.
         events_serializer = EventSerializer(collapse_series(date_events), many=True)
@@ -1002,12 +1015,17 @@ def date_range_events(request):
         # the range feed for its whole run except the first day.
         lower = max(window_start, cutoff)
 
+        # The end_date branch is for a SHORT run (a festival) that started a
+        # few days before the window: anything longer lists on its start day
+        # only. Without the bound, "Lightning in a Bottle" stored as Aug 21
+        # to Sep 18 sat under Today for a month (owner, 2026-09-18).
         date_events = Event.objects.filter(
             Q(start_date__gte=lower, start_date__lt=window_end)
-            | Q(end_date__gte=lower, end_date__lt=window_end),
+            | Q(end_date__gte=lower, end_date__lt=window_end,
+                start_date__gte=window_start - SHORT_RUN),
             is_duplicate=False,
             suppressed=False,
-        ).exclude(is_event=False).all()
+        ).select_related('venue', 'poster').exclude(is_event=False).all()
 
         # One card per recurring series (event.series), in every list.
         events_serializer = EventSerializer(collapse_series(date_events), many=True)
@@ -1045,9 +1063,13 @@ def filter_events(request):
         # Base scope: upcoming, visible events. The date cutoff belongs here,
         # not inside the date branch — otherwise a price/artist/location filter
         # searches the whole 53k-row history instead of upcoming events.
-        queryset = (Event.objects
-                    .filter(is_duplicate=False, suppressed=False)
-                    .filter(start_date__gte=cutoff))
+        queryset = Event.objects.filter(is_duplicate=False, suppressed=False)
+        # An explicit date filter names the days it wants, past or not: the
+        # admin asking for "Event Date is 08/21/2026" got nothing because
+        # the cutoff excluded it (owner, 2026-09-18). Without one, the scope
+        # stays upcoming so a price/artist filter does not scan history.
+        if not any((f.get("type") == "date") for f in filters if isinstance(f, dict)):
+            queryset = queryset.filter(start_date__gte=cutoff)
 
         # The UI attaches a conjugation ("and"/"or") to each filter. It was
         # ignored, so an "Or" combination silently returned the intersection.
@@ -1373,23 +1395,7 @@ def get_event_matches(request):
         # events would drop out of the queue from ~5pm onward - exactly when
         # the owner would sit down to clear duplicates before that night.
         today = timezone.localdate()
-        still_relevant = (Q(event_a__start_date__date__gte=today)
-                          | Q(event_b__start_date__date__gte=today)
-                          | Q(event_a__start_date__isnull=True)
-                          | Q(event_b__start_date__isnull=True))
-        # ...and the two other ways a row stops being a listing: hidden by
-        # the older is_duplicate flag, or classified not-an-event. Either
-        # leaves the reviewer comparing a real event with a card no visitor
-        # can see (12 of the 218 pairs shown on 2026-09-14). is_event NULL
-        # means never classified and stays, as everywhere else.
-        visible = (EventMatch.objects
-                   .exclude(event_a__suppressed=True)
-                   .exclude(event_b__suppressed=True)
-                   .exclude(event_a__is_duplicate=True)
-                   .exclude(event_b__is_duplicate=True)
-                   .exclude(event_a__is_event=False)
-                   .exclude(event_b__is_event=False)
-                   .filter(still_relevant))
+        visible = reviewable_matches(today)
         # Chronological, soonest first (owner: "events on the duplicate page
         # should be in chronological order"). Undated pairs sort last rather
         # than leading the list, which is where NULLs would otherwise land.
@@ -1427,6 +1433,180 @@ def get_event_matches(request):
     except Exception as e:
         logger.error(f"Error retrieving event matches: {e}")
         return ServerProcessingError(message="Error retrieving event matches: " + str(e))
+
+
+def reviewable_matches(today):
+    """Pairs worth a human decision: neither side hidden (suppressed, the
+    older is_duplicate flag, or classified not-an-event; NULL is unclassified
+    and stays), and at least one side still upcoming or undated. Shared by
+    the pair and the group views so their counts can never disagree."""
+    still_relevant = (Q(event_a__start_date__date__gte=today)
+                      | Q(event_b__start_date__date__gte=today)
+                      | Q(event_a__start_date__isnull=True)
+                      | Q(event_b__start_date__isnull=True))
+    return (EventMatch.objects
+            .exclude(event_a__suppressed=True)
+            .exclude(event_b__suppressed=True)
+            .exclude(event_a__is_duplicate=True)
+            .exclude(event_b__is_duplicate=True)
+            .exclude(event_a__is_event=False)
+            .exclude(event_b__is_event=False)
+            .filter(still_relevant))
+
+
+def delete_with_blacklist(events, reason):
+    """Hard-delete events, blacklisting each post no surviving listing uses."""
+    ids = [e.id for e in events]
+    for ev in events:
+        if not ev.orig_link or link_still_in_use(ev.orig_link, ids):
+            continue
+        if not BlacklistedLink.objects.filter(url=ev.orig_link).exists():
+            BlacklistedLink.objects.create(url=ev.orig_link, reason=reason)
+    for ev in events:
+        ev.delete()
+
+
+def _local_day(event):
+    return timezone.localtime(event.start_date).date() if event.start_date else None
+
+
+@api_view(["GET"])
+def get_event_match_groups(request):
+    """The review page as GROUPS: every reviewable pending pair on one local
+    day connected through shared events, plus events on that day carrying the
+    identical flyer image. Measured 2026-09-18: 137 pairs were 76 groups, 21
+    of them with 3 to 6 events, so one event was judged up to five times.
+    The same image on another day does NOT join: that is the series. Soonest
+    first; `offset`/`limit` page through the groups.
+    """
+    try:
+        limit = max(1, min(int(request.GET.get("limit", 20)), 100))
+        offset = max(0, int(request.GET.get("offset", 0)))
+    except (TypeError, ValueError):
+        limit, offset = 20, 0
+    try:
+        today = timezone.localdate()
+        matches = list(reviewable_matches(today).filter(status='pending')
+                       .select_related('event_a', 'event_a__venue', 'event_a__poster',
+                                       'event_b', 'event_b__venue', 'event_b__poster')
+                       .order_by('id'))
+        parent = {}
+
+        def find(x):
+            parent.setdefault(x, x)
+            while parent[x] != x:
+                parent[x] = parent[parent[x]]
+                x = parent[x]
+            return x
+
+        def union(a, b):
+            parent[find(a)] = find(b)
+
+        events = {}
+        for m in matches:
+            events[m.event_a_id] = m.event_a
+            events[m.event_b_id] = m.event_b
+            union(m.event_a_id, m.event_b_id)
+        # Identical flyer on the same local day joins groups.
+        by_flyer = {}
+        for e in events.values():
+            if e.orig_thumb and e.start_date:
+                by_flyer.setdefault((e.orig_thumb, _local_day(e)), []).append(e.id)
+        for ids in by_flyer.values():
+            for other in ids[1:]:
+                union(ids[0], other)
+
+        groups = {}
+        for m in matches:
+            groups.setdefault(find(m.event_a_id), {'pairs': [], 'ids': set()})
+            g = groups[find(m.event_a_id)]
+            g['pairs'].append(m)
+            g['ids'].update((m.event_a_id, m.event_b_id))
+
+        def soonest(g):
+            days = [_local_day(events[i]) for i in g['ids']]
+            upcoming = [d for d in days if d and d >= today]
+            return (not upcoming, min(upcoming) if upcoming else today, min(g['ids']))
+
+        ordered = sorted(groups.values(), key=soonest)
+        page = ordered[offset:offset + limit]
+        data = [{
+            "key": min(g['ids']),
+            "soonest": (soonest(g)[1].isoformat() if not soonest(g)[0] else None),
+            "events": [EventSerializer(events[i]).data
+                       for i in sorted(g['ids'], key=lambda i: (events[i].start_date is None,
+                                                                events[i].start_date or timezone.now(), i))],
+            "pairs": [{"match_id": m.id, "event_a_id": m.event_a_id, "event_b_id": m.event_b_id,
+                       "score": m.score, "match_type": m.match_type} for m in g['pairs']],
+        } for g in page]
+        return Success({"groups": data, "total_groups": len(ordered),
+                        "pending_total": len(matches), "offset": offset, "limit": limit})
+    except Exception as e:
+        logger.error(f"Error grouping event matches: {e}")
+        return ServerProcessingError(message="Error grouping event matches: " + str(e))
+
+
+@api_view(["POST"])
+def resolve_event_match_group(request):
+    """One verdict for a whole group.
+
+    match_ids: the group's pairs (only PENDING ones are acted on; a pair the
+    owner already decided is never redone).
+    action: keep (keep_id required, must be a member) -> every other member
+            hides behind it and every pair is confirmed;
+            keep_all -> every pair rejected, nothing hidden;
+            delete_all -> every member deleted, posts blacklisted unless a
+            surviving listing still uses them.
+    Verdicts carry to later dates of the same posts (see
+    propagate_series_verdict); deletion does not.
+    """
+    match_ids = request.data.get("match_ids")
+    action = request.data.get("action")
+    keep_id = request.data.get("keep_id")
+    if validator.is_missing([match_ids, action]) or not isinstance(match_ids, list):
+        return MissingInformation()
+    if action not in ("keep", "keep_all", "delete_all"):
+        return InvalidParameters()
+    try:
+        ids = [int(x) for x in match_ids]
+        keep_id = int(keep_id) if keep_id is not None else None
+    except (TypeError, ValueError):
+        return InvalidParameters()
+    try:
+        with transaction.atomic():
+            pending = list(EventMatch.objects.select_related('event_a', 'event_b')
+                           .filter(id__in=ids, status='pending'))
+            members = {}
+            for m in pending:
+                members[m.event_a_id] = m.event_a
+                members[m.event_b_id] = m.event_b
+            if action == "keep":
+                if keep_id not in members:
+                    return InvalidParameters()
+                keep = members[keep_id]
+                for eid, ev in members.items():
+                    if eid != keep_id:
+                        keep_over(keep, ev)
+                for m in pending:
+                    m.status = 'confirmed'
+                    m.reviewed_at = timezone.now()
+                    m.save(update_fields=['status', 'reviewed_at'])
+                # The verdict is about the whole group on every date the posts
+                # share, including members no pair links to the keeper.
+                carry_keep_to_other_dates(
+                    keep, [ev for eid, ev in members.items() if eid != keep_id])
+            elif action == "keep_all":
+                for m in pending:
+                    m.status = 'rejected'
+                    m.reviewed_at = timezone.now()
+                    m.save(update_fields=['status', 'reviewed_at'])
+                    propagate_series_verdict(m.event_a, m.event_b, 'reject')
+            else:
+                delete_with_blacklist(list(members.values()), "Deleted from duplicates review")
+        return Success({"status": "success", "resolved": action, "pairs": len(pending)})
+    except Exception as e:
+        logger.error(f"Error resolving event match group: {e}")
+        return ServerProcessingError(message="Error resolving event match group: " + str(e))
 
 
 @api_view(["POST"])
@@ -1491,27 +1671,17 @@ def resolve_event_match(request):
                 return Success({"deleted": True})
             if action == "not_duplicate":
                 match.status = "rejected"
+                propagate_series_verdict(match.event_a, match.event_b, 'reject')
             else:
                 keep = match.event_a if action == "keep_a" else match.event_b
                 drop = match.event_b if action == "keep_a" else match.event_a
-                # The owner chose to keep this event, so it must be visible —
-                # clear any suppression AND any stale is_duplicate flag left by
-                # the old (broken) dedup, which over-flagged real events.
-                keep.suppressed = False
-                keep.canonical = None
-                keep.is_duplicate = False
-                keep.duplicate_link = None
-                keep.save(update_fields=['suppressed', 'canonical', 'is_duplicate', 'duplicate_link'])
-                # Set is_duplicate on the dropped event so the existing read
-                # paths (which filter is_duplicate=False) hide it immediately;
-                # suppressed carries the canonical link. (A later cleanup can
-                # migrate reads to `suppressed` and retire is_duplicate.)
-                drop.suppressed = True
-                drop.canonical = keep
-                drop.is_duplicate = True
-                drop.duplicate_link = keep.orig_link or f"event_{keep.id}"
-                drop.save(update_fields=['suppressed', 'canonical', 'is_duplicate', 'duplicate_link'])
+                # The owner chose to keep this event, so it must be visible;
+                # keep_over also clears any stale is_duplicate flag left by
+                # the old scraper and hides the other behind it (recoverable).
+                keep_over(keep, drop)
                 match.status = "confirmed"
+                # The same two posts on their other dates get the same verdict.
+                carry_keep_to_other_dates(keep, [drop])
 
             match.reviewed_at = timezone.now()
             match.save(update_fields=['status', 'reviewed_at'])

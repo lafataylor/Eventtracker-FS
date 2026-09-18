@@ -306,19 +306,21 @@ def read_logs(request):
         else:
             logs = Logs.objects.all()
 
-        # Get the most recent "In Progress" log
-        latest_in_progress = Logs.objects.filter(status="In Progress").order_by('-scraped_at').first()
-        
-        # Get the last 500 logs ordered by scraped_at
-        recent_logs = Logs.objects.all().order_by('-scraped_at')[:500]
+        # Ordered by primary key, NOT by scraped_at: rows are appended in
+        # time order so the order is identical, but scraped_at is an
+        # unindexed text column, and sorting 2.1 million rows by it cost
+        # 7.6 s per page view on production (2026-09-18).
+        latest_in_progress = Logs.objects.filter(status="In Progress").order_by('-id').first()
+
+        recent_logs = Logs.objects.all().order_by('-id')[:500]
         
         # Combine and deduplicate
         all_logs = list(recent_logs)
         if latest_in_progress and latest_in_progress not in all_logs:
             all_logs.append(latest_in_progress)
         
-        # Sort by scraped_at descending to maintain chronological order
-        all_logs.sort(key=lambda x: x.scraped_at or 0, reverse=True)
+        # Newest first (same order the query used).
+        all_logs.sort(key=lambda x: x.id, reverse=True)
         
         # Ensure we keep the "In Progress" log even if it's older than the 500th log
         if latest_in_progress:

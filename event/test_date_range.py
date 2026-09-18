@@ -98,6 +98,18 @@ class RangeFeedEndDayTests(DateFeedFixtureMixin, TestCase):
                  end=self._local(self.day, 22, 0))
         self.assertIn('spanning festival', self._range_feed(self.day, self.day))
 
+    def test_a_run_longer_than_a_few_days_lists_on_its_start_day_only(self):
+        # Owner 2026-09-18: "Lightning in a Bottle" was stored as Aug 21 to
+        # Sep 18 and sat under Today for a month. A festival is a few days;
+        # anything longer with an end date is an extraction mistake or an
+        # exhibition the owner wants on its opening day only.
+        opening = self.day + timedelta(days=5)
+        self._ev('month long span', self._local(opening, 18, 0),
+                 end=self._local(opening + timedelta(days=35), 22, 0))
+        self.assertIn('month long span', self._range_feed(opening, opening))
+        mid_run = opening + timedelta(days=20)
+        self.assertNotIn('month long span', self._range_feed(mid_run, mid_run))
+
     def test_range_excludes_the_day_after_the_end(self):
         self.assertNotIn('next day', self._range_feed(self.prev_day, self.day))
 
@@ -120,6 +132,14 @@ class FilterEventsDateTests(DateFeedFixtureMixin, TestCase):
             content_type='application/json')
         self.assertEqual(res.status_code, 200)
         return self._names(res)
+
+    def test_an_explicit_date_filter_finds_a_past_event(self):
+        # The admin filters "Event Date is 08/21/2026" and got nothing,
+        # because every filter silently excluded anything older than 25
+        # hours. Asking for a specific day means that day, past or not.
+        past = self.day - timedelta(days=40)
+        self._ev('forty days ago', self._local(past, 20, 0))
+        self.assertIn('forty days ago', self._filter('equal', past))
 
     def test_between_includes_events_on_the_end_day(self):
         names = self._filter('between', self.prev_day, self.day)
@@ -148,11 +168,19 @@ class RangeFeedEndDateBranchTests(DateFeedFixtureMixin, TestCase):
     whole of its run except the first day.
     """
 
-    def test_a_run_that_started_last_week_appears_on_its_end_day(self):
+    def test_a_short_run_that_started_two_days_ago_appears_on_its_end_day(self):
+        end = self._local(self.day, 22, 0)
+        self._ev('three day festival',
+                 self._local(self.day - timedelta(days=2), 18, 0), end=end)
+        self.assertIn('three day festival', self._range_feed(self.day, self.day))
+
+    def test_a_run_that_started_last_week_does_not_appear_on_its_end_day(self):
+        # Changed 2026-09-18 (was the opposite): see the range-feed test of
+        # the same name for the owner's case.
         end = self._local(self.day, 22, 0)
         self._ev('long exhibition',
                  timezone.now() - timedelta(days=7), end=end)
-        self.assertIn('long exhibition', self._range_feed(self.day, self.day))
+        self.assertNotIn('long exhibition', self._range_feed(self.day, self.day))
 
     def test_a_finished_run_stays_out(self):
         # ended well before the 25-hour cutoff: still gone
