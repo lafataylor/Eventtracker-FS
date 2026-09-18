@@ -136,3 +136,40 @@ Repo public with working admin credentials → private; credential rotation (cou
 - **Verified as a visitor**: smoke rc=0, Mexico City page 126 timed events, no pozole. The remaining "Oaxaca" text is *Presencia de Oaxaca*, a Mexico City event about Oaxaca - correctly kept. Only Oaxaca-state rows left are the 12 Puerto Escondido ones awaiting the owner's answer.
 - **Still blocked on the owner**: repo visibility (Zain has push/triage, not admin) and the read-only deploy key the server needs before it goes private, since it clones over unauthenticated HTTPS. Disabling old admin logins still needs the scraper given its own login first (~2h).
 - **Note for the record**: `c_admin/constants.py` still contains other live secrets from the original codebase (a Facebook app secret, a client token, an Instagram access token, a second login). Removing values from the current file does not remove them from git history; private + rotation is the actual fix. Raised with the owner, not actioned.
+
+---
+
+## 2026-09-18: the day the API deploy was a no-op, and what was built after
+
+**Deploy.** PRs #5 (one card per recurring series) and #6 (AI-assisted
+development setup) merged to main and pushed to both deploy branches. Zain
+ran the deploy script at 18:58 UTC. The site (front end) went live. The API
+step printed "API DEPLOY COMPLETE" and deployed the old code: deploy_api.sh
+rsyncs from `/home/ubuntu/deploy-rehearsal/api` as is, and the script never
+moved that clone to the new commit. Caught by the script's own before/after
+probe (2,281 rows, 0 with series_ids, both times). The script now moves the
+clone, runs the suite there, and refuses to continue unless the feed carries
+series_ids.
+
+**Owner's Friday messages, measured.** Admin list 3,235 rows / 8.5 s / 3.8 MB
+(timestamp filter, no hiding, per-row venue and poster queries). Runs page
+7.6 s (2.1M log rows sorted by an unindexed text column). Public year feed
+6.5 s. Review queue 137 pairs = 76 groups, 21 with 3 to 6 events, and the
+same group repeated per week of a recurring party. 75 picture-only rows saved
+as events in two weeks (the old scraper's 11-missing-fields rule had no
+equivalent in the structured path). "Lightning in a Bottle" stored Aug 21 to
+Sep 18, surfaced under Today by the end-date branch, invisible to the Aug 21
+filter because every filter applied the 25-hour cutoff.
+
+**Built (PR #7, 409 API tests green, production build green, local browser
+QA):** admin list as an inbox with joined venue/poster (1,107 rows on the
+day's data); Runs page ordered by id; short-run rule for the end-date
+branch; explicit date filters skip the cutoff; no-date rule at ingestion plus
+`hide_undated_events`; series key = post+title or post+flyer; cards show
+spans; duplicates page as groups (connected pairs on one day plus identical
+flyers) with keep one / keep all / delete all, bulk bar, load more; verdicts
+carried to other dates of the same posts from the pair view, the group view
+and the nightly pass.
+
+**Owner login** for makemoremusic@gmail.com set and verified at 18:00 UTC.
+Old admin logins left on until he confirms.
