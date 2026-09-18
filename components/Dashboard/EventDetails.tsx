@@ -161,6 +161,24 @@ function EventDetails({ isEdit, locationName }: EventDetailsProps) {
     return '...';
   };
 
+  // "Aug 21 – Sep 18, 2026" for a run that ends on a later day, so a
+  // multi-day listing is never mistaken for a wrong date (owner 2026-09-18).
+  const formattedSpan = (start_date: string, end_date: string | null) => {
+    if (start_date && end_date) {
+      const start = new Date(start_date);
+      const end = new Date(end_date);
+      const sameDay =
+        end.getFullYear() === start.getFullYear() &&
+        end.getMonth() === start.getMonth() &&
+        end.getDate() === start.getDate();
+      if (!sameDay && end > start) {
+        const startPart = start.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+        return `${startPart} – ${formattedDate(end_date)}`;
+      }
+    }
+    return formattedDate(start_date);
+  };
+
   const formattedTime = (time: string | null): string => {
     if (!time) return '';
 
@@ -844,7 +862,10 @@ function EventDetails({ isEdit, locationName }: EventDetailsProps) {
                       {(eventDetailsDialog.event.start_date) && (
                         <div className="bg-midnight rounded-r-xl font-medium -ml-5 pl-10 pr-6 text-sm flex items-center py-2 text-ash-beige">
                           {getStartsAt(
-                            formattedDate(eventDetailsDialog.event.start_date),
+                            formattedSpan(
+                              eventDetailsDialog.event.start_date,
+                              eventDetailsDialog.event.end_date
+                            ),
                             eventDetailsDialog.event.start_time
                           )}
                         </div>
