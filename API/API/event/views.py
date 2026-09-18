@@ -4,7 +4,7 @@ from rest_framework.views import APIView
 from .models import Event, Venue, Execution, Feedback, FavoritesData, BlacklistedLink, EventMatch
 from .serializers import EventSerializer, FeedbackSerializer
 from .series import collapse_series, series_key
-from .verdicts import keep_over, propagate_series_verdict
+from .verdicts import carry_keep_to_other_dates, keep_over, propagate_series_verdict
 from .ingest import (build_source_key, coerce_int, normalize_poster_name,
                      normalize_text, resolve_venue, upsert_event)
 from django.db import transaction
@@ -1591,9 +1591,10 @@ def resolve_event_match_group(request):
                     m.status = 'confirmed'
                     m.reviewed_at = timezone.now()
                     m.save(update_fields=['status', 'reviewed_at'])
-                    if keep_id in (m.event_a_id, m.event_b_id):
-                        drop = m.event_b if m.event_a_id == keep_id else m.event_a
-                        propagate_series_verdict(keep, drop, 'keep')
+                # The verdict is about the whole group on every date the posts
+                # share, including members no pair links to the keeper.
+                carry_keep_to_other_dates(
+                    keep, [ev for eid, ev in members.items() if eid != keep_id])
             elif action == "keep_all":
                 for m in pending:
                     m.status = 'rejected'
@@ -1680,7 +1681,7 @@ def resolve_event_match(request):
                 keep_over(keep, drop)
                 match.status = "confirmed"
                 # The same two posts on their other dates get the same verdict.
-                propagate_series_verdict(keep, drop, 'keep')
+                carry_keep_to_other_dates(keep, [drop])
 
             match.reviewed_at = timezone.now()
             match.save(update_fields=['status', 'reviewed_at'])

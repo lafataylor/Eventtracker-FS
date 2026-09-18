@@ -268,3 +268,73 @@ class KeeperInheritsHiddenRowsTests(GroupFixtureMixin, TestCase):
         p1, p2 = self._pair(a, b), self._pair(b, c)
         self._resolve_group([p1.id, p2.id], 'keep', keep_id=a.id)
         self.assertEqual(Event.objects.get(id=old_twin.id).canonical_id, a.id)
+
+
+class GroupKeepAcrossWeeksTests(GroupFixtureMixin, TestCase):
+    """Review of PR #7 (2026-09-18): "keep one" on a group of three left the
+    pair between the two LOSERS confirmed with both sides hidden. The nightly
+    inheritance read that as "event_a was kept" and would have brought a
+    hidden event back as next week's keeper. And the third member was never
+    carried to the other weeks at all, because no pair links it to the
+    keeper: it would have stayed on the site as a visible duplicate every
+    week. A group verdict is about the whole group, on every date the posts
+    share."""
+
+    def setUp(self):
+        super().setUp()
+        # Three posts, one party, this week and next (all rows already exist:
+        # a recurring post is expanded three months ahead at ingestion).
+        self.a1, self.b1, self.c1 = (self._ev('Thu Thu', post='PA'),
+                                     self._ev('Essex Thursday', post='PB'),
+                                     self._ev('Thursday at Essex Club', post='PC'))
+        self.a2, self.b2, self.c2 = (self._ev('Thu Thu', day=self.next_week, post='PA'),
+                                     self._ev('Essex Thursday', day=self.next_week, post='PB'),
+                                     self._ev('Thursday at Essex Club', day=self.next_week, post='PC'))
+        self.ab1, self.bc1 = self._pair(self.a1, self.b1), self._pair(self.b1, self.c1)
+        self.ab2, self.bc2 = self._pair(self.a2, self.b2), self._pair(self.b2, self.c2)
+
+    def _fresh(self, e):
+        return Event.objects.get(id=e.id)
+
+    def test_every_member_is_carried_to_next_week_not_only_the_keepers_pairs(self):
+        self._resolve_group([self.ab1.id, self.bc1.id], 'keep', keep_id=self.a1.id)
+        self.assertFalse(self._fresh(self.a2).suppressed)
+        for loser in (self.b2, self.c2):
+            row = self._fresh(loser)
+            self.assertTrue(row.suppressed, f'{row.name} next week is still on the site')
+            self.assertEqual(row.canonical_id, self.a2.id)
+        self.assertEqual(self._groups()['total_groups'], 0)
+
+    def test_a_pair_between_two_losers_is_never_read_as_a_keep(self):
+        from event.verdicts import decided_sibling_verdict
+        self._resolve_group([self.ab1.id, self.bc1.id], 'keep', keep_id=self.a1.id)
+        b3 = self._ev('Essex Thursday', day=self.next_week + timedelta(days=7), post='PB')
+        c3 = self._ev('Thursday at Essex Club', day=self.next_week + timedelta(days=7), post='PC')
+        self.assertIsNone(decided_sibling_verdict(b3, c3))
+
+    def test_a_restored_pair_is_not_a_verdict_either(self):
+        # Owner kept A over B, then restored B: neither side is hidden, so
+        # there is no keeper to infer and nothing to inherit.
+        from event.verdicts import decided_sibling_verdict
+        self._resolve_pair(self.ab1, 'keep_a' if self.ab1.event_a_id == self.a1.id else 'keep_b')
+        Event.objects.filter(id__in=[self.b1.id, self.b2.id]).update(
+            suppressed=False, is_duplicate=False, canonical=None)
+        a3 = self._ev('Thu Thu', day=self.next_week + timedelta(days=7), post='PA')
+        b3 = self._ev('Essex Thursday', day=self.next_week + timedelta(days=7), post='PB')
+        self.assertIsNone(decided_sibling_verdict(a3, b3))
+
+    def test_a_week_the_keeper_does_not_play_is_left_alone(self):
+        # B and C exist in week three, A does not: nothing to hide them behind.
+        week3 = self.next_week + timedelta(days=7)
+        b3 = self._ev('Essex Thursday', day=week3, post='PB')
+        c3 = self._ev('Thursday at Essex Club', day=week3, post='PC')
+        bc3 = self._pair(b3, c3)
+        self._resolve_group([self.ab1.id, self.bc1.id], 'keep', keep_id=self.a1.id)
+        self.assertFalse(self._fresh(b3).suppressed or self._fresh(c3).suppressed)
+        self.assertEqual(EventMatch.objects.get(id=bc3.id).status, 'pending')
+
+    def test_a_hidden_occurrence_of_the_keeper_is_not_used_as_a_keeper(self):
+        Event.objects.filter(id=self.a2.id).update(suppressed=True, is_duplicate=True)
+        self._resolve_group([self.ab1.id, self.bc1.id], 'keep', keep_id=self.a1.id)
+        self.assertFalse(self._fresh(self.b2).suppressed)
+        self.assertFalse(self._fresh(self.c2).suppressed)

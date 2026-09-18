@@ -1,6 +1,7 @@
 """The two verdicts a human (or a decided sibling) can give a pair, in one
 place, so the review page, the group view and the nightly pass agree.
 """
+from django.db.models import Q
 from django.utils import timezone
 
 from .models import Event, EventMatch
@@ -57,6 +58,8 @@ def propagate_series_verdict(keep, drop, verdict):
         if len(pair) != 2 or set(pair) != {keep_key, drop_key}:
             continue
         if verdict == 'keep':
+            if pair[keep_key].suppressed:
+                continue        # the owner hid that occurrence; never un-hide it
             keep_over(pair[keep_key], pair[drop_key])
             m.status = 'confirmed'
         else:
@@ -94,8 +97,67 @@ def decided_sibling_verdict(a, b):
             continue
         if m.status == 'rejected':
             return ('reject', None, None)
-        old_keeper = m.event_a if m.event_b.suppressed else m.event_b
+        # A keeper can be inferred only when exactly ONE side is hidden. Both
+        # hidden is the pair between two LOSERS of a group verdict (keep A
+        # over {B, C} confirms B-C with both behind A): reading that as "B
+        # was kept" would bring a hidden event back as next week's keeper
+        # (review of PR #7, reproduced). Neither hidden means the owner
+        # restored the loser. Either way, look at the next decided pair.
+        if m.event_a.suppressed == m.event_b.suppressed:
+            continue
+        old_keeper = m.event_b if m.event_a.suppressed else m.event_a
         keeper = a if series_key(old_keeper) == a_key else b
         loser = b if keeper is a else a
         return ('keep', keeper, loser)
     return None
+
+
+def _local_day(event):
+    return timezone.localtime(event.start_date).date() if event.start_date else None
+
+
+def _series_occurrences(event):
+    """Every row of the series `event` belongs to (same post, same series key)."""
+    if not event.shortcode:
+        return []
+    key = series_key(event)
+    return [e for e in Event.objects.filter(shortcode=event.shortcode) if series_key(e) == key]
+
+
+def carry_keep_to_other_dates(keep, losers):
+    """The owner kept `keep` over `losers` on one date: do the same on every
+    other date the posts share.
+
+    A recurring post is expanded three months ahead at ingestion, so the
+    other weeks already exist as rows. For each day the KEEPER's series has a
+    visible occurrence, every loser's occurrence on that day hides behind it,
+    whether or not a pair links them: in a group {A, B, C} matched A-B and
+    B-C, nothing pairs C with A, and carrying only the keeper's own pairs
+    left C on the site as a visible duplicate every week (review of PR #7).
+    A hidden occurrence of the keeper is never used (and never un-hidden),
+    a week the keeper does not play is left alone, and a loser in the
+    keeper's own series is skipped. Recoverable like every other merge.
+    """
+    keep_key = series_key(keep)
+    keepers = {}
+    for occ in _series_occurrences(keep):
+        if (occ.id == keep.id or occ.suppressed or occ.is_duplicate
+                or occ.is_event is False or not occ.start_date):
+            continue
+        keepers.setdefault(_local_day(occ), occ)
+    done = 0
+    for loser in losers:
+        if series_key(loser) == keep_key:
+            continue
+        for occ in _series_occurrences(loser):
+            if occ.id == loser.id or occ.suppressed or not occ.start_date:
+                continue
+            keeper = keepers.get(_local_day(occ))
+            if not keeper or keeper.id == occ.id:
+                continue
+            keep_over(keeper, occ)
+            (EventMatch.objects.filter(status='pending')
+             .filter(Q(event_a=keeper, event_b=occ) | Q(event_a=occ, event_b=keeper))
+             .update(status='confirmed', reviewed_at=timezone.now()))
+            done += 1
+    return done

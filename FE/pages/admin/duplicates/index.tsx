@@ -158,12 +158,15 @@ const Index = () => {
     }
   };
 
-  const fetchGroups = async (offset: number = 0) => {
+  // `quiet` reloads in place (after a verdict): no full-page spinner, and
+  // `limit` covers everything already loaded, so resolving a group on the
+  // fourth "Load more" does not throw the owner back to the first twenty.
+  const fetchGroups = async (offset: number = 0, limit: number = PAGE_SIZE, quiet = false) => {
     if (!(await requestMiddleware(dispatch))) return;
-    if (offset === 0) setIsLoading(true);
+    if (offset === 0 && !quiet) setIsLoading(true);
     setLoadError(false);
     try {
-      const res = await readEventMatchGroups(PAGE_SIZE, offset);
+      const res = await readEventMatchGroups(limit, offset);
       if (res.status === 200) {
         const page: Group[] = res.data?.groups || [];
         setGroups((prev) => (offset === 0 ? page : [...prev, ...page]));
@@ -201,7 +204,7 @@ const Index = () => {
       // Refetch rather than drop the group locally: a verdict also carries
       // to later weeks of the same posts, and a hidden member removes other
       // groups from the list, so only the server knows what is left.
-      await fetchGroups(0);
+      await fetchGroups(0, Math.min(100, Math.max(PAGE_SIZE, groups.length)), true);
       notify(
         action === 'keep_all' ? 'Kept all of them.'
         : action === 'delete_all' ? 'All deleted; their posts are blacklisted.'
@@ -258,7 +261,7 @@ const Index = () => {
     notify(failed === 0
       ? `${ok} group${ok === 1 ? '' : 's'} ${action === 'delete_all' ? 'deleted' : 'kept'}.`
       : `${ok} done, ${failed} failed — the rest are still in the list.`, failed > 0);
-    fetchGroups(0);
+    fetchGroups(0, Math.min(100, Math.max(PAGE_SIZE, groups.length)), true);
   };
   const bulkFlagged = async (kind: 'restore' | 'delete') => {
     const ids = flagged.filter((e) => selectedFlagged.has(e.id)).map((e) => e.id);
