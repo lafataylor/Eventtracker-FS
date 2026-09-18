@@ -171,7 +171,7 @@ flyers) with keep one / keep all / delete all, bulk bar, load more; verdicts
 carried to other dates of the same posts from the pair view, the group view
 and the nightly pass.
 
-**Owner login** for makemoremusic@gmail.com set and verified at 18:00 UTC.
+**Owner login** (the owner's existing admin account) set and verified at 18:00 UTC.
 Old admin logins left on until he confirms.
 
 **End-to-end pass the same night, before the deploy.** Reproduced the server

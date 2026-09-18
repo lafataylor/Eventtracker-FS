@@ -1,9 +1,9 @@
 """An email address is not case-sensitive, and neither is logging in with one.
 
-Found in the 2026-09-18 end-to-end pass: the owner typed his address as
-"Makemoremusic@gmail.com" (phones capitalise the first letter), the account
-is stored lowercase, and the lookup was an exact match, so the owner's own
-login would have answered "user not found".
+Found in the 2026-09-18 end-to-end pass: the owner typed his address with a
+capital first letter (phones capitalise it), the account is stored lowercase,
+and the lookup was an exact match, so the owner's own login would have
+answered "user not found".
 """
 from django.test import TestCase
 

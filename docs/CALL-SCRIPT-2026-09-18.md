@@ -194,7 +194,7 @@ in at https://lafaslist.com/admin/login while you watch, AFTER the deploy. Two
 things were fixed for exactly this moment: the full menu (Accounts, Users,
 Runs, Feedback, Details, Settings) used to show only for two hardcoded service
 logins, so his would have opened with three tabs; and the email was matched
-exactly, so "Makemoremusic@gmail.com" with the capital his phone adds would
+exactly, so his address with the capital his phone adds would
 have said user not found. Both work now. He should see all ten tabs.
 
 ---

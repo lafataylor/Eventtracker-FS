@@ -338,3 +338,35 @@ class GroupKeepAcrossWeeksTests(GroupFixtureMixin, TestCase):
         self._resolve_group([self.ab1.id, self.bc1.id], 'keep', keep_id=self.a1.id)
         self.assertFalse(self._fresh(self.b2).suppressed)
         self.assertFalse(self._fresh(self.c2).suppressed)
+
+
+class CarryRespectsARejectionTests(GroupFixtureMixin, TestCase):
+    """Review of PR #8: carrying a keep to the other dates hid an occurrence
+    even when the owner had explicitly said "not duplicates" for that very
+    date. "An owner verdict is never overridden" (detect_duplicates) holds
+    for a carried verdict too: a rejection on one date outranks a keep
+    carried over from another."""
+
+    def setUp(self):
+        super().setUp()
+        self.a1, self.b1 = self._ev('Thu Thu', post='PA'), self._ev('Essex Thursday', post='PB')
+        self.a2 = self._ev('Thu Thu', day=self.next_week, post='PA')
+        self.b2 = self._ev('Essex Thursday', day=self.next_week, post='PB')
+        self.week1 = self._pair(self.a1, self.b1)
+        self.week2 = self._pair(self.a2, self.b2)
+
+    def test_a_date_the_owner_called_not_duplicates_is_left_alone(self):
+        # Week 1: two different parties that week only. Owner says so.
+        self.week1.status = 'rejected'; self.week1.reviewed_at = timezone.now(); self.week1.save()
+        # Week 2: same party. Owner keeps A.
+        self._resolve_pair(self.week2, 'keep_a' if self.week2.event_a_id == self.a2.id else 'keep_b')
+        self.assertTrue(Event.objects.get(id=self.b2.id).suppressed)
+        b1 = Event.objects.get(id=self.b1.id)
+        self.assertFalse(b1.suppressed, 'a carried keep overrode the owner\'s "not duplicates"')
+        self.assertIsNone(b1.canonical_id)
+        self.assertEqual(EventMatch.objects.get(id=self.week1.id).status, 'rejected')
+
+    def test_the_same_holds_for_a_group_keep(self):
+        self.week1.status = 'rejected'; self.week1.reviewed_at = timezone.now(); self.week1.save()
+        self._resolve_group([self.week2.id], 'keep', keep_id=self.a2.id)
+        self.assertFalse(Event.objects.get(id=self.b1.id).suppressed)

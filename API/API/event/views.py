@@ -4,7 +4,8 @@ from rest_framework.views import APIView
 from .models import Event, Venue, Execution, Feedback, FavoritesData, BlacklistedLink, EventMatch
 from .serializers import EventSerializer, FeedbackSerializer
 from .series import collapse_series, series_key
-from .verdicts import carry_keep_to_other_dates, keep_over, propagate_series_verdict
+from .verdicts import (carry_keep_to_other_dates, carry_rejection_to_other_dates,
+                       keep_over)
 from .ingest import (build_source_key, coerce_int, normalize_poster_name,
                      normalize_text, resolve_venue, upsert_event)
 from django.db import transaction
@@ -1557,8 +1558,10 @@ def resolve_event_match_group(request):
             keep_all -> every pair rejected, nothing hidden;
             delete_all -> every member deleted, posts blacklisted unless a
             surviving listing still uses them.
-    Verdicts carry to later dates of the same posts (see
-    propagate_series_verdict); deletion does not.
+    Verdicts carry to the other dates of the same posts: a keep through
+    carry_keep_to_other_dates, "keep all" through
+    carry_rejection_to_other_dates (both in event/verdicts.py). Deletion
+    does not carry.
     """
     match_ids = request.data.get("match_ids")
     action = request.data.get("action")
@@ -1600,7 +1603,7 @@ def resolve_event_match_group(request):
                     m.status = 'rejected'
                     m.reviewed_at = timezone.now()
                     m.save(update_fields=['status', 'reviewed_at'])
-                    propagate_series_verdict(m.event_a, m.event_b, 'reject')
+                    carry_rejection_to_other_dates(m.event_a, m.event_b)
             else:
                 delete_with_blacklist(list(members.values()), "Deleted from duplicates review")
         return Success({"status": "success", "resolved": action, "pairs": len(pending)})
@@ -1671,7 +1674,7 @@ def resolve_event_match(request):
                 return Success({"deleted": True})
             if action == "not_duplicate":
                 match.status = "rejected"
-                propagate_series_verdict(match.event_a, match.event_b, 'reject')
+                carry_rejection_to_other_dates(match.event_a, match.event_b)
             else:
                 keep = match.event_a if action == "keep_a" else match.event_b
                 drop = match.event_b if action == "keep_a" else match.event_a
