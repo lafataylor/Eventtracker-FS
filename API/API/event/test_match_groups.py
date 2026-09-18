@@ -214,3 +214,36 @@ class SeriesVerdictPropagationTests(GroupFixtureMixin, TestCase):
         self._resolve_pair(self.this_week, 'delete_both')
         self.assertTrue(Event.objects.filter(id__in=[self.a2.id, self.b2.id]).count() == 2)
         self.assertEqual(EventMatch.objects.get(id=self.next_pair.id).status, 'pending')
+
+
+class SameSeriesPairTests(GroupFixtureMixin, TestCase):
+    """Both sides of a pair can belong to ONE series: two rows of one post
+    with one title (a same-post pair). Carrying a verdict "to the other dates
+    of the same two posts" has nothing to carry there, and a naive key lookup
+    maps both sides to one event, which would hide that event behind itself.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.a = self._ev('Klubnacht', post='PSAME')
+        self.b = self._ev('Klubnacht', post='PSAME')
+        self.c = self._ev('Klubnacht', post='PSAME')
+        self.ab = self._pair(self.a, self.b, score=0.0, match_type='exact_link')
+        self.ac = self._pair(self.a, self.c, score=0.0, match_type='exact_link')
+
+    def test_keeping_one_never_hides_an_event_behind_itself(self):
+        self._resolve_pair(self.ab, 'keep_a' if self.ab.event_a_id == self.a.id else 'keep_b')
+        for e in Event.objects.all():
+            self.assertNotEqual(e.canonical_id, e.id, f'{e.id} is its own keeper')
+        self.assertTrue(Event.objects.get(id=self.b.id).suppressed)
+        self.assertFalse(Event.objects.get(id=self.c.id).suppressed)
+        self.assertEqual(EventMatch.objects.get(id=self.ac.id).status, 'pending')
+
+    def test_not_duplicates_does_not_spread_inside_one_post(self):
+        self._resolve_pair(self.ab, 'not_duplicate')
+        self.assertEqual(EventMatch.objects.get(id=self.ac.id).status, 'pending')
+
+    def test_the_nightly_lookup_ignores_a_same_series_pair(self):
+        from event.verdicts import decided_sibling_verdict
+        self.ab.status = 'rejected'; self.ab.reviewed_at = timezone.now(); self.ab.save()
+        self.assertIsNone(decided_sibling_verdict(self.a, self.c))

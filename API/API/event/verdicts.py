@@ -33,6 +33,12 @@ def propagate_series_verdict(keep, drop, verdict):
     the deliberate way to do that.
     """
     keep_key, drop_key = series_key(keep), series_key(drop)
+    # Both sides in ONE series (two rows of one post with one title, a
+    # same-post pair): there are no "other dates of the same two posts" to
+    # carry to, and keying both sides identically would map them to a single
+    # event and hide it behind itself. Caught in self-review before deploy.
+    if keep_key == drop_key:
+        return 0
     posts = [x for x in (keep.shortcode, drop.shortcode) if x]
     if len(posts) < 2:
         return 0
@@ -42,7 +48,7 @@ def propagate_series_verdict(keep, drop, verdict):
     done = 0
     for m in siblings:
         pair = {series_key(m.event_a): m.event_a, series_key(m.event_b): m.event_b}
-        if set(pair) != {keep_key, drop_key}:
+        if len(pair) != 2 or set(pair) != {keep_key, drop_key}:
             continue
         if verdict == 'keep':
             keep_over(pair[keep_key], pair[drop_key])
@@ -67,6 +73,8 @@ def decided_sibling_verdict(a, b):
     are not copied, so one auto-merge cannot silently spread.
     """
     a_key, b_key = series_key(a), series_key(b)
+    if a_key == b_key:          # one series on both sides: nothing to inherit
+        return None
     posts = [x for x in (a.shortcode, b.shortcode) if x]
     if len(posts) < 2:
         return None
@@ -76,7 +84,7 @@ def decided_sibling_verdict(a, b):
                .select_related('event_a', 'event_b').order_by('-reviewed_at'))
     for m in decided:
         pair = {series_key(m.event_a): m.event_a, series_key(m.event_b): m.event_b}
-        if set(pair) != {a_key, b_key}:
+        if len(pair) != 2 or set(pair) != {a_key, b_key}:
             continue
         if m.status == 'rejected':
             return ('reject', None, None)

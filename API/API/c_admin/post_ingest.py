@@ -279,7 +279,11 @@ def build_payloads(extraction, *, shortcode, post_link, slide_urls,
     # Metro first: it drops rows and needs isEvent intact to know which are
     # listings. The no-date rule then hides among the survivors.
     kept = _drop_other_metro_events(payloads, expanded, shortcode)
-    kept_events = [ev for pl, ev in zip(payloads, expanded) if pl in kept]
+    # Identity, not equality: two payloads can be equal dicts, and `in`
+    # would then keep the event of a DROPPED payload and shift every
+    # later payload onto the wrong event.
+    kept_ids = {id(pl) for pl in kept}
+    kept_events = [ev for pl, ev in zip(payloads, expanded) if id(pl) in kept_ids]
     return _hide_undated_events(kept, kept_events, shortcode)
 
 
