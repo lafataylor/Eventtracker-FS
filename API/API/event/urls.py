@@ -19,5 +19,7 @@ urlpatterns = [
     path("event/getDuplicateEvents/", get_duplicate_events),
     path("event/matches/", get_event_matches),
     path("event/matches/resolve/", resolve_event_match),
+    path("event/matches/groups/", get_event_match_groups),
+    path("event/matches/groups/resolve/", resolve_event_match_group),
     path("event/locations/", list_locations),
 ]

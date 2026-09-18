@@ -255,6 +255,23 @@ export function readEventMatches(status: string = 'pending', limit: number = 50)
   });
 }
 
+// The review page as GROUPS: every pending pair on one day connected through
+// shared events, plus events on that day with the identical flyer. Soonest
+// first; offset/limit page through the groups ("load more at the bottom").
+export function readEventMatchGroups(limit: number = 20, offset: number = 0) {
+  return axiosClient.get(`event/matches/groups/?limit=${limit}&offset=${offset}`, {
+    headers: getHeader()
+  });
+}
+
+// One verdict for a whole group.
+// action: 'keep' (keep_id required) | 'keep_all' | 'delete_all'
+export function resolveEventMatchGroup(match_ids: number[], action: string, keep_id?: number) {
+  return axiosClient.post('event/matches/groups/resolve/',
+    keep_id === undefined ? { match_ids, action } : { match_ids, action, keep_id },
+    { headers: getHeader() });
+}
+
 // Ticket 1: record the owner's verdict on a pair.
 // action: 'keep_a' | 'keep_b' | 'not_duplicate' | 'delete_both'
 // (delete_both hard-deletes both events; the match row cascades away, so it
