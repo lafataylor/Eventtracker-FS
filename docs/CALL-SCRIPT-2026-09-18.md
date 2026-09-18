@@ -91,8 +91,8 @@ Left sidebar, top to bottom. Click each one for 30 seconds:
   click it on the call (it costs OpenAI and Apify credits and runs for an
   hour).
 - **Duplicates**. Two tabs. **Duplicate pairs** is the review queue: two
-  cards side by side with **Keep this one** under each, plus a checkbox per
-  pair and a bar with **Select all on page**, **Not duplicates** and
+  cards side by side with **Keep this one** under each, **Not duplicates**
+  and **Delete both** for the pair, plus a checkbox per pair and a bar with **Select all on page**, **Not duplicates** and
   **Delete both of each** for clearing many at once. Pairs from one Instagram
   post are grouped under **Same Instagram post**. **Previously flagged** is
   everything the system hid on its own, with **Restore to site** if it got
