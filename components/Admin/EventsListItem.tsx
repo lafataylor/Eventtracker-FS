@@ -224,10 +224,19 @@ const EventsListItem = ({
                 showEvent(event)(dispatch);
               }}
             >
-              <img
-                className="w-32 h-32 object-cover"
-                src={updatedEvent.orig_thumb}
-              />
+              <div className="flex flex-col items-center gap-1">
+                <img
+                  className="w-32 h-32 object-cover"
+                  src={updatedEvent.orig_thumb}
+                />
+                {/* A recurring series shows as ONE row standing for every
+                    occurrence; say so, since deleting it deletes them all. */}
+                {event.series_ids && event.series_ids.length > 1 ? (
+                  <span className="text-xs px-2 py-[2px] rounded-full bg-transparent-white text-mist-white">
+                    {event.series_ids.length} dates
+                  </span>
+                ) : null}
+              </div>
             </td>
           );
         } else if (hasMultipleValues(column)) {

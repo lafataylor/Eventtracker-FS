@@ -386,7 +386,26 @@ const Index = () => {
   const deleteItemsInStack = async () => {
     if (selections.events) {
       const stackEventItems = { ...selections.events };
-      const eventsToDelete = Object.keys(stackEventItems);
+      // A row stands for its whole recurring series (the API lists one card
+      // per series, carrying every occurrence in series_ids). Deleting the
+      // row must delete the series, or the next occurrence simply takes its
+      // place in the list tomorrow.
+      const loaded: Event[] = [
+        ...thisMonthEvents,
+        ...prevEvents,
+        ...(search.eventResults ?? []),
+        ...(filter.results ?? []),
+      ];
+      const seriesOf = new Map<string, number[]>(
+        loaded.map((e) => [e.id.toString(), e.series_ids ?? [e.id]])
+      );
+      const eventsToDelete = Array.from(
+        new Set(
+          Object.keys(stackEventItems).flatMap((id) =>
+            (seriesOf.get(id) ?? [Number(id)]).map(String)
+          )
+        )
+      );
       showSpinner()(dispatch);
 
       if (await requestMiddleware(dispatch)) {
