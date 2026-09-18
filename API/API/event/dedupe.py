@@ -300,9 +300,23 @@ def wide_net_reason(a, b):
             return 'same_place_untitled'
         if a.get('start_time') and a.get('start_time') == b.get('start_time'):
             return 'same_place_same_time'
-        if title_sim >= WIDE_PLACE_TITLE_SIM:
+        # At one place the place's own name is not evidence: "Indietanzbar
+        # at Bohnengold" and "Booze Night at Bohnengold" matched only on
+        # "at Bohnengold" (rehearsal on production data, 2026-09-18). What
+        # is left of the titles has to agree.
+        if fuzz.token_sort_ratio(_without_venue_words(a['name'], a, b),
+                                 _without_venue_words(b['name'], a, b)) >= WIDE_PLACE_TITLE_SIM:
             return 'same_place_similar_title'
     return None
+
+
+_TITLE_FILLER = {'at', 'en', 'im', 'in', 'the', 'el', 'la', 'de', 'del', 'x', 'w', 'with'}
+
+
+def _without_venue_words(title, a, b):
+    venue_words = set((a['venue_name'] or '').split()) | set((b['venue_name'] or '').split())
+    kept = [w for w in (title or '').split() if w not in venue_words and w not in _TITLE_FILLER]
+    return ' '.join(kept)
 
 
 def find_fuzzy_pairs(signatures):

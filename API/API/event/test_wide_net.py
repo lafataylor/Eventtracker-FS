@@ -91,6 +91,22 @@ class WideNetTests(TestCase):
         self._run()
         self.assertEqual(EventMatch.objects.count(), 0)
 
+    def test_the_venues_own_name_in_both_titles_is_not_a_similar_title(self):
+        # Rehearsal on production data, 2026-09-18: these two different
+        # nights were flagged as "similar titles" only because both titles
+        # end in the venue's name. At one place, the place's name is not
+        # evidence; what is left of the titles has to agree.
+        a = self._ev('Indietanzbar at Bohnengold', 'POSTA', venue='Bohnengold', start_time='11:00 PM')
+        b = self._ev('Booze Night at Bohnengold', 'POSTB', venue='Bohnengold', start_time='07:00 PM')
+        self._run()
+        self.assertEqual(EventMatch.objects.count(), 0)
+
+    def test_a_real_loose_match_at_one_place_still_flags(self):
+        a = self._ev('Dekmantel x Potato Head with Ogazón', 'POSTA', venue='Potato Head', start_time='04:00 PM')
+        b = self._ev('Dekmantel x Potato Head Bali', 'POSTB', venue='Potato Head Beach Club', start_time='05:00 PM')
+        self._run()
+        self.assertTrue(self._pending(a, b))
+
     def test_a_title_that_is_only_a_subset_is_not_the_same_title(self):
         # token_set_ratio says 100 for a subset; the wide net must not.
         a = self._ev('Kvadrat', 'POSTA', venue='Showroom One', start_time='10:00 AM')
