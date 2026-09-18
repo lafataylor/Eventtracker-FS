@@ -189,8 +189,13 @@ straight to the site, which is the safety net. It is a good junior developer:
 great at explaining and small changes, a draft for me to check on anything
 touching the scraper or the database."
 
-His login: he has the admin login now (you sent it separately). If he wants,
-have him log in at https://lafaslist.com/admin/login while you watch.
+His login: he has the admin login now (you sent it separately). Have him log
+in at https://lafaslist.com/admin/login while you watch, AFTER the deploy. Two
+things were fixed for exactly this moment: the full menu (Accounts, Users,
+Runs, Feedback, Details, Settings) used to show only for two hardcoded service
+logins, so his would have opened with three tabs; and the email was matched
+exactly, so "Makemoremusic@gmail.com" with the capital his phone adds would
+have said user not found. Both work now. He should see all ten tabs.
 
 ---
 

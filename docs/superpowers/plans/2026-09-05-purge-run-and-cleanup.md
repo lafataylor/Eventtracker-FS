@@ -173,3 +173,30 @@ and the nightly pass.
 
 **Owner login** for makemoremusic@gmail.com set and verified at 18:00 UTC.
 Old admin logins left on until he confirms.
+
+**End-to-end pass the same night, before the deploy.** Reproduced the server
+stack locally (Python 3.10, Django 5.0.6, pydantic 2.7.4, rapidfuzz 3.9.5):
+378 tests green there and on 3.12. Rehearsed the deploy's data steps on a copy
+of that day's 18:58 UTC production backup (deleted afterwards) and clicked
+through the whole app in a browser against it. What that found, each fixed
+with a test first:
+- the server's rehearsal clone has no env files and the OpenAI key lives only
+  in the gunicorn unit, so the deploy script's test step would have failed at
+  09:00; it now borrows the live env with placeholder spend keys and a dead
+  API host (simulated from a bare clone: green);
+- the pinned requirements did not install on Python 3.10, and the docs said
+  Django 4.2 while production runs 5.0.6; pins now follow production;
+- the site itself paints a multi-day event into every day section its span
+  overlaps, and the monthly programme flyers are stored as multi-week runs:
+  12 Attika/Savaya cards on the Bali page. The shared span utility now applies
+  the API's three-day rule (2 cards). First site tests (`npm test`);
+- the Runs page's "In Progress" lookup scanned all 2.1M log rows (bounded);
+- the owner's new login would have opened a three-tab admin (full menu was
+  hardcoded to two service emails) and failed on a capitalised email; the
+  list now comes from NEXT_PUBLIC_SUPERADMIN_EMAILS and login ignores case.
+Measured on that copy: public year feed 0.50 s (production Friday 6.52 s),
+admin list 1,200 rows in 0.48 s and 4 s to render with 79,505 nodes (3,235
+rows, 8.45 s, 12 s, 213,637 nodes), 25 stale pairs closed, 1,378 dateless rows
+reclassified, 216 review groups from 433 pairs, a five-date nameless series
+(the owner's "Familiar Feelings" case) shown as one row and deleted whole in
+one action, two bulk verdicts clearing twelve groups through the series rule.

@@ -38,6 +38,7 @@ make test      # API test suite: python manage.py test event c_admin c_auth
 make api       # API on http://127.0.0.1:8009 (empty local database)
 make fe        # site on http://127.0.0.1:3009 (second terminal)
 make check     # site typecheck: npx tsc --noEmit, never grep-filtered
+cd FE && npm test   # site unit tests: node's built-in runner, TypeScript stripped natively
 ```
 
 The test suite is the contract: over 300 tests, all green on `main`, about
