@@ -3,7 +3,7 @@ place, so the review page, the group view and the nightly pass agree.
 """
 from django.utils import timezone
 
-from .models import EventMatch
+from .models import Event, EventMatch
 from .series import series_key
 
 
@@ -19,6 +19,12 @@ def keep_over(keep, drop):
     drop.is_duplicate = True
     drop.duplicate_link = keep.orig_link or f"event_{keep.id}"
     drop.save(update_fields=['suppressed', 'canonical', 'is_duplicate', 'duplicate_link'])
+    # The dropped row may itself be the keeper of earlier duplicates. They
+    # follow it to the new keeper, or they would sit hidden behind a hidden
+    # row and "Previously flagged" would name a suppressed event as the one
+    # kept instead (the same rule the nightly auto-merge applies).
+    (Event.objects.filter(canonical=drop).exclude(id=keep.id)
+     .update(canonical=keep, duplicate_link=keep.orig_link or f"event_{keep.id}"))
 
 
 def propagate_series_verdict(keep, drop, verdict):

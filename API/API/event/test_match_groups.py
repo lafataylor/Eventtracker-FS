@@ -247,3 +247,24 @@ class SameSeriesPairTests(GroupFixtureMixin, TestCase):
         from event.verdicts import decided_sibling_verdict
         self.ab.status = 'rejected'; self.ab.reviewed_at = timezone.now(); self.ab.save()
         self.assertIsNone(decided_sibling_verdict(self.a, self.c))
+
+
+class KeeperInheritsHiddenRowsTests(GroupFixtureMixin, TestCase):
+    """If the dropped event was itself the keeper of earlier duplicates, they
+    must follow it to the new keeper. Otherwise they sit hidden behind a
+    hidden row, and "Previously flagged" names a suppressed event as the one
+    that was "kept instead" (the chain the nightly merge already prevents)."""
+
+    def test_rows_hidden_behind_the_dropped_event_move_to_the_keeper(self):
+        a, b = self._ev('A'), self._ev('B')
+        old_twin = self._ev('B re-scrape', suppressed=True, is_duplicate=True, canonical=b)
+        pair = self._pair(a, b)
+        self._resolve_pair(pair, 'keep_a' if pair.event_a_id == a.id else 'keep_b')
+        self.assertEqual(Event.objects.get(id=old_twin.id).canonical_id, a.id)
+
+    def test_the_same_holds_for_a_group_verdict(self):
+        a, b, c = self._ev('A'), self._ev('B'), self._ev('C')
+        old_twin = self._ev('C re-scrape', suppressed=True, is_duplicate=True, canonical=c)
+        p1, p2 = self._pair(a, b), self._pair(b, c)
+        self._resolve_group([p1.id, p2.id], 'keep', keep_id=a.id)
+        self.assertEqual(Event.objects.get(id=old_twin.id).canonical_id, a.id)
