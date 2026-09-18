@@ -17,6 +17,7 @@ import {
 } from '../../../services/lib/admin';
 import { HIDE_INFO_OVERLAY, SHOW_INFO_OVERLAY } from '../../../store/actions/type';
 import { Event } from '../../../interface/objects/simpleObject';
+import { pageChunks } from '../../../utils/pageChunks';
 
 type ViewMode = 'pairs' | 'flagged';
 
@@ -47,6 +48,8 @@ interface Group {
   pairs: GroupPair[];
 }
 const PAGE_SIZE = 20;
+// get_event_match_groups caps `limit` at this (event/views.py).
+const MAX_GROUPS_PER_REQUEST = 100;
 
 
 const Index = () => {
@@ -185,6 +188,16 @@ const Index = () => {
     }
   };
 
+  // Reload, in place, everything already on screen. The API answers at most
+  // MAX_GROUPS_PER_REQUEST groups per request, so a long list is re-read in
+  // chunks; a single capped request dropped everything past the hundredth
+  // group after a verdict (review of PR #8).
+  const reloadLoadedGroups = async () => {
+    for (const { offset, limit } of pageChunks(groups.length, MAX_GROUPS_PER_REQUEST, PAGE_SIZE)) {
+      await fetchGroups(offset, limit, true);
+    }
+  };
+
   useEffect(() => {
     setBusyIds(new Set());
     if (view === 'pairs') fetchGroups(0);
@@ -204,7 +217,7 @@ const Index = () => {
       // Refetch rather than drop the group locally: a verdict also carries
       // to later weeks of the same posts, and a hidden member removes other
       // groups from the list, so only the server knows what is left.
-      await fetchGroups(0, Math.min(100, Math.max(PAGE_SIZE, groups.length)), true);
+      await reloadLoadedGroups();
       notify(
         action === 'keep_all' ? 'Kept all of them.'
         : action === 'delete_all' ? 'All deleted; their posts are blacklisted.'
@@ -261,7 +274,7 @@ const Index = () => {
     notify(failed === 0
       ? `${ok} group${ok === 1 ? '' : 's'} ${action === 'delete_all' ? 'deleted' : 'kept'}.`
       : `${ok} done, ${failed} failed — the rest are still in the list.`, failed > 0);
-    fetchGroups(0, Math.min(100, Math.max(PAGE_SIZE, groups.length)), true);
+    reloadLoadedGroups();
   };
   const bulkFlagged = async (kind: 'restore' | 'delete') => {
     const ids = flagged.filter((e) => selectedFlagged.has(e.id)).map((e) => e.id);

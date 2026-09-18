@@ -68,7 +68,22 @@ export function getEventCalendarSpanMs(event: Event): { start: number; end: numb
     59,
     999
   ).getTime();
-  if (end - start > (SHORT_RUN_DAYS + 1) * DAY_MS) {
+  // Counted in CALENDAR days, not elapsed hours: across a daylight-saving
+  // change one local day lasts 23 or 25 hours, and measuring milliseconds
+  // made a legitimate four-day festival an hour "too long" on the autumn
+  // change, collapsing it to its opening day (review of PR #8). Rounding
+  // the midnight-to-midnight difference absorbs the odd hour.
+  const endDayStart = new Date(
+    endRaw.getFullYear(),
+    endRaw.getMonth(),
+    endRaw.getDate(),
+    0,
+    0,
+    0,
+    0
+  ).getTime();
+  const daysAfterOpening = Math.round((endDayStart - start) / DAY_MS);
+  if (daysAfterOpening > SHORT_RUN_DAYS) {
     return { start, end: startDayEnd };
   }
 
