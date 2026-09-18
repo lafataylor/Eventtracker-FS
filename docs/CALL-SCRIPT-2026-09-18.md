@@ -155,6 +155,27 @@ His four messages from Friday, each with its answer ready:
   day you ask for.
 - "Slower and laggier": three causes, all fixed; show the numbers.
 
+His Friday night message ("flag anything with a similar image, similar title
+or similar location and date"), answered with his own data:
+- Similar title, same day: in. 43 pairs were slipping through, every one from
+  a single account posting the same event twice. The venue was written
+  differently on the two posts and that dragged the match score just under
+  the bar. Example to show: PIÑATA POP VOL. 5, twice, same account.
+- Same place, same day: in, when one side has no title, the start times
+  agree, or the titles loosely agree. NOT when it is two different shows at
+  one venue with different times (201 of those; they would bury the page).
+- It only flags. It never merges on its own, so "Happy Hour" at two venues
+  reaches him instead of vanishing.
+- Expect the page to GROW after this deploy (on Friday's data 216 groups
+  became 336, about 254 decisions since one verdict covers every date of the
+  same two posts). Say it before he sees it: "you asked for a wider net, so
+  the page is bigger today; each group is one click."
+- Similar image: tested on 74 of his real pairs. Only 2 had near-identical
+  flyers, and none of the 24 certain duplicates did, because the same event
+  is usually re-posted with different artwork. It helps at the margin, not
+  as the main signal. It is next, about 3 hours, and needs a small database
+  change to store the image fingerprints.
+
 The one thing still on the list, say it before he asks: "Matching the same
 flyer re-posted by a different account, cropped or with an overlay, needs
 image fingerprinting. That is the next 2 to 3 hours if you want it."

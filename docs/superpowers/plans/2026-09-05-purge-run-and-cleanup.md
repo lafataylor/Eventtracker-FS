@@ -200,3 +200,15 @@ rows, 8.45 s, 12 s, 213,637 nodes), 25 stale pairs closed, 1,378 dateless rows
 reclassified, 216 review groups from 433 pairs, a five-date nameless series
 (the owner's "Familiar Feelings" case) shown as one row and deleted whole in
 one action, two bulk verdicts clearing twelve groups through the series rule.
+
+**Wide net, same night.** Owner: "flag anything with a similar image, similar
+title or similar location and date". Measured on production (rows the pass
+had already seen): 43 same-day near-identical titles unflagged, all from one
+account, fused score ~78 because the venue text differed; 178 more at one
+place on one day with a missing title, same start time or loose title; 201
+two-shows-at-one-venue pairs deliberately left out. wide_net_reason() flags
+only, stored at 85, never an auto-merge. Rehearsed on that day's backup:
++259 pairs (111 untitled at one place, 91 same start time, 29 loose title,
+28 same title), 216 groups became 336, about 254 decisions, pass runtime 5 s.
+Image matching tested on 74 real pairs with their flyers: 2 near-identical,
+0 of the 24 certain duplicates; supplementary, follows separately.
