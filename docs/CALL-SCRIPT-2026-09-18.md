@@ -1,4 +1,4 @@
-# Call script: Lafayette screen share, Friday 2026-09-18
+# Call script: Lafayette screen share, Saturday 2026-09-19, 12:00
 
 Written for Zain. Read once before the call, keep open during it. Every
 step says what to click and what to say. Times assume a 60 minute call.
@@ -24,10 +24,12 @@ Say: "I want to do three things. Show you how the system works end to end so
 it stops being a black box, show you the duplicates fix, and set you up with
 the AI assisted development you asked about. Then whatever you want to ask."
 
-Then the honest sentence, once, early: "One thing first. I told you Sunday the
-duplicates fix would be live that night. It was built and reviewed that day,
-but the deploy did not happen. That was on my side. It is going live today."
-Do not over explain. Move on.
+Then the honest sentences, once, early: "Two things first. I told you Sunday
+the duplicates fix would be live that night, and it was not; that was on my
+side. And you were right that the admin got slower this month: the recurring
+event handling I added tripled the events list, and that exposed two old slow
+spots. All of it went out this morning, and I have the before and after
+numbers." Do not over explain. Move on.
 
 ---
 
@@ -77,28 +79,32 @@ Left sidebar, top to bottom. Click each one for 30 seconds:
   how we retired the Oaxaca accounts." (The pause is set behind the scenes
   for now; the status column here always reads Tracking. If he asks for a
   pause button, that is a small job.) Do not add or delete anything.
-- **Events**. This is the table of everything scraped. Point at the columns:
-  Thumbnail, Event Name, Start Date, End Date, Start Time, and so on. Say:
-  "Anything the AI got wrong can be corrected here by clicking the cell."
-  Click **Hide** to show how columns can be hidden, close it. Click
-  **Filter** to show the filters exist, close it. The **+ New Event** button
-  is "paste an Instagram link and the AI reads it on the spot".
-  After today's deploy: a recurring event shows ONE row with a small
-  "N dates" badge under its thumbnail; deleting that row deletes every date.
+- **Events**. Say: "This is now an inbox of what is coming up, not a dump.
+  Yesterday's events are gone at midnight, hidden duplicates and non-events
+  are out, rows with no date never make it in, and a recurring event is ONE
+  row with a small 'N dates' badge under its thumbnail; deleting that row
+  deletes every date." Point at the columns: Thumbnail, Event Name, Start
+  Date, End Date, Start Time. "Anything the AI got wrong can be corrected
+  here by clicking the cell." Click **Filter**, set Event Date is 08/21/2026,
+  and show Lightning in a Bottle turning up (it did not before). Clear it.
+  The **+ New Event** button is "paste an Instagram link and the AI reads it
+  on the spot". Numbers: 3,235 rows and 8.5 seconds before; about 1,100 rows
+  and about a second after (use the figures from the deploy printout).
 - **Users**. Visitors who made an account on the site (for favorites).
-- **Runs**. The nightly job's log. Point at the last run's line: how many
-  posts, how many events. **Initiate New Run** starts one by hand; do NOT
-  click it on the call (it costs OpenAI and Apify credits and runs for an
-  hour).
-- **Duplicates**. Two tabs. **Duplicate pairs** is the review queue: two
-  cards side by side with **Keep this one** under each, **Not duplicates**
-  and **Delete both** for the pair, plus a checkbox per pair and a bar with **Select all on page**, **Not duplicates** and
-  **Delete both of each** for clearing many at once. Pairs from one Instagram
-  post are grouped under **Same Instagram post**. **Previously flagged** is
-  everything the system hid on its own, with **Restore to site** if it got
-  one wrong and **Load more** at the bottom. Say: "Above 95 out
-  of 100 it merges by itself. Between 82 and 95 it asks you. This is the
-  page you said was not robust; part 3 is about it."
+- **Runs**. The nightly job's log; it took 7 seconds to open on Friday and
+  opens in a blink now. Point at the last run's line: how many posts, how
+  many events. **Initiate New Run** starts one by hand; do NOT click it on
+  the call (it costs OpenAI and Apify credits and runs for an hour).
+- **Duplicates**. Two tabs. **Duplicate pairs** is now GROUPS, exactly what
+  he asked for: one section per event the system found more than once, every
+  candidate side by side, **Keep this one** under each card, **Keep all** and
+  **Delete all** for the group, a checkbox per group with **Keep all of
+  each** and **Delete all of each** in the bar, and **Load more** at the
+  bottom. Say: "One decision per event instead of one per pair, and a
+  decision on one Thursday covers every later Thursday of the same posts,
+  which is why you were seeing the same ones again and again." **Previously
+  flagged** is everything the system hid on its own, with **Restore to site**
+  and **Load more**.
 - **Feedback**. Messages visitors sent through the site.
 - **Details**. Owner profile fields; skip.
 - **Settings**. Point at the retention line: out of sight the day after,
@@ -138,10 +144,20 @@ the count is lower.
 If not live yet: show PR #5 in GitHub for ten seconds, say "reviewed, tested,
 315 checks green, deploys right after this call", and move on.
 
-The one thing still on the list, say it before he asks: "The other kind of
-duplicate, the same event posted by two different accounts with slightly
-different wording, still goes through your review page. Making more of those
-merge by themselves is about 2 to 3 hours. Your call whether you want it."
+His four messages from Friday, each with its answer ready:
+- "Events from yesterday still showing": fixed, the list is an inbox now.
+- "No start or end date should not make it through": fixed at the source and
+  the ones already saved are hidden; the old scraper had that rule, the new
+  extraction did not, my miss.
+- "Lightning in a Bottle under Today, not found under Aug 21": it was stored
+  as a four-week event. Long runs now list on their opening day only, cards
+  show "Aug 21 – Sep 18" when a run spans days, and the date filter finds any
+  day you ask for.
+- "Slower and laggier": three causes, all fixed; show the numbers.
+
+The one thing still on the list, say it before he asks: "Matching the same
+flyer re-posted by a different account, cropped or with an overlay, needs
+image fingerprinting. That is the next 2 to 3 hours if you want it."
 
 ---
 
