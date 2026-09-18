@@ -64,7 +64,10 @@ EVENT_API_HOST=http://127.0.0.1:8009/
 ENV
 else
     say "$API/.env already exists; leaving it alone"
-    if ! grep -q '^EVENT_API_HOST=' "$API/.env" "$API/.env.local" 2>/dev/null; then
+    # cat, not a two-file grep: grep exits 2 when .env.local is absent (the
+    # usual case) even if .env has the line, which raised this warning on
+    # every re-run.
+    if ! cat "$API/.env" "$API/.env.local" 2>/dev/null | grep -q '^EVENT_API_HOST='; then
         echo "WARNING: EVENT_API_HOST is not set. A local scrape or add-by-URL would"
         echo "         write into PRODUCTION. Add to $API/.env:"
         echo "         EVENT_API_HOST=http://127.0.0.1:8009/"
