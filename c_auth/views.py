@@ -73,7 +73,10 @@ def login(request):
     if not validator.is_valid([[email, str], [password, str]]):
         return InvalidParameters()
 
-    user = User.objects.filter(email=email).first()
+    # An email address is not case-sensitive: the owner typed his with a
+    # capital first letter (phones do that) and the exact match answered
+    # "user not found" (end-to-end pass, 2026-09-18). The password stays exact.
+    user = User.objects.filter(email__iexact=email.strip()).first()
 
     if not user:
         return UserNotFound()
@@ -146,7 +149,10 @@ def user_login(request):
     if not validator.is_valid([[email, str], [password, str]]):
         return InvalidParameters()
 
-    user = User.objects.filter(email=email).first()
+    # An email address is not case-sensitive: the owner typed his with a
+    # capital first letter (phones do that) and the exact match answered
+    # "user not found" (end-to-end pass, 2026-09-18). The password stays exact.
+    user = User.objects.filter(email__iexact=email.strip()).first()
 
     if not user:
         return UserNotFound()
