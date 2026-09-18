@@ -12,6 +12,11 @@ Validated 2026-08-15 on macOS (Darwin), Python 3.12, Node 22. Both apps run agai
 
 ## 1. API — Django
 
+> **2026-09-18:** `make setup` now does everything in this section, and
+> `API/API/requirements.txt` is pinned and installable (the list below is the
+> original, kept for the reasoning). Production runs Django **5.0.6** on
+> Python 3.10; the pins follow production, not the 4.2.16 shown below.
+
 ```bash
 # from repo root
 cd API/API

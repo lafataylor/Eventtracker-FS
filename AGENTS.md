@@ -14,7 +14,7 @@ no staging environment.
 ## Layout
 
 ```
-API/API/                Django 4.2 + DRF project "event_tracker_api" (Python 3.10-3.12)
+API/API/                Django 5.0 + DRF project "event_tracker_api" (production: Python 3.10, Django 5.0.6)
   event/                Event/Venue/EventMatch models, public feeds, search, duplicates review
   event/dedupe.py       similarity rules; event/series.py: one card per recurring series
   event/management/commands/  detect_duplicates (nightly), purge_past_events (nightly)
