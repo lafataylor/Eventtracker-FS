@@ -198,10 +198,10 @@ const Index = () => {
     setBusyIds((prev) => new Set(prev).add(g.key));
     try {
       await resolveEventMatchGroup(g.pairs.map((p) => p.match_id), action, keepId);
-      setGroups((prev) => prev.filter((x) => x.key !== g.key));
-      setTotalGroups((n) => Math.max(0, n - 1));
-      setPendingTotal((n) => Math.max(0, n - g.pairs.length));
-      setSelectedGroups((prev) => { const next = new Set(prev); next.delete(g.key); return next; });
+      // Refetch rather than drop the group locally: a verdict also carries
+      // to later weeks of the same posts, and a hidden member removes other
+      // groups from the list, so only the server knows what is left.
+      await fetchGroups(0);
       notify(
         action === 'keep_all' ? 'Kept all of them.'
         : action === 'delete_all' ? 'All deleted; their posts are blacklisted.'
