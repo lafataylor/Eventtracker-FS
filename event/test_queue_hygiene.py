@@ -207,3 +207,52 @@ class FeedExcludesNonEventsTests(TestCase):
             f'/v1/event/date/range/?start={start}&end={end}').json()
         self.assertIn('Real In Range', self._names(body))
         self.assertNotIn('Placeholder In Range', self._names(body))
+
+
+class HiddenSidePairsTests(TestCase):
+    """A pair is only worth a decision while both sides are still listings.
+    The page already drops suppressed sides; it did not drop a side hidden
+    the older way (is_duplicate) or one classified not-an-event, so the owner
+    was asked to compare an event with a card no visitor can see (12 of the
+    218 pairs shown on 2026-09-14)."""
+
+    def setUp(self):
+        u = User.objects.create(email='h@test.dev', usertype='admin')
+        self.tok = jwt.encode({'id': u.id}, 'secret', algorithm='HS256')
+        self.now = timezone.localtime(timezone.now())
+
+    def _ev(self, name, **kw):
+        base = dict(name=name, start_date=self.now + timedelta(days=5),
+                    is_event=True, is_duplicate=False, suppressed=False)
+        base.update(kw)
+        return Event.objects.create(**base)
+
+    def _pair(self, a, b):
+        lo, hi = sorted((a, b), key=lambda e: e.id)
+        return EventMatch.objects.create(event_a=lo, event_b=hi, score=90.0,
+                                         match_type='fuzzy', status='pending')
+
+    def _ids(self):
+        r = self.client.get('/v1/event/matches/?status=pending&limit=50',
+                            HTTP_AUTHORIZATION='Token ' + self.tok)
+        body = r.json()
+        return [m['match_id'] for m in body['matches']], body['pending_total']
+
+    def test_a_side_already_hidden_as_duplicate_drops_the_pair(self):
+        self._pair(self._ev('Shown'), self._ev('Hidden', is_duplicate=True))
+        keep = self._pair(self._ev('A'), self._ev('B'))
+        ids, total = self._ids()
+        self.assertEqual(ids, [keep.id])
+        self.assertEqual(total, 1)
+
+    def test_a_known_non_event_side_drops_the_pair(self):
+        self._pair(self._ev('Shown'), self._ev('Menu photo', is_event=False))
+        keep = self._pair(self._ev('A'), self._ev('B'))
+        ids, total = self._ids()
+        self.assertEqual(ids, [keep.id])
+        self.assertEqual(total, 1)
+
+    def test_an_unclassified_side_keeps_the_pair(self):
+        # is_event NULL means never classified, not "not an event".
+        m = self._pair(self._ev('Shown'), self._ev('Unclassified', is_event=None))
+        self.assertIn(m.id, self._ids()[0])

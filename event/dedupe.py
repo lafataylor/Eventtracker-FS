@@ -44,6 +44,14 @@ WEIGHTS = {'name': 0.55, 'artist': 0.20, 'venue': 0.25}
 # themselves are similar (guards against venue/artist-only false positives).
 FUZZY_THRESHOLD = 82.0
 MIN_TITLE_SIM = 70.0
+# Below this, two acts named on one titleless post are different acts, so
+# their nights are different events. Measured on the 2026-09-01
+# lokschuppenberlin programme: PHASE:ONE / SIGNALS / F90 / NEER score 0-31
+# against each other, while one lineup re-scraped in another order
+# ("manu-l, rafa gonzalez" vs "rafa gonzalez, manu-l") scores 95 and a
+# subset lineup 100 - the bar sits in the empty middle. Kept apart from
+# MIN_TITLE_SIM so each can move on its own evidence.
+DISTINCT_ARTIST_SIM = 70.0
 
 # For pairs with no title on at least one side (see score_pair): how alike two
 # venue strings must be to count as one place, how alike their venue NAMES must
@@ -116,6 +124,9 @@ def event_signature(event):
         # anchor in score_pair, where "the same account said it twice" is the
         # evidence a missing title cannot provide.
         'poster': event.poster_id,
+        # Nullable on purpose everywhere: NULL means never classified, False
+        # means a human or the model said not-an-event.
+        'is_event': event.is_event,
         # Start time, used by the ambiguity check in detect_duplicates: two
         # rows at one venue on one night with DIFFERENT times are two events
         # (a 5pm match and a 10pm party), whatever else they share.
@@ -217,6 +228,21 @@ def same_post_is_redundant(a, b):
         # Only one side has a name AND the dates differ: plausibly a roundup
         # where extraction named one slide and not the other (72% of rows are
         # nameless). Not enough certainty to auto-hide — queue for review.
+        return False
+    if not a['name'] and not b['name'] and a['artist'] and b['artist'] \
+            and a['date'] and b['date'] and a['date'] != b['date'] \
+            and not (a.get('is_event') is False and b.get('is_event') is False) \
+            and fuzz.token_set_ratio(a['artist'], b['artist']) < DISTINCT_ARTIST_SIM:
+        # No titles, but a different artist on a different date: a programme
+        # post with one act per night (lokschuppenberlin, 2026-09-01: four
+        # acts on four nights, queued as four "same post" pairs that sorted
+        # to the top of the owner's page). Positive evidence of two events,
+        # as two different titles would be. The one-day tolerance below is
+        # for date drift between re-scrapes of ONE event; drift does not
+        # change the artist. Two rows BOTH classified not-an-event are
+        # exempt: neither is a listing, so there is no second event to
+        # protect, and the decided behaviour (review 2026-08-31) is that such
+        # pairs collapse rather than pile up.
         return False
     if a['date'] and b['date'] and abs((a['date'] - b['date']).days) > 1:
         return False            # same post, different dates -> distinct dates

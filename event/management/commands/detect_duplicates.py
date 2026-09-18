@@ -8,6 +8,9 @@ Usage:
 --exact  groups rows that share an Instagram shortcode (certain re-scrapes),
          keeps the most complete row as canonical, and suppresses the rest
          (recoverable: suppressed=True + canonical set, never deleted).
+         Also closes, as rejected, pending same-post pairs whose rows the
+         current rule places in different clusters (distinct events that an
+         earlier, looser rule had queued).
 --fuzzy  finds same-event/different-post pairs and queues them as pending
          EventMatch rows for side-by-side owner review — nothing is suppressed
          automatically, because these are uncertain by nature.
@@ -21,6 +24,7 @@ from collections import defaultdict
 from django.core.management.base import BaseCommand
 from django.db import transaction
 from django.db.models import Count
+from django.utils import timezone
 
 from event.models import Event, EventMatch
 from rapidfuzz import fuzz
@@ -166,7 +170,7 @@ class Command(BaseCommand):
         groups = list(groups)
         self.stdout.write(f'[exact] {len(groups)} shortcode groups with duplicates')
 
-        suppressed = queued = pairs = 0
+        suppressed = queued = pairs = closed = 0
         for g in groups:
             # order_by('id') makes completeness() ties deterministic: the
             # oldest row wins, so a re-run picks the same keeper.
@@ -185,7 +189,9 @@ class Command(BaseCommand):
             # (not hidden, not queued). Within a cluster the most complete row
             # is the keeper and the rest are collapsed or, if ambiguous,
             # queued for human review.
-            for cluster in cluster_same_post_rows(rows):
+            clusters = cluster_same_post_rows(rows)
+            closed += self._close_pairs_across_clusters(clusters, dry)
+            for cluster in clusters:
                 if len(cluster) < 2:
                     continue
                 canonical = max(cluster, key=completeness)
@@ -282,7 +288,31 @@ class Command(BaseCommand):
         self.stdout.write(self.style.SUCCESS(
             f'[exact] {verb} {suppressed} rows across {len(groups)} posts; '
             f'queued {queued} same-post pairs for review instead of hiding them '
-            f'({pairs} EventMatch pairs total)'))
+            f'({pairs} EventMatch pairs total); closed {closed} pending pairs '
+            f'whose rows are distinct events under the current rule'))
+
+    @staticmethod
+    def _close_pairs_across_clusters(clusters, dry):
+        """Close pending same-post pairs whose two rows now sit in DIFFERENT
+        clusters. Such a pair was queued by an earlier, looser rule (the
+        nameless programme-post case, 2026-09-14: 25 pairs, scored 0, at the
+        very top of the owner's page); today's rule says the rows are
+        distinct events, which is the verdict 'rejected' records. Decisions
+        already made - 'confirmed', 'rejected' - are never touched, and
+        neither is any pair across posts (those belong to the fuzzy pass).
+        Returns how many were (or, dry, would be) closed."""
+        if len(clusters) < 2:
+            return 0
+        cluster_of = {row.id: i for i, cluster in enumerate(clusters) for row in cluster}
+        ids = list(cluster_of)
+        stale = [m.id for m in EventMatch.objects.filter(
+                     match_type='exact_link', status='pending',
+                     event_a_id__in=ids, event_b_id__in=ids)
+                 if cluster_of[m.event_a_id] != cluster_of[m.event_b_id]]
+        if stale and not dry:
+            EventMatch.objects.filter(id__in=stale).update(
+                status='rejected', reviewed_at=timezone.now())
+        return len(stale)
 
     # --- pass 2: fuzzy cross-post duplicates ------------------------------
     def _fuzzy(self, dry, limit, auto_threshold=0.0):

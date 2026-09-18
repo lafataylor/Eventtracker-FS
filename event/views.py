@@ -3,6 +3,7 @@ from rest_framework.views import APIView
 
 from .models import Event, Venue, Execution, Feedback, FavoritesData, BlacklistedLink, EventMatch
 from .serializers import EventSerializer, FeedbackSerializer
+from .series import collapse_series
 from .ingest import (build_source_key, coerce_int, normalize_poster_name,
                      normalize_text, resolve_venue, upsert_event)
 from django.db import transaction
@@ -132,6 +133,11 @@ UNDATED_EVENT_WINDOW_DAYS = 45
 # Search returned every match unpaginated. Bound it so one broad query cannot
 # serialize tens of thousands of rows.
 SEARCH_RESULT_LIMIT = 500
+# How many rows a capped list may scan to fill its cap with DISTINCT cards
+# (event.series collapses a recurring series to one): a series contributes up
+# to twelve rows and copies were 65% of visible rows on 2026-09-14, so 4x
+# leaves room while keeping the bound one broad query can never exceed.
+SERIES_SCAN_FACTOR = 4
 
 # The spelling-variant pass ("hip-hop" == "hiphop" == "hip hop") cannot be
 # expressed in SQL icontains, so it scans a bounded, newest-first slice of the
@@ -162,6 +168,30 @@ FUZZY_FALLBACK_MAX = 5        # only help a query returning fewer than this
 # Price lives in a free-text CharField, so range filtering has to parse each
 # value in Python. Cap how many rows that scan touches per request.
 PRICE_SCAN_LIMIT = 5000
+
+def link_still_in_use(orig_link, exclude_ids):
+    """Does a LISTING outside this delete still point at the post?
+
+    Blacklisting a link stops the nightly scrape from ever refreshing the rows
+    that use it, which is why the cluster review's "keep this one" must not
+    blacklist the keeper's post through the losers' delete. But only a row
+    someone can still see is worth protecting: a hidden row, or one that has
+    already happened, is refreshed by nothing (the scraper re-processes a post
+    only when its account's watermark is moved back, and then only to ADD
+    rows). Counting those held the post open when a recurring series was
+    deleted from the admin page - every future occurrence goes, the past ones
+    stay for the purge - so the blacklist was skipped and a recovery re-scrape
+    could have put the deleted dates straight back.
+    """
+    today_start, _ = local_day_bounds(timezone.localdate())
+    return (Event.objects
+            .filter(orig_link=orig_link)
+            .filter(Q(start_date__gte=today_start) | Q(start_date__isnull=True))
+            .exclude(suppressed=True)
+            .exclude(is_duplicate=True)
+            .exclude(id__in=exclude_ids)
+            .exists())
+
 
 @api_view(["GET"])
 def event(request):
@@ -366,7 +396,10 @@ class AdminEvent(APIView):
             # Make all posts shared for now, but only grab ones before the cutoff time
             _events = Event.objects.filter(timestamp__gte=cutoff_time).order_by('-timestamp').all()
 
-            event_serializer = EventSerializer(_events, many=True)
+            # One row per recurring series, carrying every occurrence's id
+            # (event.series): a night's scrape used to list its expansions
+            # twelve rows in a row here.
+            event_serializer = EventSerializer(collapse_series(_events), many=True)
 
             response_data = event_serializer.data
             return Success(response_data, status=True)
@@ -685,15 +718,15 @@ class AdminEvent(APIView):
                     continue
 
                 # Blacklist the original link before deleting — but NOT when
-                # another event outside this delete batch still points at the
-                # same post (exact-link duplicates share one orig_link).
-                # Blacklisting it would stop the nightly scrape from ever
-                # refreshing the SURVIVING event, e.g. the cluster review's
-                # "keep this one" deletes the losers through this endpoint.
+                # another VISIBLE, still-upcoming event outside this delete
+                # batch points at the same post (exact-link duplicates share
+                # one orig_link; see link_still_in_use). Blacklisting it would
+                # stop the nightly scrape from ever refreshing the SURVIVING
+                # event, e.g. the cluster review's "keep this one" deletes the
+                # losers through this endpoint.
                 survivor_exists = (
                     event.orig_link
-                    and Event.objects.filter(orig_link=event.orig_link)
-                        .exclude(id__in=batch_ids).exists())
+                    and link_still_in_use(event.orig_link, batch_ids))
                 if event.orig_link and not survivor_exists:
                     # Check if already blacklisted to avoid duplicates
                     if not BlacklistedLink.objects.filter(url=event.orig_link).exists():
@@ -867,10 +900,17 @@ def search_events(request):
             if fuzzy_ids:
                 matched = matched | Q(id__in=fuzzy_ids)
 
-        user_events = (Event.objects
-                       .filter(matched & visibility)
-                       .select_related('venue', 'poster')
-                       .order_by('-timestamp')[:SEARCH_RESULT_LIMIT])
+        # One card per recurring series (event.series), in every list. The
+        # cap counts CARDS: applied to rows before the collapse, a couple of
+        # series filled it with their copies and pushed distinct matches out
+        # of the response, so the scan is a bounded multiple of the cap and
+        # the cut comes last.
+        user_events = collapse_series(
+            Event.objects
+                 .filter(matched & visibility)
+                 .select_related('venue', 'poster')
+                 .order_by('-timestamp')[:SEARCH_RESULT_LIMIT * SERIES_SCAN_FACTOR]
+        )[:SEARCH_RESULT_LIMIT]
 
         events_serializer = EventSerializer(user_events, many=True)
         return Success(events_serializer.data, status=True)
@@ -917,7 +957,8 @@ def date_events(request):
             suppressed=False,
         ).exclude(is_event=False).all()
 
-        events_serializer = EventSerializer(date_events, many=True)
+        # One card per recurring series (event.series), in every list.
+        events_serializer = EventSerializer(collapse_series(date_events), many=True)
 
         response_data = events_serializer.data
         return Success(response_data, status=True)
@@ -968,7 +1009,8 @@ def date_range_events(request):
             suppressed=False,
         ).exclude(is_event=False).all()
 
-        events_serializer = EventSerializer(date_events, many=True)
+        # One card per recurring series (event.series), in every list.
+        events_serializer = EventSerializer(collapse_series(date_events), many=True)
 
         response_data = events_serializer.data
         return Success(response_data, status=True)
@@ -1125,8 +1167,12 @@ def filter_events(request):
         # No .distinct(): every join here is a single-valued FK, so rows are
         # already unique — DISTINCT just forced SQLite to dedupe the full match
         # set before applying the limit.
-        events = (queryset.select_related('venue', 'poster')
-                  .order_by('-timestamp')[:SEARCH_RESULT_LIMIT])
+        # One card per recurring series (event.series); the cap counts cards,
+        # not rows - see search_events.
+        events = collapse_series(
+            queryset.select_related('venue', 'poster')
+                    .order_by('-timestamp')[:SEARCH_RESULT_LIMIT * SERIES_SCAN_FACTOR]
+        )[:SEARCH_RESULT_LIMIT]
         return Success(EventSerializer(events, many=True).data, status=True)
     except Exception as e:
         logger.error(f"An error occurred during event filtering: {e}")
@@ -1331,9 +1377,18 @@ def get_event_matches(request):
                           | Q(event_b__start_date__date__gte=today)
                           | Q(event_a__start_date__isnull=True)
                           | Q(event_b__start_date__isnull=True))
+        # ...and the two other ways a row stops being a listing: hidden by
+        # the older is_duplicate flag, or classified not-an-event. Either
+        # leaves the reviewer comparing a real event with a card no visitor
+        # can see (12 of the 218 pairs shown on 2026-09-14). is_event NULL
+        # means never classified and stays, as everywhere else.
         visible = (EventMatch.objects
                    .exclude(event_a__suppressed=True)
                    .exclude(event_b__suppressed=True)
+                   .exclude(event_a__is_duplicate=True)
+                   .exclude(event_b__is_duplicate=True)
+                   .exclude(event_a__is_event=False)
+                   .exclude(event_b__is_event=False)
                    .filter(still_relevant))
         # Chronological, soonest first (owner: "events on the duplicate page
         # should be in chronological order"). Undated pairs sort last rather
@@ -1422,9 +1477,9 @@ def resolve_event_match(request):
                         continue
                     # A third event may share the link (exact-link clusters
                     # of 3+ candidates). Blacklisting would block the scrape
-                    # from ever refreshing that survivor — skip it.
-                    if Event.objects.filter(orig_link=ev.orig_link)\
-                            .exclude(id__in=pair_ids).exists():
+                    # from ever refreshing that survivor — skip it. Same
+                    # definition of "survivor" as AdminEvent.delete.
+                    if link_still_in_use(ev.orig_link, pair_ids):
                         continue
                     if not BlacklistedLink.objects.filter(
                             url=ev.orig_link).exists():
