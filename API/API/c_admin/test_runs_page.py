@@ -53,3 +53,31 @@ class RunsPageTests(TestCase):
             self._get()
         for q in ctx.captured_queries:
             self.assertNotIn('ORDER BY "c_admin_logs"."scraped_at"', q['sql'])
+
+    def test_the_in_progress_lookup_does_not_scan_the_whole_table(self):
+        # Second half of the same problem, found in the 2026-09-18 end-to-end
+        # pass on a copy of production: `status` has no index either, so
+        # finding the running scrape scanned all 2.1 million rows (1.2 s of
+        # the page's remaining time). A run in progress is by definition
+        # recent, so the lookup is bounded to the newest ids.
+        for i in range(30):
+            Logs.objects.create(scraped_at=str(i), status='Completed', message='x')
+        with CaptureQueriesContext(connection) as ctx:
+            self._get()
+        lookups = [q['sql'] for q in ctx.captured_queries if "'In Progress'" in q['sql'] or '"status" =' in q['sql']]
+        self.assertTrue(lookups, 'expected an In Progress lookup')
+        for sql in lookups:
+            self.assertIn('"c_admin_logs"."id" >', sql, 'the status lookup must be bounded by id')
+
+    def test_an_in_progress_row_outside_the_recent_window_is_not_pinned(self):
+        # A row stuck "In Progress" from long ago is a dead run, not a live
+        # one: it keeps its place in the log instead of being pinned as the
+        # running scrape (the page shows the running one last).
+        from unittest import mock
+        Logs.objects.create(scraped_at='1', status='In Progress', message='dead run')
+        for i in range(15):
+            Logs.objects.create(scraped_at=str(i), status='Completed', message='done%d' % i)
+        with mock.patch('c_admin.views.IN_PROGRESS_LOOKBACK', 10):
+            logs = self._get()
+        self.assertEqual(logs[-1]['message'], 'done14')
+        self.assertEqual(logs[0]['message'], 'dead run')

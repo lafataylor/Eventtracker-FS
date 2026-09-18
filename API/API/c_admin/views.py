@@ -291,6 +291,10 @@ class AdminPreferences(APIView):
             return ServerProcessingError()
 
 
+# How far back (in log rows) a run can still count as in progress.
+IN_PROGRESS_LOOKBACK = 50000
+
+
 @api_view(["GET"])
 def read_logs(request):
     last_fetched = request.GET.get("last_fetched")
@@ -310,7 +314,14 @@ def read_logs(request):
         # time order so the order is identical, but scraped_at is an
         # unindexed text column, and sorting 2.1 million rows by it cost
         # 7.6 s per page view on production (2026-09-18).
-        latest_in_progress = Logs.objects.filter(status="In Progress").order_by('-id').first()
+        # ...and `status` has no index either, so finding the running scrape
+        # scanned every row too (1.2 s on a copy of production). A run in
+        # progress is recent by definition: look only at the newest ids. A
+        # nightly run writes a few thousand rows, so the window is weeks wide.
+        newest_id = Logs.objects.order_by('-id').values_list('id', flat=True).first() or 0
+        latest_in_progress = (Logs.objects
+                              .filter(id__gt=newest_id - IN_PROGRESS_LOOKBACK, status="In Progress")
+                              .order_by('-id').first())
 
         recent_logs = Logs.objects.all().order_by('-id')[:500]
         
