@@ -27,6 +27,7 @@ from django.db.models import Count
 from django.utils import timezone
 
 from event.models import Event, EventMatch
+from event.verdicts import decided_sibling_verdict, keep_over
 from rapidfuzz import fuzz
 
 from event.dedupe import (MIN_TITLE_SIM, VENUE_ANCHOR_SCORE,
@@ -424,7 +425,7 @@ class Command(BaseCommand):
             # pair loop to auto-merge on anchor evidence
             return False
 
-        created = examined = merged = anchor_merged = 0
+        created = examined = merged = anchor_merged = inherited = 0
 
         # Collapse each mergeable component in ONE pass, to its most complete
         # row. Doing this pairwise instead needs a night per extra copy: the
@@ -562,6 +563,29 @@ class Command(BaseCommand):
                 continue
             if not dry:
                 if not existing:
+                    # The same two posts on another date may already be
+                    # decided (owner 2026-09-18: the Essex Club Thursday
+                    # came back every week after being judged). Copy the
+                    # verdict instead of asking again.
+                    a = Event.objects.filter(id=lo).first()
+                    b = Event.objects.filter(id=hi).first()
+                    verdict = decided_sibling_verdict(a, b) if (a and b) else None
+                    if verdict and verdict[0] == 'reject':
+                        EventMatch.objects.create(
+                            event_a_id=lo, event_b_id=hi, score=score,
+                            match_type='fuzzy', status='rejected',
+                            reviewed_at=timezone.now())
+                        inherited += 1
+                        continue
+                    if verdict and verdict[0] == 'keep':
+                        keep_over(verdict[1], verdict[2])
+                        suppressed_now.add(verdict[2].id)
+                        EventMatch.objects.create(
+                            event_a_id=lo, event_b_id=hi, score=score,
+                            match_type='fuzzy', status='confirmed',
+                            reviewed_at=timezone.now())
+                        inherited += 1
+                        continue
                     EventMatch.objects.create(
                         event_a_id=lo, event_b_id=hi, score=score,
                         match_type='fuzzy', status='pending')
@@ -577,4 +601,5 @@ class Command(BaseCommand):
                 f'({by_score} by score >= {auto_threshold:g}, '
                 f'{anchor_merged} by an unambiguous venue anchor; all same day)'))
         self.stdout.write(self.style.SUCCESS(
-            f'[fuzzy] {verb} {created} pending pairs ({examined} above threshold)'))
+            f'[fuzzy] {verb} {created} pending pairs ({examined} above threshold); '
+            f'{inherited} took the verdict of an earlier date of the same posts'))

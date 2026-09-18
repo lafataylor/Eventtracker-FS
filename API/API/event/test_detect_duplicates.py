@@ -1029,3 +1029,56 @@ class NamelessProgrammeNightsTests(TestCase):
         hidden = Event.objects.filter(suppressed=True)
         self.assertEqual(hidden.count(), 1)
         self.assertEqual(hidden.get().canonical_id, keeper.id)
+
+
+class SeriesVerdictInNightlyPassTests(TestCase):
+    """A decided pair covers the other dates of the same two posts in the
+    NIGHTLY pass too. The Essex Club Thursday (five accounts, expanded
+    weekly) came back as a fresh pending pair every week even after the
+    owner had judged it; a new occurrence pair now takes the verdict its
+    siblings already have instead of asking again."""
+
+    def _ev(self, name, day, shortcode, **kw):
+        base = dict(name=name, shortcode=shortcode,
+                    start_date=timezone.now() + timedelta(days=day),
+                    orig_link='https://www.instagram.com/p/%s/' % shortcode,
+                    is_duplicate=False, suppressed=False, is_event=True)
+        base.update(kw)
+        return Event.objects.create(**base)
+
+    def _run(self):
+        call_command('detect_duplicates', '--fuzzy', '--auto-merge-threshold', '95')
+
+    def _mid_band_pair(self, day):
+        a = self._ev('Taco Tuesday Fiesta', day, 'POSTA', artist='Sonido Gallo')
+        b = self._ev('Taco Tuesday Fiesta', day, 'POSTB', artist='Sonido Martines')
+        return a, b
+
+    def test_a_rejected_verdict_carries_to_a_new_week(self):
+        a3, b3 = self._mid_band_pair(3)
+        EventMatch.objects.create(event_a=a3, event_b=b3, score=90, match_type='fuzzy',
+                                  status='rejected', reviewed_at=timezone.now())
+        a10, b10 = self._mid_band_pair(10)
+        self._run()
+        m = EventMatch.objects.get(event_a__in=[a10, b10], event_b__in=[a10, b10])
+        self.assertEqual(m.status, 'rejected')
+        self.assertEqual(EventMatch.objects.filter(status='pending').count(), 0)
+
+    def test_a_keep_verdict_carries_to_a_new_week_in_the_same_direction(self):
+        a3, b3 = self._mid_band_pair(3)
+        b3.suppressed = True; b3.is_duplicate = True; b3.canonical = a3; b3.save()
+        EventMatch.objects.create(event_a=a3, event_b=b3, score=90, match_type='fuzzy',
+                                  status='confirmed', reviewed_at=timezone.now())
+        a10, b10 = self._mid_band_pair(10)
+        self._run()
+        m = EventMatch.objects.get(event_a__in=[a10, b10], event_b__in=[a10, b10])
+        self.assertEqual(m.status, 'confirmed')
+        b10.refresh_from_db(); a10.refresh_from_db()
+        self.assertTrue(b10.suppressed)
+        self.assertEqual(b10.canonical_id, a10.id)
+        self.assertFalse(a10.suppressed)
+
+    def test_without_a_decided_sibling_the_pair_is_queued_as_before(self):
+        a10, b10 = self._mid_band_pair(10)
+        self._run()
+        self.assertEqual(EventMatch.objects.filter(status='pending').count(), 1)

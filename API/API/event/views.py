@@ -4,6 +4,7 @@ from rest_framework.views import APIView
 from .models import Event, Venue, Execution, Feedback, FavoritesData, BlacklistedLink, EventMatch
 from .serializers import EventSerializer, FeedbackSerializer
 from .series import collapse_series, series_key
+from .verdicts import keep_over, propagate_series_verdict
 from .ingest import (build_source_key, coerce_int, normalize_poster_name,
                      normalize_text, resolve_venue, upsert_event)
 from django.db import transaction
@@ -1453,20 +1454,6 @@ def reviewable_matches(today):
             .filter(still_relevant))
 
 
-def keep_over(keep, drop):
-    """The owner keeps `keep`; `drop` hides behind it (recoverable)."""
-    keep.suppressed = False
-    keep.canonical = None
-    keep.is_duplicate = False
-    keep.duplicate_link = None
-    keep.save(update_fields=['suppressed', 'canonical', 'is_duplicate', 'duplicate_link'])
-    drop.suppressed = True
-    drop.canonical = keep
-    drop.is_duplicate = True
-    drop.duplicate_link = keep.orig_link or f"event_{keep.id}"
-    drop.save(update_fields=['suppressed', 'canonical', 'is_duplicate', 'duplicate_link'])
-
-
 def delete_with_blacklist(events, reason):
     """Hard-delete events, blacklisting each post no surviving listing uses."""
     ids = [e.id for e in events]
@@ -1481,40 +1468,6 @@ def delete_with_blacklist(events, reason):
 
 def _local_day(event):
     return timezone.localtime(event.start_date).date() if event.start_date else None
-
-
-def propagate_series_verdict(keep, drop, verdict):
-    """Carry one verdict to the other dates of the same two posts.
-
-    The Essex Club Thursday (five accounts, one party, expanded weekly) was
-    queued once per week: the owner judged the same pair ten times. A pending
-    pair whose sides are later occurrences of the same two series gets the
-    same verdict: 'keep' hides the occurrence matching `drop` behind the one
-    matching `keep`; 'reject' marks it not a duplicate. Deletion never
-    carries: it is irreversible, and the series delete on the events page is
-    the deliberate way to do that.
-    """
-    keep_key, drop_key = series_key(keep), series_key(drop)
-    posts = [x for x in (keep.shortcode, drop.shortcode) if x]
-    if len(posts) < 2:
-        return 0
-    siblings = (EventMatch.objects.filter(status='pending')
-                .filter(event_a__shortcode__in=posts, event_b__shortcode__in=posts)
-                .select_related('event_a', 'event_b'))
-    done = 0
-    for m in siblings:
-        pair = {series_key(m.event_a): m.event_a, series_key(m.event_b): m.event_b}
-        if set(pair) != {keep_key, drop_key}:
-            continue
-        if verdict == 'keep':
-            keep_over(pair[keep_key], pair[drop_key])
-            m.status = 'confirmed'
-        else:
-            m.status = 'rejected'
-        m.reviewed_at = timezone.now()
-        m.save(update_fields=['status', 'reviewed_at'])
-        done += 1
-    return done
 
 
 @api_view(["GET"])
