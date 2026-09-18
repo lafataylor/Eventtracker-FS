@@ -26,6 +26,7 @@ be added for freshly-ingested events later.
 
 import re
 
+from django.utils import timezone
 from rapidfuzz import fuzz
 
 from .ingest import normalize_text
@@ -120,6 +121,11 @@ def event_signature(event):
         'artist': normalize_text(event.artist),
         'venue': normalize_text(venue_text(event.venue)),
         'date': d,
+        # The day a visitor would say it is on (project timezone). `date` is
+        # the UTC date: a date-only row sits at local midnight and an evening
+        # row of the SAME local day is already tomorrow in UTC.
+        'local_date': (timezone.localtime(event.start_date).date()
+                       if event.start_date else None),
         # Which Instagram account posted it. Only used by the nameless-pair
         # anchor in score_pair, where "the same account said it twice" is the
         # evidence a missing title cannot provide.
@@ -249,6 +255,70 @@ def same_post_is_redundant(a, b):
     return True
 
 
+# --- the wide net: flag, never merge -------------------------------------
+# Owner, 2026-09-18: "flag anything with a similar image, similar title or
+# similar location and date". Measured that evening on production: 43
+# same-day pairs with near-identical titles were unflagged, all from ONE
+# account posting one event twice; the extractor wrote the venue differently
+# on the two posts, and the venue mismatch drags the fused score to ~78,
+# under FUZZY_THRESHOLD. 178 more shared a place and a day with a missing
+# title, the same start time, or a loosely similar title. 201 shared a place
+# and a day but had different titles AND different times: mostly two shows
+# at one venue, deliberately left alone.
+WIDE_TITLE_SIM = 85.0        # token_SORT_ratio: a subset title is not the same title
+WIDE_PLACE_TITLE_SIM = 60.0  # at one place on one day, a loose title match is enough
+WIDE_PLACE_NAME_SIM = 90.0
+WIDE_PLACE_ADDRESS_SIM = 85.0
+# What a wide-net pair is stored with. Above FUZZY_THRESHOLD so it reads as a
+# candidate, far below any auto-merge bar: "Happy Hour" at two venues on one
+# night must reach a human, not vanish.
+WIDE_NET_SCORE = 85.0
+
+
+def same_place(a, b):
+    """Do two signatures name one venue? The name agrees, or the addresses
+    share a house number and read alike."""
+    if (a['venue_name'] and b['venue_name'] and len(a['venue_name']) > 3
+            and fuzz.token_set_ratio(a['venue_name'], b['venue_name']) >= WIDE_PLACE_NAME_SIM):
+        return True
+    return bool(a['venue'] and b['venue']
+                and street_numbers(a['venue']) & street_numbers(b['venue'])
+                and fuzz.token_set_ratio(a['venue'], b['venue']) >= WIDE_PLACE_ADDRESS_SIM)
+
+
+def wide_net_reason(a, b):
+    """Why a pair the fused score missed should still reach the review page,
+    or None. Same LOCAL day only; never a reason to merge."""
+    if not a.get('local_date') or a.get('local_date') != b.get('local_date'):
+        return None
+    titled = bool(a['name'] and b['name'])
+    title_sim = fuzz.token_sort_ratio(a['name'], b['name']) if titled else 0.0
+    if titled and title_sim >= WIDE_TITLE_SIM:
+        return 'same_title'
+    if same_place(a, b):
+        if not titled:
+            return 'same_place_untitled'
+        if a.get('start_time') and a.get('start_time') == b.get('start_time'):
+            return 'same_place_same_time'
+        # At one place the place's own name is not evidence: "Indietanzbar
+        # at Bohnengold" and "Booze Night at Bohnengold" matched only on
+        # "at Bohnengold" (rehearsal on production data, 2026-09-18). What
+        # is left of the titles has to agree.
+        if fuzz.token_sort_ratio(_without_venue_words(a['name'], a, b),
+                                 _without_venue_words(b['name'], a, b)) >= WIDE_PLACE_TITLE_SIM:
+            return 'same_place_similar_title'
+    return None
+
+
+_TITLE_FILLER = {'at', 'en', 'im', 'in', 'the', 'el', 'la', 'de', 'del', 'x', 'w', 'with'}
+
+
+def _without_venue_words(title, a, b):
+    venue_words = set((a['venue_name'] or '').split()) | set((b['venue_name'] or '').split())
+    kept = [w for w in (title or '').split() if w not in venue_words and w not in _TITLE_FILLER]
+    return ' '.join(kept)
+
+
 def find_fuzzy_pairs(signatures):
     """Yield (id_a, id_b, score) for cross-shortcode fuzzy duplicates.
 
@@ -279,3 +349,6 @@ def find_fuzzy_pairs(signatures):
                 if s >= FUZZY_THRESHOLD:
                     lo, hi = sorted((a['id'], b['id']))
                     yield lo, hi, round(s, 1)
+                elif wide_net_reason(a, b):
+                    lo, hi = sorted((a['id'], b['id']))
+                    yield lo, hi, WIDE_NET_SCORE
