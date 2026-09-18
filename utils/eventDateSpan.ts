@@ -1,4 +1,8 @@
-import { Event } from '../interface/objects/simpleObject';
+import type { Event } from '../interface/objects/simpleObject';
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+/** Longest run that is still shown on every one of its days (start day + 3). */
+const SHORT_RUN_DAYS = 3;
 
 /** Inclusive calendar-day bounds in local time (start 00:00:00, end 23:59:59.999). */
 export function getEventCalendarSpanMs(event: Event): { start: number; end: number } {
@@ -48,6 +52,25 @@ export function getEventCalendarSpanMs(event: Event): { start: number; end: numb
     59,
     999
   ).getTime();
+
+  // A run longer than a few days lists on its OPENING day only, the same
+  // rule the API applies (event/views.py SHORT_RUN). A festival is a few
+  // days; a multi-week "run" is a monthly programme flyer or an extraction
+  // mistake, and painting it into every section its span overlaps put one
+  // flyer in Today, Tomorrow, every weekday, Next Week and After Next Week
+  // (owner, 2026-09-18: "the same Instagram posts again and again").
+  const startDayEnd = new Date(
+    startRaw.getFullYear(),
+    startRaw.getMonth(),
+    startRaw.getDate(),
+    23,
+    59,
+    59,
+    999
+  ).getTime();
+  if (end - start > (SHORT_RUN_DAYS + 1) * DAY_MS) {
+    return { start, end: startDayEnd };
+  }
 
   if (end < start) {
     return {

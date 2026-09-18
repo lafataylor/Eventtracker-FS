@@ -42,6 +42,7 @@ import getFilterString, { colorFromClass } from '../../utils/color_convertor';
 import DeletionConfirmationOverlay from '../../components/Admin/DeletionConfirmationOverlay';
 import InfoOverlay from '../../components/Admin/InfoOverlay';
 import { HIDE_INFO_OVERLAY, SHOW_INFO_OVERLAY } from '../../store/actions/type';
+import { isSuperAdminEmail } from '../../utils/superAdmin';
 
 const { ValueContainer } = components;
 
@@ -100,7 +101,7 @@ const Index = () => {
   useEffect(() => {
     const adminEmailFromSession = localStorage.getItem('adminEmail');
 
-    if (adminEmailFromSession == "dummy_@gmail.com" || adminEmailFromSession == 'superadmin@eventtracker.lafaslist.com'){
+    if (isSuperAdminEmail(adminEmailFromSession)) {
       // handle super admin access
     } else {
       router.push("/admin/events")

@@ -14,6 +14,7 @@ import {
 import { resetSelections } from '../../store/actions/selections';
 import { useStore } from '../../store/store';
 import { IoIosInformationCircle } from 'react-icons/io';
+import { isSuperAdminEmail } from '../../utils/superAdmin';
 
 interface AdminSideBarProps {
   currentPage: string;
@@ -39,7 +40,7 @@ function AdminSideBar({ currentPage }: AdminSideBarProps) {
 
     const adminEmailFromSession = localStorage.getItem('adminEmail');
 
-    if (adminEmailFromSession == "dummy_@gmail.com" || adminEmailFromSession == 'superadmin@eventtracker.lafaslist.com'){
+    if (isSuperAdminEmail(adminEmailFromSession)) {
       setIsSuperAdmin(true);
     }else{
       setIsSuperAdmin(false);
