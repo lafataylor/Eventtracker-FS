@@ -7,7 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "test": "node --test --experimental-strip-types utils/*.test.ts"
+    "test": "TZ=America/Los_Angeles node --test --experimental-strip-types utils/*.test.ts"
   },
   "dependencies": {
     "@fontsource/montserrat": "^4.5.13",
