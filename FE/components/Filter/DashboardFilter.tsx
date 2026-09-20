@@ -492,7 +492,7 @@ const DashboardFilter: React.FC<DashboardFilterProps> = ({
             e.stopPropagation();
             toggleMobileMenu();
           }}
-          className={`group flex items-center gap-2 border-2 px-3 py-3 rounded-lg text-mist-white border-slate-black ${
+          className={`group flex items-center gap-2 border-2 px-3 !h-12 min-h-12 max-h-12 box-border rounded-lg text-mist-white border-slate-black ${
             Object.keys(appliedFilters).length > 0 || sort.value 
               ? 'bg-beaming-orange' 
               : 'bg-midnight'
