@@ -226,14 +226,14 @@ const SearchBar = ({
 
   return (
     <div
-      className={`flex min-w-0 items-center gap-2 px-3 p-2 rounded-lg bg-slate-black w-[200px] max-w-[45vw] max-h-[50px] ${esExToExxMax} ${
+      className={`flex !h-12 min-h-12 max-h-12 box-border overflow-hidden min-w-0 items-center gap-2 px-3 rounded-lg bg-slate-black w-[200px] max-w-[45vw] ${esExToExxMax} ${
         forceShrink > 4 ? 'md:w-[100px]' : forceShrink > 2 ? 'md:w-[140px]' : 'md:w-auto'
       }`}
     >
-      <IoMdSearch className="w-auto shrink-0 md:w-5 md:h-5 text-mist-white" />
+      <IoMdSearch className="w-5 h-5 shrink-0 text-mist-white" />
       <input
         ref={inputRef}
-        className="min-w-0 flex-1 outline-none bg-ocean-mist text-mist-white"
+        className="min-w-0 flex-1 h-full outline-none border-0 appearance-none bg-slate-black text-mist-white text-sm leading-none placeholder:text-mist-white/50 [&:-webkit-autofill]:shadow-[inset_0_0_0_1000px_#403E3C] [&:-webkit-autofill]:[-webkit-text-fill-color:#FFFCF0]"
         placeholder={language === 'es' ? 'Buscar' : 'Search'}
         type="text"
         value={searchTerm}

@@ -282,7 +282,7 @@ function EventCard({
           </div>
           <div className={`flex justify-between items-start ${isInListView ? 'flex-1' : ''}`}>
             <span
-              className={`break-words text-mist-white font-semibold  ${isInListView ? ' md:grid md:grid-cols-[20vw_20vw_20vw] items-center justify-items-start gap-4 h-full z-[4] max-w-[70%] md:max-w-[80%] text-sm md:text-lg' : ' text-xl max-w-[80%]'}`}
+              className={`break-words text-mist-white font-semibold  ${isInListView ? ' flex flex-col md:grid md:grid-cols-[20vw_20vw_20vw] items-start md:items-center justify-items-start gap-1 md:gap-4 h-full z-[4] w-[calc(100%-40px)] md:max-w-[80%] text-sm md:text-lg min-w-0' : ' text-xl max-w-[80%]'}`}
             >
               <div className={`flex break-words col-span-1`}>
                 <span className={`${nameStyle} font-semibold hidden md:block ${isInListView ? ' break-words text-sm md:text-lg w-[100%] ' : ''}`}>{getValue(
@@ -301,11 +301,19 @@ function EventCard({
               <div className={`flex flex-wrap md:flex-row md:gap-2 mt-1 md:mt-0 items-center md:justify-center`}>
                 {isInListView && !hideListDateForSpanningEvent && <FaRegCalendar className="w-3 h-3 text-beaming-orange w-4 h-4 mr-2 md:mr-0" />}
                 {isInListView && !hideListDateForSpanningEvent && <span
-                  className={`font-bold text-[10px] md:text-[15px] text-beaming-orange ${dateStyle} `}
+                  className={`!font-bold text-[10px] md:text-[15px] text-beaming-orange ${dateStyle} `}
                 >
-                  {formattedDate().endsWith(', 2025')
-                    ? formattedDate().slice(0, -6)
-                    : formattedDate()}
+                  <span className="md:hidden !font-bold">
+                    {(formattedDate().endsWith(', 2025')
+                      ? formattedDate().slice(0, -6)
+                      : formattedDate()
+                    ).replace(/,\s*\d{4}/g, '')}
+                  </span>
+                  <span className="hidden md:inline !font-bold">
+                    {formattedDate().endsWith(', 2025')
+                      ? formattedDate().slice(0, -6)
+                      : formattedDate()}
+                  </span>
                 </span>}
                 {isInListView && !hideListDateForSpanningEvent && event.start_time != null && (
                   <span
@@ -331,20 +339,17 @@ function EventCard({
                   </div>
                 )}
               </div>
-              <div className={`gap-2 flex items-center justify-start md:hidden`}>
+              <div className={`gap-2 flex items-start justify-start md:hidden w-full min-w-0`}>
                 {isInListView && getGenreOrOffering(event) && (
-                  <div className={`flex gap-2 items-start justify-center`}>
+                  <div className={`flex gap-2 items-start justify-start min-w-0 w-full`}>
                     <img
                       src="/images/offering.svg"
-                      className="w-[12px] h-[12px] text-beaming-orange-dark mt-[3px]"
+                      className="w-[12px] h-[12px] text-beaming-orange-dark mt-[3px] flex-shrink-0"
                     />
                     <span
-                      className={`font-bold text-[10px] md:text-sm text-beaming-orange ${genreOrOfferingStyle}`}
+                      className={`font-bold text-[10px] md:text-sm text-beaming-orange ${genreOrOfferingStyle} min-w-0 break-words whitespace-normal`}
                     >
-                      
-                      {(getGenreOrOffering(event) ?? '').length > 12
-                        ? `${(getGenreOrOffering(event) ?? '').slice(0, 12)}...`
-                        : getGenreOrOffering(event)}
+                      {getGenreOrOffering(event)}
                     </span>
                   </div>
                 )}
@@ -365,20 +370,18 @@ function EventCard({
                   </span>
                 )}
               </div>
-              <div>
+              <div className="w-full min-w-0">
                 {isInListView && hasVenueDisplay && (
                   <span
-                    className={`flex gap-1 items-center justify-start md:hidden `}
+                    className={`flex gap-1 items-start justify-start md:hidden w-full min-w-0`}
                   >
-                    <div className="ml-[-2px] mr-[1px] mt-[0px]">
+                    <div className="ml-[-2px] mr-[1px] mt-[0px] flex-shrink-0">
                       <MdLocationOn className="w-4 h-4 text-beaming-orange-dark" />
                     </div>
                     <span
-                      className={`text-[10px] font-semibold text-mist-white opacity-80 mt-[1px] ${locationStyle} `}
+                      className={`text-[10px] font-semibold text-mist-white opacity-80 mt-[1px] ${locationStyle} min-w-0 break-words whitespace-normal`}
                     >
-                      {venueDisplayLine.length > 12
-                        ? `${venueDisplayLine.slice(0, 12)}...`
-                        : venueDisplayLine}
+                      {venueDisplayLine}
                     </span>
                   </span>
                 )}

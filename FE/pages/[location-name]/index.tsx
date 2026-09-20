@@ -16,12 +16,13 @@ import SortOverlay from '../../components/SortOverlay';
 import ActionDialog from '../../components/overlay/ActionDialog';
 import LoadingDialog from '../../components/overlay/LoadingDialog';
 import DashboardFilter from '../../components/Filter/DashboardFilter';
-import { FaChevronDown, FaEye, FaTimes } from 'react-icons/fa';
+import { FaChevronDown, FaTimes } from 'react-icons/fa';
 import { useRouter } from 'next/router';
 import { logout } from '../../store/actions/auth';
 import Image from 'next/image';
 import UserDropdown from '../../components/Dashboard/UserDropdown';
 import LocationDropdown from '../../components/Dashboard/LocationDropdown';
+import ViewModeToggle from '../../components/Dashboard/ViewModeToggle';
 import Head from 'next/head';
 import { GetServerSideProps, NextPage } from 'next';
 
@@ -91,10 +92,7 @@ const LocationPage: NextPage<LocationPageProps> = ({ locationName, locations: in
   const [mounted, setMounted] = useState(false);
 
   useEffect(() => {
-    // Check if it's a mobile device based on window width when component mounts
-    if (typeof window !== 'undefined' && window.innerWidth < 768) {
-      setIsList(true);
-    }
+    // Same default view on mobile and desktop (big flyer cards).
     setMounted(true);
   }, []);
 
@@ -897,15 +895,6 @@ const LocationPage: NextPage<LocationPageProps> = ({ locationName, locations: in
             {/*<div className="hidden flex items-center">
               <FaChevronDown className="text-beaming-orange w-5 h-5" />
             </div>*/}
-            <button
-              className="flex items-center text-sm gap-2 hidden text-mist-white border border-slate-black px-3 rounded-lg h-8 mb-[-1px] md:hover:bg-mist-white md:hover:text-midnight transition-all duration-300 ease-in-out"
-              onClick={() => {
-                setIsList((prev) => !prev);
-              }}
-            >
-              <FaEye />
-              {isList ? 'Grid' : 'List'}
-            </button>
           </div>
         )}
         <div className="ex:px-0 px-6 font-normal text-mist-white items-end justify-between hidden md:flex mb-[-1px] gap-4 max-h-[40px]">
@@ -930,17 +919,13 @@ const LocationPage: NextPage<LocationPageProps> = ({ locationName, locations: in
           {/*<div className="hidden flex items-center">
             <FaChevronDown className="text-beaming-orange w-3 h-3 -ml-2.5 mb-0.5" />
           </div>*/}
-          <button
-            className="flex items-center text-xs gap-2 hidden ex:flex text-mist-white border border-slate-black px-3 rounded-lg h-8 mb-[-1px] md:hover:bg-mist-white md:hover:text-midnight transition-all duration-300 ease-in-out"
-            onClick={() => {
-              setIsList((prev) => !prev);
-            }}
-          >
-            <FaEye />
-            {isList ? 'Grid' : 'List'}
-          </button>
         </div>
         <div className="flex flex-1 justify-between md:justify-end gap-4 z-[2] pl-6 pr-0 max-w-[94vw] md:max-w-[calc(100vw-400px)] md:pr-6 ex:relative ex:px-0 ex:pr-0">
+          <ViewModeToggle
+            isList={isList}
+            onChange={setIsList}
+            className="hidden md:inline-flex"
+          />
           <SearchBar
             forceShrink={
               Object.values(appliedFilters).filter(
@@ -951,46 +936,11 @@ const LocationPage: NextPage<LocationPageProps> = ({ locationName, locations: in
             forLocation={formattedLocationName}
           />
           <div className="flex items-center gap-2">
-            <button
-              className={`flex p-2 flex-col h-[45px] justify-center items-center text-xs gap-2 ex:hidden text-mist-white px-3 rounded-lg
-                ${
-                  isList
-                    ? 'border border-2 border-slate-black font-semibold text-black bg-beaming-orange'
-                    : 'border border-2 border-slate-black bg-transparent-white opacity-50'
-                } transition-all duration-300`}
-              onTouchEnd={(e) => {
-                const currentTime = new Date().getTime();
-                const tapTimeDiff = currentTime - lastTapTimestampRef.current;
-
-                // Check if this is a double tap (within 300ms of the last tap)
-                if (tapTimeDiff < 300 && tapTimeDiff > 0) {
-                  // This is a double tap - simulate Shift+M
-                  e.preventDefault();
-                  e.stopPropagation();
-
-                  // Create and dispatch a keyboard event for Shift+M
-                  const keyEvent = new KeyboardEvent('keydown', {
-                    key: 'M',
-                    code: 'KeyM',
-                    shiftKey: true,
-                    bubbles: true,
-                    cancelable: true,
-                  });
-                  document.dispatchEvent(keyEvent);
-
-                  // Reset the timestamp to prevent triple-tap from triggering again
-                  lastTapTimestampRef.current = 0;
-                } else {
-                  // This is a single tap - toggle the list view
-                  setIsList((prev) => !prev);
-
-                  // Store the timestamp for the next tap
-                  lastTapTimestampRef.current = currentTime;
-                }
-              }}
-            >
-              List
-            </button>
+            <ViewModeToggle
+              isList={isList}
+              onChange={setIsList}
+              className="md:hidden"
+            />
             <DashboardFilter
               onFilterChange={handleFilterChange}
               appliedFilters={appliedFilters}
