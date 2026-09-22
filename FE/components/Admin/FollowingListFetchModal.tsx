@@ -108,7 +108,7 @@ const FollowingListFetchModal = ({ hide, addAccounts }: { hide: Function, addAcc
             anchorId="fetch_following"
             place="bottom"
             content="Fetch the following list of the specified account"
-            style={{ backgroundColor: '#282726', color: '#FFFCF0' }}
+            style={{ backgroundColor: '#171615', color: '#FFFCF0' }}
           />
         </div>  
       </div>

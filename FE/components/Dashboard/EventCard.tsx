@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useLayoutEffect, useRef, useState } from 'react';
 import { Event } from '../../interface/objects/simpleObject';
 import { useStore } from '../../store/store';
 import { showEvent } from '../../store/actions/eventDetailsDialog';
@@ -11,6 +11,10 @@ import { FaRegStar } from 'react-icons/fa';
 import EventService from '../../services/lib/event';
 import { FaCalendar } from 'react-icons/fa';
 import { Constants } from '../../utils/constants';
+import {
+  DESKTOP_LIST_CHIP_MAX_ROWS,
+  fitOfferingChips,
+} from '../../utils/fitOfferingChips';
 import { favoriteEvent } from '../../store/actions/event';
 import { useRouter } from 'next/router';
 
@@ -30,6 +34,50 @@ interface EventCardsProp {
   almostOver?: boolean;
   isInListView?: boolean;
   sectionDayStartMs?: number;
+}
+
+const DESKTOP_LIST_CHIP_CLASS =
+  'text-[11px] text-mist-white bg-[#353432] rounded-md px-2.5 py-[3px] whitespace-nowrap shrink-0';
+
+const desktopListChipWidthCache = new Map<string, number>();
+
+function measureDesktopListChipWidth(label: string, container: HTMLElement) {
+  const font = getComputedStyle(container).font;
+  const cacheKey = `${font}\n${label}`;
+  const cached = desktopListChipWidthCache.get(cacheKey);
+  if (cached != null) return cached;
+
+  const span = document.createElement('span');
+  span.className = DESKTOP_LIST_CHIP_CLASS;
+  span.textContent = label;
+  span.style.position = 'absolute';
+  span.style.visibility = 'hidden';
+  span.style.pointerEvents = 'none';
+  span.setAttribute('aria-hidden', 'true');
+  container.appendChild(span);
+  const width = Math.ceil(span.getBoundingClientRect().width);
+  span.remove();
+  desktopListChipWidthCache.set(cacheKey, width);
+  return width;
+}
+
+function DesktopListOfferingChip({
+  label,
+  title,
+  extraClassName = '',
+}: {
+  label: string;
+  title?: string;
+  extraClassName?: string;
+}) {
+  return (
+    <span
+      title={title ?? label}
+      className={`${DESKTOP_LIST_CHIP_CLASS} ${extraClassName}`.trim()}
+    >
+      {label}
+    </span>
+  );
 }
 
 function EventCard({
@@ -227,6 +275,128 @@ function EventCard({
     return `${getValue(event.venue.city)}, ${getValue(event.venue.country)}`;
   };
 
+  const firstToken = (value: string | null | undefined) => {
+    if (!value || value.trim() === '') return '';
+    return value.split(Constants.delimiter)[0].trim();
+  };
+
+  // Desktop list subtitle: Artist → Genre → Host/Promoter → nothing.
+  // Skip a candidate that merely repeats the title.
+  const listSubtitle = (() => {
+    const titleLower = eventTitle.toLowerCase();
+    const candidates = [
+      firstToken(event.artist),
+      firstToken(event.genres),
+      firstToken(event.host) || firstToken(event.promoter),
+    ];
+    return candidates.find((c) => c && c.toLowerCase() !== titleLower) || '';
+  })();
+
+  const listOfferingChips = (() => {
+    const raw = event.offering || '';
+    const fromOffering = raw
+      .split(Constants.delimiter)
+      .flatMap((part) => part.split(','))
+      .map((s) => s.trim())
+      .filter(Boolean);
+    const chips = [...fromOffering];
+    const age = firstToken(event.age_barrier);
+    if (age && !chips.some((c) => c.toLowerCase() === age.toLowerCase())) {
+      chips.push(age);
+    } else if (event.is_age_restricted && !chips.some((c) => /21/.test(c))) {
+      chips.push('21+');
+    }
+    if (event.ticket_link && !chips.some((c) => c.toLowerCase() === 'tickets')) {
+      chips.push('Tickets');
+    }
+    return chips;
+  })();
+
+  const listDateParts = (() => {
+    if (!event.start_date) return { weekday: '', monthDay: '' };
+    const date = new Date(event.start_date);
+    return {
+      weekday: date.toLocaleDateString('en-US', { weekday: 'short' }).toUpperCase(),
+      monthDay: date
+        .toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+        .toUpperCase(),
+    };
+  })();
+
+  const listCityLine = (() => {
+    const city = event.venue.city && event.venue.city.trim() !== '' ? event.venue.city.trim() : '';
+    const region =
+      (event.venue.state && event.venue.state.trim() !== '' && event.venue.state) ||
+      (event.venue.country && event.venue.country.trim() !== '' && event.venue.country) ||
+      '';
+    if (city && region) return `${city}, ${region}`;
+    return city || region;
+  })();
+
+  const offeringChipsKey = listOfferingChips.join('\u0001');
+  const listChipContainerRef = useRef<HTMLDivElement>(null);
+  const [listChipFit, setListChipFit] = useState({
+    visibleIndexes: [] as number[],
+    extraCount: 0,
+  });
+
+  useLayoutEffect(() => {
+    if (!isInListView) return;
+    const container = listChipContainerRef.current;
+    if (!container) return;
+
+    const compute = () => {
+      const width = container.clientWidth;
+      if (width <= 0) return;
+      const gapX = parseFloat(getComputedStyle(container).columnGap);
+      setListChipFit(
+        fitOfferingChips({
+          chipWidths: listOfferingChips.map((label) =>
+            measureDesktopListChipWidth(label, container)
+          ),
+          extraWidthFor: (n) => measureDesktopListChipWidth(`+${n}`, container),
+          containerWidth: width,
+          gapX: Number.isFinite(gapX) ? gapX : 6,
+          maxRows: DESKTOP_LIST_CHIP_MAX_ROWS,
+        })
+      );
+    };
+
+    compute();
+    const observer = new ResizeObserver(compute);
+    observer.observe(container);
+    return () => observer.disconnect();
+  }, [isInListView, offeringChipsKey]);
+
+  const visibleOfferingChips = listChipFit.visibleIndexes.map(
+    (index) => listOfferingChips[index]
+  );
+  const extraOfferingCount = listChipFit.extraCount;
+
+  const favoriteHeart = (
+    <div className="flex-shrink-0 z-[4]">
+      {justEdited ? (
+        <FaHeart className="w-7 h-7 text-beaming-orange-transparent" />
+      ) : isFavorite ? (
+        <FaHeart
+          className="w-7 h-7 text-beaming-orange"
+          onClick={(e) => {
+            e.stopPropagation();
+            handleUnfavoriteClick(event.id);
+          }}
+        />
+      ) : (
+        <FaRegHeart
+          className="w-7 h-7 text-beaming-orange"
+          onClick={(e) => {
+            e.stopPropagation();
+            handleFavoriteClick(event.id);
+          }}
+        />
+      )}
+    </div>
+  );
+
   async function handleFavoriteClick(id: number): Promise<void> {
     if (!auth.isUserLoggedIn) {
       router.push('/login'); // Redirect to login if not logged in
@@ -262,13 +432,108 @@ function EventCard({
   }
 
   return (
+    <>
+    {isInListView && (
+      <div
+        onClick={() => (disabled ? {} : showDetails())}
+        className="hidden md:grid w-full items-center gap-x-4 lg:gap-x-5 cursor-pointer rounded-xl bg-slate-black px-3 py-2.5 hover:bg-stone-gray/50 transition-colors grid-cols-[130px_minmax(0,3fr)_1px_6.75rem_1px_minmax(0,1fr)_1px_minmax(0,1fr)_2rem]"
+      >
+        <div className="relative w-[130px] h-[86px] rounded-lg overflow-hidden bg-stone-gray">
+          <img
+            src={event.orig_thumb ? event.orig_thumb : ''}
+            alt="Event Thumbnail"
+            className="absolute top-0 left-0 w-full h-full object-cover"
+          />
+        </div>
+        <div className="min-w-0">
+          <p
+            className={
+              'text-xl lg:text-[22px] font-semibold text-mist-white uppercase tracking-wide leading-tight overflow-hidden ' +
+              nameStyle
+            }
+            style={{
+              display: '-webkit-box',
+              WebkitBoxOrient: 'vertical',
+              WebkitLineClamp: 2,
+            }}
+          >
+            {eventTitle}
+          </p>
+          {listSubtitle && (
+            <p className="text-[12px] text-mist-white/50 truncate mt-0.5 leading-snug">
+              {listSubtitle}
+            </p>
+          )}
+        </div>
+        <div className="w-px self-stretch my-1.5 bg-[#403E3C]" aria-hidden="true" />
+        <div className="text-left leading-tight">
+          {!hideListDateForSpanningEvent && (
+            <>
+              {listDateParts.weekday && (
+                <p className="text-[12px] tracking-[0.12em] text-mist-white/50">
+                  {listDateParts.weekday}
+                </p>
+              )}
+              {listDateParts.monthDay && (
+                <p className="text-base font-semibold text-beaming-orange">
+                  {listDateParts.monthDay}
+                </p>
+              )}
+              {formattedTime(event.start_time) && (
+                <p className="text-[14px] text-mist-white/50 mt-0.5">
+                  {formattedTime(event.start_time)}
+                </p>
+              )}
+            </>
+          )}
+        </div>
+        <div className="w-px self-stretch my-1.5 bg-[#403E3C]" aria-hidden="true" />
+        <div className="min-w-0">
+          {hasVenueDisplay && (
+            <>
+              <p
+                className={
+                  'flex items-center gap-1.5 min-w-0 text-base text-mist-white leading-tight ' +
+                  locationStyle
+                }
+              >
+                <MdLocationOn className="text-beaming-orange w-5 h-5 flex-shrink-0" />
+                <span className="truncate">{venueDisplayLine}</span>
+              </p>
+              {listCityLine && (
+                <p className="text-[13px] text-mist-white/50 truncate mt-0.5 pl-7">
+                  {listCityLine}
+                </p>
+              )}
+            </>
+          )}
+        </div>
+        <div className="w-px self-stretch my-1.5 bg-[#403E3C]" aria-hidden="true" />
+        <div
+          ref={listChipContainerRef}
+          className="min-w-0 flex flex-wrap items-center justify-end content-start gap-x-1.5 gap-y-1"
+        >
+          {visibleOfferingChips.map((chip, i) => (
+            <DesktopListOfferingChip
+              key={`${chip}-${i}`}
+              label={chip}
+              extraClassName={genreOrOfferingStyle}
+            />
+          ))}
+          {extraOfferingCount > 0 && (
+            <DesktopListOfferingChip label={`+${extraOfferingCount}`} />
+          )}
+        </div>
+        {favoriteHeart}
+      </div>
+    )}
     <div
       onClick={() => (disabled ? {} : showDetails())}
       className={
         'w-full flex flex-col gap-[2px] hover:cursor-pointer ' +
-        (event.is_event ? ' bg-midnight border border-2 border-[#403E3C80] ' : 'bg-midnight border border-2 border-[#403E3C80] ') +
+        (event.is_event ? ' bg-slate-black border border-2 border-[#403E3C80] ' : 'bg-slate-black border border-2 border-[#403E3C80] ') +
         (almostOver ? ' opacity-70 bg-opacity-50 border-dotted border-2 border-midnight ' : '') +
-        (isInListView ? ' bg-slate-black bg-opacity-70 rounded-xl p-2 z-[1]' : ' p-[0.65rem] rounded-2xl shadow-[8px_8px_24px_rgba(0,0,0,0.15)] z-[1] md:w-[250px] justify-between ')
+        (isInListView ? ' md:hidden rounded-xl p-2 z-[1]' : ' p-[0.65rem] rounded-2xl shadow-[8px_8px_24px_rgba(0,0,0,0.15)] z-[1] md:w-[250px] justify-between ')
       }
     >
       <div className={`flex  ${isInListView ? 'flex-row w-full ' : 'flex-col'}`}>
@@ -487,6 +752,7 @@ function EventCard({
         )}
       </div>
     </div>
+    </>
   );
 }
 

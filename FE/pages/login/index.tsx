@@ -74,7 +74,7 @@ const Index = () => {
       </nav>
 
       <div className="flex flex-col justify-center flex-1  items-center">
-        <div className="w-full max-w-md p-6 bg-midnight-dark shadow-lg  rounded-lg relative">
+        <div className="w-full max-w-md p-6 bg-slate-black shadow-lg  rounded-lg relative">
           <div className="w-full h-full bg-beaming-orange opacity-30 absolute top-0 left-0 rounded-lg"></div>
 
           <h2 className="text-2xl font-semibold text-off-white text-center  mb-3 relative z-10">

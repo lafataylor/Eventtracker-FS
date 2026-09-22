@@ -29,9 +29,9 @@ const ExperimentalPage = () => {
   };
 
   return (
-    <div className="flex flex-col h-screen bg-[#282726]">
+    <div className="flex flex-col h-screen bg-[#171615]">
       <div className="px-4 py-4 h-1/8 text-[#D0A215] font-semibold"> Event Tracker (Beta)</div>
-      <div className="pb-8 flex-grow flex flex-col items-center justify-center bg-[#282726] overflow-y-auto">
+      <div className="pb-8 flex-grow flex flex-col items-center justify-center bg-[#171615] overflow-y-auto">
         <h1 className="text-[#FFFCF0] text-3xl font-semibold">Test Mode</h1>
         <p className="py-2 text-[#FFFCF0]">Please enter some Instagram account handles to fetch and label the <span className="italic"> 5 most recent posts </span> against each.</p>
         <br/>
@@ -52,7 +52,7 @@ const ExperimentalPage = () => {
           <div className="border-[1px] w-40 h-9 border-solid border-[#AD8301] px-2 py-1 flex flex-row items-center gap-2 rounded-md">
             <span className="text-[#AD8301]">@</span>
             <input
-              className="w-full text-sm bg-[#282726] text-[#FFFCF0]"
+              className="w-full text-sm bg-[#171615] text-[#FFFCF0]"
               type="text"
               placeholder="Account Handle"
               onKeyDown={(e) => {

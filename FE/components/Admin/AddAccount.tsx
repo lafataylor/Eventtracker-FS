@@ -400,7 +400,7 @@ function AddAccount({
                   anchorId="import_accounts"
                   place="bottom"
                   content="Import accounts from a list in a .txt or .csv file"
-                  style={{ backgroundColor: '#282726', color: '#FFFCF0' }}
+                  style={{ backgroundColor: '#171615', color: '#FFFCF0' }}
                 />
                 <button
                   id="import_following"
@@ -414,7 +414,7 @@ function AddAccount({
                   anchorId="import_following"
                   place="bottom"
                   content="Import following list of a specific account"
-                  style={{ backgroundColor: '#282726', color: '#FFFCF0' }}
+                  style={{ backgroundColor: '#171615', color: '#FFFCF0' }}
                 />
                 <div className="flex justify-between">
                   <button

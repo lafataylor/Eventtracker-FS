@@ -487,7 +487,7 @@ const EventsSection = ({
               )}
             </div>
           ) : (
-            <div className={`w-full flex flex-wrap justify-center md:justify-start z-[1] ${isInListView ? 'gap-3' : 'gap-6'}`}>
+            <div className={`w-full flex flex-wrap justify-center md:justify-start z-[1] ${isInListView ? 'gap-3 md:gap-2' : 'gap-6'}`}>
             {isLoading ? (
               <div className="w-full h-full flex items-center justify-center">
                 <Spinner colorClass={'text-beaming-orange'} size={48} />

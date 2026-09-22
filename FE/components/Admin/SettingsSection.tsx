@@ -74,7 +74,7 @@ const SettingsSection = ({
             style={{
               width: '200px',
               borderRadius: '8px',
-              backgroundColor: '#282726',
+              backgroundColor: '#171615',
               color: '#FFFCF0',
             }}
           />

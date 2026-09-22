@@ -111,7 +111,7 @@ const Register = () => {
       </nav>
 
       <div className="flex py-10 flex-col justify-center flex-1 items-center">
-        <div className="w-full max-w-md p-6 bg-midnight-dark shadow-lg border rounded-lg relative">
+        <div className="w-full max-w-md p-6 bg-slate-black shadow-lg border rounded-lg relative">
           <div className="w-full h-full bg-beaming-orange opacity-30 absolute top-0 left-0 rounded-lg"></div>
 
           <h2 className="text-2xl font-semibold text-center text-off-white mb-3 relative z-10">

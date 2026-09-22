@@ -148,11 +148,11 @@ html,
 body,
 #__next {
   height: 100%;
-  background-color: #282726;
+  background-color: #171615;
 }
 
 .date_field input:focus-visible {
-  outline: 1px solid #282726;
+  outline: 1px solid #171615;
   background-color: #343331;
 }
 

@@ -233,7 +233,7 @@ const SearchBar = ({
       <IoMdSearch className="w-5 h-5 shrink-0 text-mist-white" />
       <input
         ref={inputRef}
-        className="min-w-0 flex-1 h-full outline-none border-0 appearance-none bg-slate-black text-mist-white text-sm leading-none placeholder:text-mist-white/50 [&:-webkit-autofill]:shadow-[inset_0_0_0_1000px_#403E3C] [&:-webkit-autofill]:[-webkit-text-fill-color:#FFFCF0]"
+        className="min-w-0 flex-1 h-full outline-none border-0 appearance-none bg-slate-black text-mist-white text-sm leading-none placeholder:text-mist-white/50 [&:-webkit-autofill]:shadow-[inset_0_0_0_1000px_#262523] [&:-webkit-autofill]:[-webkit-text-fill-color:#FFFCF0]"
         placeholder={language === 'es' ? 'Buscar' : 'Search'}
         type="text"
         value={searchTerm}

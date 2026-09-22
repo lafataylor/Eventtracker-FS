@@ -499,7 +499,7 @@ const ExperimentalResultsPage = () => {
   }, [experimental.accounts]);
 
   return (
-    <div className="flex flex-col h-screen bg-[#282726]">
+    <div className="flex flex-col h-screen bg-[#171615]">
       <div className="px-4 py-4 h-1/8 flex flex-row justify-between text-[#D0A215] font-semibold">
         <Link className="flex" href="/experimental">
           <img
