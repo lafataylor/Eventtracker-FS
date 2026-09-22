@@ -6,6 +6,8 @@ from .serializers import EventSerializer, FeedbackSerializer
 from .series import collapse_series, series_key
 from .verdicts import (carry_keep_to_other_dates, carry_rejection_to_other_dates,
                        keep_over)
+from .visibility import (hide_pending_duplicate_extras,
+                         pending_duplicate_loser_ids, reviewable_matches)
 from .ingest import (build_source_key, coerce_int, normalize_poster_name,
                      normalize_text, resolve_venue, upsert_event)
 from django.db import transaction
@@ -835,8 +837,13 @@ def search_events(request):
         # Exclude only KNOWN non-events. is_event is null=True; filtering
         # is_event=True would also drop NULL rows (unknown classification),
         # which were previously searchable and have no admin control to flip.
+        # Pending duplicate extras (owner 2026-09-22) drop here too: visitors
+        # see one card per review group; favorites/share still load by id.
         visibility = (in_window & Q(is_duplicate=False) & Q(suppressed=False)
                       & ~Q(is_event=False))
+        losers = pending_duplicate_loser_ids()
+        if losers:
+            visibility &= ~Q(id__in=losers)
 
         # Spelling variants: "hip-hop" / "hiphop" / "hip hop" must all match
         # each other (owner feedback 2026-08-30). SQL icontains cannot ignore
@@ -964,12 +971,12 @@ def date_events(request):
         # is later (asking for today, part of which is already too old).
         lower = max(day_start, cutoff)
 
-        date_events = Event.objects.filter(
+        date_events = hide_pending_duplicate_extras(Event.objects.filter(
             start_date__gte=lower,
             start_date__lt=day_end,
             is_duplicate=False,
             suppressed=False,
-        ).select_related('venue', 'poster').exclude(is_event=False).all()
+        ).select_related('venue', 'poster').exclude(is_event=False))
 
         # One card per recurring series (event.series), in every list.
         events_serializer = EventSerializer(collapse_series(date_events), many=True)
@@ -1020,13 +1027,13 @@ def date_range_events(request):
         # few days before the window: anything longer lists on its start day
         # only. Without the bound, "Lightning in a Bottle" stored as Aug 21
         # to Sep 18 sat under Today for a month (owner, 2026-09-18).
-        date_events = Event.objects.filter(
+        date_events = hide_pending_duplicate_extras(Event.objects.filter(
             Q(start_date__gte=lower, start_date__lt=window_end)
             | Q(end_date__gte=lower, end_date__lt=window_end,
                 start_date__gte=window_start - SHORT_RUN),
             is_duplicate=False,
             suppressed=False,
-        ).select_related('venue', 'poster').exclude(is_event=False).all()
+        ).select_related('venue', 'poster').exclude(is_event=False))
 
         # One card per recurring series (event.series), in every list.
         events_serializer = EventSerializer(collapse_series(date_events), many=True)
@@ -1064,7 +1071,8 @@ def filter_events(request):
         # Base scope: upcoming, visible events. The date cutoff belongs here,
         # not inside the date branch — otherwise a price/artist/location filter
         # searches the whole 53k-row history instead of upcoming events.
-        queryset = Event.objects.filter(is_duplicate=False, suppressed=False)
+        queryset = hide_pending_duplicate_extras(
+            Event.objects.filter(is_duplicate=False, suppressed=False))
         # An explicit date filter names the days it wants, past or not: the
         # admin asking for "Event Date is 08/21/2026" got nothing because
         # the cutoff excluded it (owner, 2026-09-18). Without one, the scope
@@ -1434,25 +1442,6 @@ def get_event_matches(request):
     except Exception as e:
         logger.error(f"Error retrieving event matches: {e}")
         return ServerProcessingError(message="Error retrieving event matches: " + str(e))
-
-
-def reviewable_matches(today):
-    """Pairs worth a human decision: neither side hidden (suppressed, the
-    older is_duplicate flag, or classified not-an-event; NULL is unclassified
-    and stays), and at least one side still upcoming or undated. Shared by
-    the pair and the group views so their counts can never disagree."""
-    still_relevant = (Q(event_a__start_date__date__gte=today)
-                      | Q(event_b__start_date__date__gte=today)
-                      | Q(event_a__start_date__isnull=True)
-                      | Q(event_b__start_date__isnull=True))
-    return (EventMatch.objects
-            .exclude(event_a__suppressed=True)
-            .exclude(event_b__suppressed=True)
-            .exclude(event_a__is_duplicate=True)
-            .exclude(event_b__is_duplicate=True)
-            .exclude(event_a__is_event=False)
-            .exclude(event_b__is_event=False)
-            .filter(still_relevant))
 
 
 def delete_with_blacklist(events, reason):
