@@ -211,3 +211,45 @@ class WideNetTests(TestCase):
         self._assert_the_old_rule_misses(a, b)
         self._run()
         self.assertEqual(len(self._visible(a, b)), 1)
+
+    def test_the_same_flyer_on_the_same_day_is_flagged_even_when_text_differs(self):
+        # Image matching: two posts of one artwork, titles and rooms disagree.
+        # FLAG only — a shared template at two venues is a human decision.
+        # Measured 2026-09-19: about 3 in 100 candidates share artwork.
+        h = 'a1b2c3d4e5f60718'
+        a = self._ev('Workshop One', 'FLY1', venue='Studio A', image_dhash=h)
+        b = self._ev('Something Else Entirely', 'FLY2', venue='Hall B',
+                     address='Insurgentes 1391', city='CDMX', image_dhash=h)
+        self._assert_the_old_rule_misses(a, b)
+        self._run()
+        self.assertTrue(self._pending(a, b))
+        self.assertEqual(Event.objects.filter(suppressed=True).count(), 0)
+
+    def test_near_identical_flyer_hashes_still_flag(self):
+        # 3 bits: JPEG recompress / resize stay inside 6 (test_imagehash).
+        a = self._ev('Alpha Night', 'NEAR1', venue='Club Uno',
+                     image_dhash='0000000000000000')
+        b = self._ev('Beta Party', 'NEAR2', venue='Club Dos',
+                     address='Juárez 70', image_dhash='0000000000000007')
+        self._assert_the_old_rule_misses(a, b)
+        self._run()
+        self.assertTrue(self._pending(a, b))
+
+    def test_distinct_flyer_hashes_are_left_alone(self):
+        # 13 bits: past the 6-bit same-image bar; different flyers measure
+        # 24-33 (2026-09-19). Titles and rooms also disagree.
+        a = self._ev('Alpha Night', 'FAR1', venue='Club Uno',
+                     image_dhash='0000000000000000')
+        b = self._ev('Beta Party', 'FAR2', venue='Club Dos',
+                     address='Juárez 70', image_dhash='0000000000001fff')
+        self._run()
+        self.assertEqual(EventMatch.objects.count(), 0)
+
+    def test_the_same_flyer_a_week_apart_is_not_flagged(self):
+        # Same image on another day is a series, not a duplicate.
+        h = 'a1b2c3d4e5f60718'
+        a = self._ev('Weekly', 'SER1', venue='Oxi', image_dhash=h)
+        b = self._ev('Weekly', 'SER2', venue='Oxi Club',
+                     day=self.day + timedelta(days=7), image_dhash=h)
+        self._run()
+        self.assertFalse(self._pending(a, b))

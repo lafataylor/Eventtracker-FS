@@ -40,6 +40,13 @@ class Event(models.Model):
     is_age_restricted = models.BooleanField(default=False, null=True)
     orig_link = models.CharField(max_length=255, null=True)
     orig_thumb = models.CharField(max_length=255, null=True)
+    # 64-bit dhash of the flyer (16 hex chars). NULL = never hashed (backlog,
+    # missing image, or decode failure). Compared by Hamming distance in the
+    # wide net: same local day + <=6 bits -> flag for review, never auto-merge.
+    # Same image on another day is a series, not a duplicate. Filled by
+    # compute_image_hashes, not the scraper (2026-09-22). Measured on 74 of
+    # the owner's real pairs: about 3 in 100 candidates share artwork.
+    image_dhash = models.CharField(max_length=16, null=True, blank=True)
     is_event = models.BooleanField(default=False, null=True)
     age_barrier = models.CharField(max_length=255, null=True)
     late = models.BooleanField(default=False, null=True)

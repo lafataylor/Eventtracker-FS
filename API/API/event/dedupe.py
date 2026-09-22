@@ -29,6 +29,7 @@ import re
 from django.utils import timezone
 from rapidfuzz import fuzz
 
+from .imagehash import hamming
 from .ingest import normalize_text
 
 def is_sentinel_date(value):
@@ -143,6 +144,9 @@ def event_signature(event):
         # 'NightClub' at Londres 195 — and once the shared address is folded
         # into one string it drags the whole comparison over any threshold.
         'venue_name': normalize_text(event.venue.name if event.venue else ''),
+        # Flyer fingerprint. Empty/None means never hashed; the wide net
+        # ignores those rather than treating blank as a match.
+        'image_dhash': (event.image_dhash or '').lower() or None,
     }
 
 
@@ -289,6 +293,26 @@ WIDE_NET_SCORE = 85.0
 # 2026-09-22 screenshots: three Poppy Lounge workshop cards, four Tonalá
 # 308 bazaar cards, Alexis Ley / Alex Isley at Blue Note.
 WIDE_MERGE_SCORE = 96.0
+# Same flyer, same local day. 6 bits is the JPEG/resize ceiling from
+# test_imagehash (2026-09-19: recompress/resize 0-1 bits, different flyers
+# 24-33). Sits in the wide net as FLAG only: a shared template at two
+# venues is a human decision, and the same image a week later is a series.
+DHASH_MATCH_BITS = 6
+
+
+def same_flyer(a, b):
+    """True when both signatures carry a dhash and they are within 6 bits.
+
+    Checked last in the wide net so same-place-same-time auto-merge still
+    wins when the artwork agrees too. A blank hash is not a match.
+    """
+    ha, hb = a.get('image_dhash') or '', b.get('image_dhash') or ''
+    if len(ha) != 16 or len(hb) != 16:
+        return False
+    try:
+        return hamming(ha, hb) <= DHASH_MATCH_BITS
+    except ValueError:
+        return False
 
 
 def same_place(a, b):
@@ -352,6 +376,8 @@ def wide_net_reason(a, b):
                 return 'same_place_near_title'
             if leftover_sort >= WIDE_PLACE_TITLE_SIM:
                 return 'same_place_similar_title'
+    if same_flyer(a, b):
+        return 'same_flyer'
     return None
 
 
