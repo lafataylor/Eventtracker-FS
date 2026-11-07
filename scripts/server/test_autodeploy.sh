@@ -65,4 +65,11 @@ check "nothing older: no previous" "" "$(previous_live "$T" "$A" "$H")"
 check "ordinary words are left alone" "task-runner ok" "$(echo "task-runner ok" | mask_secrets)"
 check "keys are masked" "token [hidden] and [hidden] ok" "$(echo "token sk-abc123 and API_KEY=xyz ok" | mask_secrets)"
 
+# 9. Waiting reasons are plain words.
+P="$T/pre.txt"
+echo "  FAIL: inside the nightly scrape window (deploy between 03:00 and 20:30 UTC)" > "$P"
+check "outside hours is explained" "yes" "$(wait_reason "$P" | grep -q "outside deploy hours" && echo yes)"
+echo "  FAIL: pipeline wrote 3 min ago - too recent, may still be active" > "$P"
+check "import running is explained" "Reason: the nightly Instagram import is still running." "$(wait_reason "$P")"
+
 [ "$FAILS" -eq 0 ] && echo "ALL PASSED" || { echo "$FAILS FAILED"; exit 1; }
