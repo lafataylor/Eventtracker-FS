@@ -38,8 +38,30 @@ make test      # API test suite: python manage.py test event c_admin c_auth
 make api       # API on http://127.0.0.1:8009 (empty local database)
 make fe        # site on http://127.0.0.1:3009 (second terminal)
 make check     # site typecheck: npx tsc --noEmit, never grep-filtered
+make deploy    # put the current main live (see "Deploying" below)
+make deploy-status / make rollback
 cd FE && npm test   # site unit tests: node's built-in runner, TypeScript stripped natively
 ```
+
+## Deploying (the owner can do this alone)
+
+Only when the owner asks ("deploy", "put it live", "push to production"):
+
+1. The change must be on `main`. If it is on a branch, commit, push, open a
+   pull request with `gh pr create`, and ask the owner to merge it on GitHub
+   (or merge it with `gh pr merge` if they say so). Then `git checkout main && git pull`.
+2. If this machine has the test setup, run `make test`, `make check` and
+   `cd FE && npm test`. Fix anything red first. If the setup is missing, say
+   so and continue: the server runs the API tests before anything goes live.
+3. Run `make deploy`.
+4. Run `make deploy-status` every minute or so until the NOW line says LIVE,
+   WAITING, FAILED or STOPPED, and tell the owner what it says in plain words.
+   On FAILED, read the error shown there, fix it on a branch, and repeat.
+   On STOPPED (database migration or Python package change), stop and tell the
+   owner it needs Zain: do not try to work around it.
+5. To undo: `make rollback`, then revert the change on `main` too.
+
+Plain-language guide for the owner: `docs/DEPLOYING.md`.
 
 The test suite is the contract: over 300 tests, all green on `main`, about
 three seconds. Run it before and after every change. Details of the local
@@ -83,8 +105,9 @@ uses placeholders so those paths fail safely. Ask before wiring real keys.
 Every bug fix gets a test that reproduces it. Existing tests document decided
 behaviour; a test that "gets in the way" is a conversation, not a deletion.
 
-**Branches and pull requests, never `main` directly.** Deploys are done by
-the maintainer from the deploy branches; nothing on a dev machine deploys.
+**Branches and pull requests, never `main` directly.** Deploying is the one
+exception to "never touch production": when the owner asks to deploy, follow
+"Deploying" below exactly. Never push to the `production` branch any other way.
 
 **Do not change without asking:** the live ingestion path in
 `c_admin/scraper.py` (`clean_*` functions), the FE store/reducers (works,
