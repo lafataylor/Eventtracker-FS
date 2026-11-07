@@ -85,11 +85,12 @@ deploy_hours() {
 }
 
 # Why preflight said no, in plain words.
-wait_reason() { # preflight_output_file
-  if grep -q "scrape window" "$1"; then echo "Reason: it is outside deploy hours ($(deploy_hours))."
-  elif grep -q "pipeline wrote" "$1"; then echo "Reason: the nightly Instagram import is still running."
-  elif grep -q "disk free" "$1"; then echo "Reason: the server is low on disk space. Tell Zain."
-  else echo "Reason: the server's safety check said no: $(grep FAIL "$1" | sed 's/^ *FAIL: //' | head -1)"; fi
+wait_reason() { # preflight_output_file (only its FAIL lines count; passing lines mention the same words)
+  local fails; fails=$(grep "FAIL" "$1")
+  if echo "$fails" | grep -q "scrape window"; then echo "Reason: it is outside deploy hours ($(deploy_hours))."
+  elif echo "$fails" | grep -q "pipeline wrote"; then echo "Reason: the nightly Instagram import is still running."
+  elif echo "$fails" | grep -q "free"; then echo "Reason: the server is low on disk space. Tell Zain."
+  else echo "Reason: the server's safety check said no: $(echo "$fails" | sed 's/^ *FAIL: //' | head -1)"; fi
 }
 
 central_time() { TZ=America/Chicago date '+%a %b %-d, %-I:%M %p Central'; }
