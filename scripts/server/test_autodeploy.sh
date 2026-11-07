@@ -62,6 +62,7 @@ printf '%s\n' "$A" > "$H"
 check "nothing older: no previous" "" "$(previous_live "$T" "$A" "$H")"
 
 # 8. Secrets never reach the public status page.
+check "ordinary words are left alone" "task-runner ok" "$(echo "task-runner ok" | mask_secrets)"
 check "keys are masked" "token [hidden] and [hidden] ok" "$(echo "token sk-abc123 and API_KEY=xyz ok" | mask_secrets)"
 
 [ "$FAILS" -eq 0 ] && echo "ALL PASSED" || { echo "$FAILS FAILED"; exit 1; }

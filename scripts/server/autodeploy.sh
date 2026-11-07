@@ -71,7 +71,8 @@ previous_live() { # repo current history_file
 
 # The status page is public: hide anything shaped like a key or password.
 mask_secrets() {
-  sed -E 's/(sk-[A-Za-z0-9_-]+|[A-Za-z_]*(KEY|SECRET|TOKEN|PASSWORD|PASS)[A-Za-z_]*=[^ ]*)/[hidden]/g'
+  sed -E -e 's/(^|[^A-Za-z0-9])sk-[A-Za-z0-9_-]+/\1[hidden]/g' \
+         -e 's/[A-Za-z_]*(KEY|SECRET|TOKEN|PASSWORD|PASS)[A-Za-z_]*=[^ ]*/[hidden]/g'
 }
 
 # Deploy hours in Central time, worked out from the UTC window so they stay
@@ -102,7 +103,6 @@ write_status() { # headline, details
     [ -n "${2:-}" ] && printf '%s\n' "$2"
     echo
     if [ -n "$live_sha" ]; then echo "LIVE: $(short "$live_sha") since $(statefile live_since)"; fi
-    if [ -n "$(statefile live_api_partial)" ]; then echo "NOTE: the server (API) part of $(short "$(statefile live_api_partial)") is also live."; fi
     if [ -n "$prev_sha" ]; then echo "PREVIOUS: $(git -C "$STATE/repo" rev-parse --short "$prev_sha") (make rollback puts this one back)"; fi
     echo
     echo "Deploys run between $(deploy_hours) today. A request made outside"
@@ -297,8 +297,10 @@ $(tail -n 20 "$STAGE_FE/build.log" 2>/dev/null)"
     fi
     OLD_BEFORE=$(newest_old_site)
     if ! "$MISC/deploy_fe.sh" > "$STATE/last-fe.txt" 2>&1 9>&-; then
-      rollback_site
-      [ -n "$api_changed" ] && rollback_api "$api_tarball"
+      local ok=yes
+      rollback_site || ok=""
+      if [ -n "$api_changed" ]; then rollback_api "$api_tarball" || ok=""; fi
+      [ -n "$ok" ] || give_up "FAILED $title, the website swap failed AND putting it back failed" "The site may be down. Send this to Zain now."
       retry_or_give_up "FAILED $title, the website swap failed, so everything was put back" "The site is running the previous version."
     fi
     PATH="$NODE_BIN:$PATH" pm2 save > /dev/null 2>&1 9>&-   # keep the boot auto-start in step
@@ -307,13 +309,18 @@ $(tail -n 20 "$STAGE_FE/build.log" 2>/dev/null)"
   # ---- live check, and put BOTH parts back if it fails
   sleep 5
   local problem
+  # A change that breaks a page would break it again on every retry, so this
+  # stops the commit instead of retrying.
   if ! problem=$(site_healthy); then
-    local undone=""
-    if [ -n "$fe_changed" ]; then rollback_site && undone="the website"; fi
-    if [ -n "$api_changed" ]; then
-      if rollback_api "$api_tarball"; then undone="${undone:+$undone and }the server part"; else undone="${undone:+$undone; }putting the server part back FAILED"; fi
+    local ok=yes
+    if [ -n "$fe_changed" ]; then rollback_site || ok=""; fi
+    if [ -n "$api_changed" ]; then rollback_api "$api_tarball" || ok=""; fi
+    [ -n "$ok" ] || give_up "FAILED $title, the live check failed ($problem) AND putting it back failed" "The site may be down. Send this to Zain now."
+    if site_healthy > /dev/null; then
+      give_up "FAILED $title, the live check failed ($problem), so it was put back" "The site is running the previous version and answers normally. Paste this into Cursor to find the cause, or send it to Zain."
+    else
+      give_up "FAILED $title, the live check failed ($problem); it was put back but the site still does not answer" "This may not be caused by the change. Send this to Zain now."
     fi
-    retry_or_give_up "FAILED $title, the live check failed ($problem)" "Put back: ${undone:-nothing needed to be}. Send this to Zain if it keeps happening."
   fi
 
   # ---- success
@@ -322,7 +329,7 @@ $(tail -n 20 "$STAGE_FE/build.log" 2>/dev/null)"
   echo "$TARGET" > "$STATE/live_sha"
   echo "$TARGET" >> "$STATE/live_history"
   central_time > "$STATE/live_since"
-  rm -f "$STATE/waiting_sha" "$STATE/tries_$TARGET" "$STATE/live_api_partial"
+  rm -f "$STATE/waiting_sha" "$STATE/tries_$TARGET"
   log_history "$title: LIVE"
   write_status "LIVE. $title went live at $(central_time)." "Checked: every city page, the admin login and the API answer normally."
   rm -rf "$src"
