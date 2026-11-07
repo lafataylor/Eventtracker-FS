@@ -32,8 +32,10 @@ case "${1:-}" in
       echo "GitHub has newer changes on main than this computer. Run: git pull, then make deploy again."
       exit 1
     fi
-    git push -q origin main                      # publish any local commits first
-    git push -q --force origin main:production   # production is only a pointer to what should be live
+    # Quiet on success (GitHub otherwise suggests a pull request for production).
+    quiet_push() { local out; out=$(git push -q "$@" 2>&1) || { echo "$out"; echo "The push to GitHub failed; nothing was requested."; exit 1; }; }
+    quiet_push origin main                       # publish any local commits first
+    quiet_push --force origin main:production    # production is only a pointer to what should be live
     echo "Requested: $(git log -1 --format='%h "%s"')"
     echo "The server picks this up within 2 minutes and takes about 5 to 10 minutes to put it live."
     echo "Deploys run overnight to mid-afternoon Central (the status page shows today's hours); outside them it waits and goes out on its own."
@@ -46,7 +48,7 @@ case "${1:-}" in
     prev=$(status | sed -n 's/^PREVIOUS: \([0-9a-f]\{7,40\}\).*/\1/p' | head -1)
     if [ -z "$prev" ]; then echo "The status page shows no previous version to go back to."; exit 1; fi
     git fetch -q origin
-    git push -q --force origin "$prev:refs/heads/production"
+    out=$(git push -q --force origin "$prev:refs/heads/production" 2>&1) || { echo "$out"; echo "The push to GitHub failed; nothing was requested."; exit 1; }
     echo "Requested a rollback to $(git log -1 --format='%h "%s"' "$prev" 2>/dev/null || echo "$prev")."
     echo "Follow it with: make deploy-status"
     echo "Note: main still has the newer change. Undo it on main too, or the next make deploy brings it back."

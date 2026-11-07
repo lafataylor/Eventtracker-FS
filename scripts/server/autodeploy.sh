@@ -84,6 +84,15 @@ deploy_hours() {
     && echo "$a to $b Central" || echo "03:00 to 20:30 UTC"
 }
 
+# Why preflight said no, in plain words.
+wait_reason() { # preflight_output_file (only its FAIL lines count; passing lines mention the same words)
+  local fails; fails=$(grep "FAIL" "$1")
+  if echo "$fails" | grep -q "scrape window"; then echo "Reason: it is outside deploy hours ($(deploy_hours))."
+  elif echo "$fails" | grep -q "pipeline wrote"; then echo "Reason: the nightly Instagram import is still running."
+  elif echo "$fails" | grep -q "free"; then echo "Reason: the server is low on disk space. Tell Zain."
+  else echo "Reason: the server's safety check said no: $(echo "$fails" | sed 's/^ *FAIL: //' | head -1)"; fi
+}
+
 central_time() { TZ=America/Chicago date '+%a %b %-d, %-I:%M %p Central'; }
 short() { git -C "$STATE/repo" log -1 --format='%h "%s"' "$1" 2>/dev/null; }
 statefile() { cat "$STATE/$1" 2>/dev/null; }
@@ -105,7 +114,7 @@ write_status() { # headline, details
     if [ -n "$live_sha" ]; then echo "LIVE: $(short "$live_sha") since $(statefile live_since)"; fi
     if [ -n "$prev_sha" ]; then echo "PREVIOUS: $(git -C "$STATE/repo" rev-parse --short "$prev_sha") (make rollback puts this one back)"; fi
     echo
-    echo "Deploys run between $(deploy_hours) today. A request made outside"
+    echo "Deploys run from $(deploy_hours) today. A request made outside"
     echo "those hours waits and goes out on its own when they open (the nightly"
     echo "Instagram import runs in the gap)."
     echo
@@ -228,7 +237,7 @@ main() {
       echo "$TARGET" > "$STATE/waiting_sha"
       log_history "$title: requested, waiting for the deploy hours"
     fi
-    write_status "WAITING to deploy $title" "$(grep FAIL "$STATE/last-preflight.txt" | sed 's/^ *FAIL: /Reason: /')
+    write_status "WAITING to deploy $title" "$(wait_reason "$STATE/last-preflight.txt")
 It goes out on its own as soon as it can. Nothing to do."
     exit 0
   fi
