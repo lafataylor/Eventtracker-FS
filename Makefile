@@ -2,7 +2,7 @@
 # LAFASLIST_VENV overrides where the Python virtualenv lives.
 VENV := $(or $(LAFASLIST_VENV),$(CURDIR)/API/API/.venv)
 
-.PHONY: setup test api fe check seed
+.PHONY: setup test api fe check seed deploy deploy-status rollback test-deploy
 
 setup:            ## one-command local setup (safe to re-run)
 	scripts/dev_setup.sh
@@ -21,3 +21,15 @@ check:            ## site typecheck, unfiltered
 
 seed:             ## labelled demo events into the LOCAL database (refuses elsewhere)
 	cd API/API && $(VENV)/bin/python manage.py seed_demo_events
+
+deploy:           ## put the current main live (the server does the rest; see docs/DEPLOYING.md)
+	scripts/deploy.sh deploy
+
+deploy-status:    ## what is live, and what the last deploy request did
+	scripts/deploy.sh status
+
+rollback:         ## put the previous live version back
+	scripts/deploy.sh rollback
+
+test-deploy:      ## tests for the server-side deploy safety rail
+	bash scripts/server/test_autodeploy.sh
