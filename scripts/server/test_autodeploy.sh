@@ -50,4 +50,18 @@ check "api tree changed after code edit" "yes" "$( [ "$(tree_of "$T" HEAD API/AP
 check "fe tree changed after page edit" "yes" "$( [ "$(tree_of "$T" HEAD FE)" != "$BASE_FE" ] && echo yes || echo no)"
 check "unknown live tree is treated as blocking (fail safe)" "cannot compare with the live version" "$(blocking_changes "$T" 0000000000000000000000000000000000000000 HEAD)"
 
+# 7. Rollback target: the newest earlier live version that is OLDER code than
+#    what is live now, so a second rollback never brings the undone change back.
+A=$(git -C "$T" rev-list --max-parents=0 HEAD)
+B=$(git -C "$T" rev-parse HEAD~2); C=$(git -C "$T" rev-parse HEAD)
+H="$T/live_history"; printf '%s\n' "$A" "$B" "$C" > "$H"
+check "previous of C is B" "$B" "$(previous_live "$T" "$C" "$H")"
+printf '%s\n' "$A" "$B" "$C" "$B" > "$H"          # rolled back C -> B
+check "after a rollback, previous is A, never the undone C" "$A" "$(previous_live "$T" "$B" "$H")"
+printf '%s\n' "$A" > "$H"
+check "nothing older: no previous" "" "$(previous_live "$T" "$A" "$H")"
+
+# 8. Secrets never reach the public status page.
+check "keys are masked" "token [hidden] and [hidden] ok" "$(echo "token sk-abc123 and API_KEY=xyz ok" | mask_secrets)"
+
 [ "$FAILS" -eq 0 ] && echo "ALL PASSED" || { echo "$FAILS FAILED"; exit 1; }

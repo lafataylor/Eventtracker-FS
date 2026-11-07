@@ -30,8 +30,9 @@ If a step fails before the swap, nothing on the live site changes.
 
 ## Hours
 
-Deploys run between **10pm and 3:30pm Central**. The nightly Instagram import
-runs in the gap and a deploy would interrupt it. If you deploy outside those
+Deploys run between **9pm and 2:30pm Central** in winter (**10pm and 3:30pm**
+in summer; the status page always shows today's hours). The nightly Instagram
+import runs in the gap and a deploy would interrupt it. If you deploy outside those
 hours, the status page says **WAITING** and it goes out on its own when the
 hours open. You don't need to do anything.
 
@@ -40,6 +41,8 @@ hours open. You don't need to do anything.
 - **LIVE**: your change is on the site.
 - **WAITING**: outside deploy hours; it will go by itself.
 - **DEPLOYING**: in progress.
+- **FAILED ... Trying again in a few minutes**: a passing problem (internet,
+  a slow restart). It retries by itself, up to 3 times. Nothing to do.
 - **FAILED ... the website did not build**: usually a typo. Paste the status
   page into Cursor and ask it to fix it, then deploy again. The live site was
   not touched.
@@ -51,7 +54,8 @@ hours open. You don't need to do anything.
 ## Undo
 
 Say **"roll back production"** in Cursor (it runs `make rollback`). The
-previous version goes back live within about 10 minutes. Then ask Cursor to
+previous version goes back live within about 10 minutes. Rolling back again
+goes one version further back; it never brings the undone change back. Then ask Cursor to
 undo the change on `main` too, otherwise the next deploy brings it back.
 
 ## For developers
@@ -64,6 +68,14 @@ undo the change on `main` too, otherwise the next deploy brings it back.
   Status file `/var/www/lafaslist-deploy/status.txt`, served by nginx at
   `/deploy-status`.
 - Safety rail tests: `make test-deploy`.
+- One-time setup (done 2026-11-07): copy `scripts/server/autodeploy.sh` to
+  `/home/ubuntu/misc/`, write the live API tree id
+  (`git rev-parse <live commit>:API/API`) to `/home/ubuntu/autodeploy/live_api_tree`
+  (and the FE tree to `live_fe_tree`, or leave it empty to rebuild the site on
+  the first run), create `/var/www/lafaslist-deploy/` owned by ubuntu, add the
+  nginx `location = /deploy-status`, then the cron line
+  `*/2 * * * * /home/ubuntu/misc/autodeploy.sh >> /home/ubuntu/autodeploy/cron.log 2>&1`.
+  `deploy_api.sh` reads `SRC` from the environment (default unchanged).
 - The server only reads from GitHub (public repo, anonymous). If the repo goes
   private it needs a read-only deploy key in `/home/ubuntu/autodeploy/repo`.
 - The old `server-api` / `server-fe` branches are retired; `production` is

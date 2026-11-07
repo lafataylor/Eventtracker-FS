@@ -36,7 +36,7 @@ case "${1:-}" in
     git push -q --force origin main:production   # production is only a pointer to what should be live
     echo "Requested: $(git log -1 --format='%h "%s"')"
     echo "The server picks this up within 2 minutes and takes about 5 to 10 minutes to put it live."
-    echo "Deploy hours are 10pm to 3:30pm Central; outside them it waits and goes out on its own."
+    echo "Deploys run overnight to mid-afternoon Central (the status page shows today's hours); outside them it waits and goes out on its own."
     echo "Follow it with: make deploy-status   (or open $STATUS_URL)"
     ;;
   status)
