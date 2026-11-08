@@ -47,9 +47,12 @@ hours open. You don't need to do anything.
   page into Cursor and ask it to fix it, then deploy again. The live site was
   not touched.
 - **FAILED ... the automatic tests did not pass**: same, paste it into Cursor.
-- **STOPPED ... it needs a developer**: the change touches the database layout
-  or the server's Python packages. Those can damage live data if they go out
-  automatically, so they wait for Zain. Send him the status page.
+- **STOPPED ... it needs a developer**: the change edits an old migration,
+  drops or rewrites a column, or changes the server's Python packages. Those
+  wait for a person. A new migration marked `AUTO_APPLY = True` that only
+  adds a nullable column, an index, or an empty table goes out on its own
+  (verified backup first; if a write landed during the change the restore
+  is refused and the status page says it needs a person).
 
 ## Undo
 
@@ -67,7 +70,14 @@ undo the change on `main` too, otherwise the next deploy brings it back.
   `live_api_tree`, `live_fe_tree`, `history.log`, last test/build output).
   Status file `/var/www/lafaslist-deploy/status.txt`, served by nginx at
   `/deploy-status`.
-- Safety rail tests: `make test-deploy`.
+- Safety rail tests: `make test-deploy`. Additive schema: a new migration
+  with `AUTO_APPLY = True` (nullable AddField / AddIndex / CreateModel) is
+  applied by `manage.py safe_migrate` after a verified SQLite backup, with
+  gunicorn stopped. `deploy_api.sh` should honour `SKIP_MIGRATE=1` so it
+  copies code and leaves migrate to that command; an older script that
+  ignores the flag still runs while gunicorn is down. After this change is
+  first live, copy `scripts/server/autodeploy.sh` to
+  `/home/ubuntu/misc/autodeploy.sh` once so the classifier is used.
 - One-time setup (done 2026-11-07): copy `scripts/server/autodeploy.sh` to
   `/home/ubuntu/misc/`, write the live API tree id
   (`git rev-parse <live commit>:API/API`) to `/home/ubuntu/autodeploy/live_api_tree`
