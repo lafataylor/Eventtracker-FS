@@ -167,3 +167,11 @@ class ClassifySourceTests(SimpleTestCase):
         ok, reason = classify_source(text)
         self.assertFalse(ok)
         self.assertIn('AUTO_APPLY', reason)
+
+    def test_live_0012_is_auto_apply(self):
+        # image_dhash is a nullable extra column; autodeploy applies it only
+        # after this file opts in. 2026-11-07.
+        text = (MIGRATIONS / '0012_event_image_dhash.py').read_text()
+        ok, reason = classify_source(text)
+        self.assertTrue(ok, reason)
+        self.assertEqual(reason, 'auto-apply')

@@ -5,6 +5,10 @@ from django.db import migrations, models
 
 class Migration(migrations.Migration):
 
+    # Nullable extra column; old readers ignore it. Opted in 2026-11-07 so
+    # autodeploy can apply it with a verified SQLite backup.
+    AUTO_APPLY = True
+
     dependencies = [
         ("event", "0011_event_start_date_index"),
     ]
