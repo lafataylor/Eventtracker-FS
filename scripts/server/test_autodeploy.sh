@@ -3,6 +3,7 @@
 # ship alone, and which must stop for a developer. Run: bash scripts/server/test_autodeploy.sh
 set -uo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
+export CLASSIFIER="$HERE/../../API/API/event/migration_safety.py"
 AUTODEPLOY_NO_MAIN=1 source "$HERE/autodeploy.sh"
 
 FAILS=0
@@ -26,24 +27,56 @@ BASE_FE=$(git -C "$T" rev-parse HEAD:FE)
 echo "y" > "$T/API/API/event/views.py"; git -C "$T" commit -qam code
 check "plain code change does not block" "" "$(blocking_changes "$T" "$BASE_API" HEAD)"
 
-# 2. A new migration blocks.
+# 2. A new migration blocks unless it opts in AND is allowlisted.
 echo "m2" > "$T/API/API/event/migrations/0002_new.py"; git -C "$T" add -A; git -C "$T" commit -qm mig
-check "new migration blocks" "event/migrations/0002_new.py" "$(blocking_changes "$T" "$BASE_API" HEAD)"
+check "new unmarked migration blocks" "event/migrations/0002_new.py" "$(blocking_changes "$T" "$BASE_API" HEAD)"
+
+# 2b. A nullable AddField with AUTO_APPLY = True does not block.
+git -C "$T" rm -q "$T/API/API/event/migrations/0002_new.py"
+cat > "$T/API/API/event/migrations/0002_image_dhash.py" <<'PY'
+from django.db import migrations, models
+class Migration(migrations.Migration):
+    AUTO_APPLY = True
+    dependencies = [("event", "0001_initial")]
+    operations = [
+        migrations.AddField(
+            model_name="event",
+            name="image_dhash",
+            field=models.CharField(max_length=16, null=True),
+        ),
+    ]
+PY
+git -C "$T" add -A; git -C "$T" commit -qm auto
+check "auto-apply nullable AddField does not block" "" "$(blocking_changes "$T" "$BASE_API" HEAD)"
+check "added migration files lists the auto-apply file" "event/migrations/0002_image_dhash.py" "$(added_migration_files "$T" "$BASE_API" HEAD)"
+
+# 2c. AUTO_APPLY RemoveField still blocks.
+cat > "$T/API/API/event/migrations/0003_drop.py" <<'PY'
+from django.db import migrations
+class Migration(migrations.Migration):
+    AUTO_APPLY = True
+    operations = [migrations.RemoveField(model_name="event", name="name")]
+PY
+git -C "$T" add -A; git -C "$T" commit -qm drop
+check "AUTO_APPLY RemoveField still blocks" "event/migrations/0003_drop.py" "$(blocking_changes "$T" "$BASE_API" HEAD)"
 
 # 3. An edited migration blocks too.
-git -C "$T" rm -q "$T/API/API/event/migrations/0002_new.py"; echo "edited" > "$T/API/API/event/migrations/0001_initial.py"; git -C "$T" commit -qam edit
-check "edited migration blocks" "event/migrations/0001_initial.py" "$(blocking_changes "$T" "$BASE_API" HEAD)"
+BEFORE_EDIT=$(git -C "$T" rev-parse HEAD:API/API)
+echo "edited" > "$T/API/API/event/migrations/0001_initial.py"
+git -C "$T" commit -qam edit
+check "edited migration blocks" "event/migrations/0001_initial.py" "$(blocking_changes "$T" "$BEFORE_EDIT" HEAD)"
 
 # 4. A Python package change blocks.
-git -C "$T" checkout -q HEAD~1 -- API/API/event/migrations/0001_initial.py 2>/dev/null
 git -C "$T" show "$BASE_API:event/migrations/0001_initial.py" > "$T/API/API/event/migrations/0001_initial.py"
+git -C "$T" commit -qam restore0001
+BEFORE_REQS=$(git -C "$T" rev-parse HEAD:API/API)
 echo "rapidfuzz==3.13.0" >> "$T/API/API/requirements.txt"; git -C "$T" commit -qam reqs
-check "requirements change blocks" "requirements.txt" "$(blocking_changes "$T" "$BASE_API" HEAD)"
+check "requirements change blocks" "requirements.txt" "$(blocking_changes "$T" "$BEFORE_REQS" HEAD)"
 
 # 5. Site-only changes never block, whatever they are.
-git -C "$T" show "$BASE_API:requirements.txt" > "$T/API/API/requirements.txt"
+BEFORE_FE=$(git -C "$T" rev-parse HEAD:API/API)
 echo "new page" > "$T/FE/pages/index.tsx"; echo '{"dependencies":{}}' > "$T/FE/package.json"; git -C "$T" add -A; git -C "$T" commit -qm fe
-check "site change does not block" "" "$(blocking_changes "$T" "$BASE_API" HEAD)"
+check "site change does not block" "" "$(blocking_changes "$T" "$BEFORE_FE" HEAD)"
 
 # 6. Tree helpers report what changed.
 check "api tree changed after code edit" "yes" "$( [ "$(tree_of "$T" HEAD API/API)" != "$BASE_API" ] && echo yes || echo no)"

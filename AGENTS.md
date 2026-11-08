@@ -57,8 +57,10 @@ Only when the owner asks ("deploy", "put it live", "push to production"):
 4. Run `make deploy-status` every minute or so until the NOW line says LIVE,
    WAITING, FAILED or STOPPED, and tell the owner what it says in plain words.
    On FAILED, read the error shown there, fix it on a branch, and repeat.
-   On STOPPED (database migration or Python package change), stop and tell the
-   owner it needs Zain: do not try to work around it.
+   On STOPPED (destructive migration, Python package change, or a restore
+   that would overwrite newer writes), stop and tell the owner it needs a
+   person: do not try to work around it. Additive AUTO_APPLY migrations
+   are applied by the server with a verified backup.
 5. To undo: `make rollback`, then revert the change on `main` too.
 
 Plain-language guide for the owner: `docs/DEPLOYING.md`.

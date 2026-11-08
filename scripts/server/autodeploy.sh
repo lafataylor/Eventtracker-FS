@@ -10,11 +10,12 @@
 # The server only READS from GitHub, so no deploy key or password ever leaves
 # the server, and nothing a laptop holds can run commands here.
 #
-# Safety rail: a change to a database migration or to the Python packages
-# stops before anything is touched. deploy_api.sh runs `migrate` on every
-# deploy and the production database has its own migration history, so those
-# changes need a developer. Everything else, including site packages
-# (npm installs them during the build), the owner can ship alone.
+# Safety rail: edited/removed migrations and Python package changes still
+# stop. A NEW migration marked AUTO_APPLY = True whose operations are only
+# nullable AddField, AddIndex or CreateModel is applied by safe_migrate after
+# a verified SQLite backup, with gunicorn stopped so a restore cannot clobber
+# newer writes. Anything else still needs a person. Site packages (npm) the
+# owner can ship alone.
 #
 # Failures: a wrong change (tests or build fail, safety rail) stops that
 # commit until a new one is pushed. A passing problem (network, a slow
@@ -45,16 +46,68 @@ MAX_TRIES=3
 tree_of() { git -C "$1" rev-parse -q --verify "$2:$3" 2>/dev/null; }
 
 # Paths (relative to API/API) that must not ship without a developer:
-# migrations added, edited or removed, and Python package changes.
-# Unknown live tree -> refuse rather than guess.
+# edited/removed migrations, Python package changes, and new migrations that
+# are not AUTO_APPLY plus allowlisted (nullable AddField / AddIndex /
+# CreateModel). Unknown live tree -> refuse rather than guess.
+# CLASSIFIER, if set, is a migration_safety.py to use (tests). Otherwise the
+# file is read from the incoming API tree so a new classifier ships with the
+# commit that needs it.
 blocking_changes() {
-  local repo=$1 live_api_tree=$2 commit=$3 new_tree
+  local repo=$1 live_api_tree=$2 commit=$3 new_tree classifier tmp="" line status path
   new_tree=$(tree_of "$repo" "$commit" API/API) || true
   if ! git -C "$repo" cat-file -e "$live_api_tree^{tree}" 2>/dev/null || [ -z "$new_tree" ]; then
     echo "cannot compare with the live version"; return
   fi
-  git -C "$repo" diff --name-only "$live_api_tree" "$new_tree" \
-    | grep -E '(^|/)migrations/[^/]+\.py$|(^|/)requirements[^/]*\.txt$' || true
+  classifier=${CLASSIFIER:-}
+  if [ -z "$classifier" ] || [ ! -f "$classifier" ]; then
+    tmp=$(mktemp)
+    if git -C "$repo" show "$new_tree:event/migration_safety.py" > "$tmp" 2>/dev/null \
+       && [ -s "$tmp" ]; then
+      classifier=$tmp
+    else
+      rm -f "$tmp"; tmp=""; classifier=""
+    fi
+  fi
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    status=${line%%$'\t'*}
+    path=${line#*$'\t'}
+    path=${path%%$'\t'*}
+    case "$path" in
+      *requirements*.txt)
+        printf '%s\n' "$path"
+        continue ;;
+    esac
+    echo "$path" | grep -qE '(^|/)migrations/[^/]+\.py$' || continue
+    case "$status" in
+      A)
+        if [ -n "$classifier" ] \
+           && git -C "$repo" show "$new_tree:$path" 2>/dev/null \
+              | python3 "$classifier" >/dev/null 2>&1; then
+          continue
+        fi
+        printf '%s\n' "$path"
+        ;;
+      *)
+        printf '%s\n' "$path"
+        ;;
+    esac
+  done < <(git -C "$repo" diff --name-status "$live_api_tree" "$new_tree")
+  [ -n "$tmp" ] && rm -f "$tmp"
+}
+
+# Added migration files (relative to API/API). After blocking_changes has
+# passed, these are the AUTO_APPLY files safe_migrate will apply.
+added_migration_files() {
+  local repo=$1 live_api_tree=$2 commit=$3 new_tree
+  new_tree=$(tree_of "$repo" "$commit" API/API) || true
+  [ -n "$new_tree" ] || return 0
+  git -C "$repo" diff --name-status "$live_api_tree" "$new_tree" \
+    | while IFS=$'\t' read -r status path; do
+        [ "$status" = A ] || continue
+        echo "$path" | grep -qE '(^|/)migrations/[^/]+\.py$' || continue
+        printf '%s\n' "$path"
+      done
 }
 
 # The version `make rollback` should put back: the newest earlier live
@@ -275,11 +328,52 @@ Send this to Zain."
     api_changed=yes
     run_api_tests "$src/API/API" || give_up "FAILED $title, the automatic tests did not pass" "Nothing was changed; the site is as it was.
 $(grep -E '^(FAIL|ERROR|Traceback|AssertionError)|Error:' "$STATE/last-tests.txt" | head -n 15)"
-    SRC="$src/API/API" "$MISC/deploy_api.sh" > "$STATE/last-api.txt" 2>&1 9>&-
+    local need_safe_migrate=""
+    if [ -n "$(added_migration_files "$STATE/repo" "$live_api" "$TARGET")" ]; then
+      need_safe_migrate=yes
+      exec 8>/home/ubuntu/lafaslist-db-maint.lock
+      flock -n 8 || give_up "STOPPED $title, a nightly database job is running" "Nothing was changed; the site is as it was. Try again after the import/dedupe/purge finishes."
+      sudo systemctl stop gunicorn 9>&- \
+        || give_up "STOPPED $title, could not stop the API to fence database writers" "Nothing was changed; the site is as it was."
+    fi
+    SRC="$src/API/API" SKIP_MIGRATE="${need_safe_migrate:+1}" "$MISC/deploy_api.sh" > "$STATE/last-api.txt" 2>&1 9>&-
     api_tarball=$(grep -o '/home/ubuntu/misc/api-code-predeploy-[0-9-]*\.tar\.gz' "$STATE/last-api.txt" | head -1)
-    if ! grep -q "API DEPLOY COMPLETE" "$STATE/last-api.txt" || ! api_up; then
+    if ! grep -q "API DEPLOY COMPLETE" "$STATE/last-api.txt"; then
+      [ -n "$need_safe_migrate" ] && sudo systemctl start gunicorn 9>&- || true
       if [ -z "$api_tarball" ]; then
         # deploy_api.sh stopped before it changed anything (its preflight or backup step).
+        retry_or_give_up "FAILED $title, the server part could not start its deploy" "Nothing was changed; the site is as it was."
+      elif rollback_api "$api_tarball"; then
+        retry_or_give_up "FAILED $title, the server part did not start, so it was put back" "The site is running the previous version."
+      else
+        give_up "FAILED $title, the server part did not start AND putting it back failed" "The site may be down. Send this to Zain now."
+      fi
+    fi
+    if [ -n "$need_safe_migrate" ]; then
+      # deploy_api.sh may have restarted gunicorn; stop it so safe_migrate
+      # still has the write fence. SKIP_MIGRATE=1 means it should have left
+      # migrate to us; if an older script ignored that and already migrated,
+      # safe_migrate is a no-op.
+      sudo systemctl stop gunicorn 9>&- || true
+      if ! (cd "$LIVE_API" && OPENAI_API_KEY=unused-by-this-command \
+            "$PY" manage.py safe_migrate --writers-fenced \
+            --backup-dir /home/ubuntu/dbBackups) > "$STATE/last-migrate.txt" 2>&1; then
+        if grep -q "MANUAL RECOVERY" "$STATE/last-migrate.txt"; then
+          sudo systemctl start gunicorn 9>&- || true
+          give_up "STOPPED $title, migrate needs a person" "A write landed during the schema change, so the automatic database restore was refused. The predeploy copy is in /home/ubuntu/dbBackups. The site is running; send this to Zain."
+        fi
+        if [ -n "$api_tarball" ] && rollback_api "$api_tarball"; then
+          give_up "FAILED $title, the database step did not finish, so the previous code was put back" "The schema change was rolled back when it was safe to do so.
+$(tail -n 20 "$STATE/last-migrate.txt")"
+        fi
+        sudo systemctl start gunicorn 9>&- || true
+        give_up "FAILED $title, the database step did not finish AND putting the code back failed" "Send this to Zain now.
+$(tail -n 20 "$STATE/last-migrate.txt")"
+      fi
+      sudo systemctl start gunicorn 9>&- || true
+    fi
+    if ! api_up; then
+      if [ -z "$api_tarball" ]; then
         retry_or_give_up "FAILED $title, the server part could not start its deploy" "Nothing was changed; the site is as it was."
       elif rollback_api "$api_tarball"; then
         retry_or_give_up "FAILED $title, the server part did not start, so it was put back" "The site is running the previous version."
