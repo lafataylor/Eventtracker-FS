@@ -29,6 +29,7 @@ import re
 from django.utils import timezone
 from rapidfuzz import fuzz
 
+from .imagehash import hamming
 from .ingest import normalize_text
 
 def is_sentinel_date(value):
@@ -143,6 +144,9 @@ def event_signature(event):
         # 'NightClub' at Londres 195 — and once the shared address is folded
         # into one string it drags the whole comparison over any threshold.
         'venue_name': normalize_text(event.venue.name if event.venue else ''),
+        # Flyer fingerprint. Empty/None means never hashed; the wide net
+        # ignores those rather than treating blank as a match.
+        'image_dhash': (event.image_dhash or '').lower() or None,
     }
 
 
@@ -255,7 +259,7 @@ def same_post_is_redundant(a, b):
     return True
 
 
-# --- the wide net: flag, never merge -------------------------------------
+# --- the wide net --------------------------------------------------------
 # Owner, 2026-09-18: "flag anything with a similar image, similar title or
 # similar location and date". Measured that evening on production: 43
 # same-day pairs with near-identical titles were unflagged, all from ONE
@@ -265,14 +269,50 @@ def same_post_is_redundant(a, b):
 # title, the same start time, or a loosely similar title. 201 shared a place
 # and a day but had different titles AND different times: mostly two shows
 # at one venue, deliberately left alone.
-WIDE_TITLE_SIM = 85.0        # token_SORT_ratio: a subset title is not the same title
-WIDE_PLACE_TITLE_SIM = 60.0  # at one place on one day, a loose title match is enough
+#
+# Title bars dropped 2026-09-22 (owner: "title match could be more loose").
+# token_SORT stays, not token_set: a subset title ("Kvadrat" vs a four-act
+# lineup that contains it) still must not count as the same title. 70 sits
+# in the gap between "Sunset Rave at Foro" / "Sunset Rave Night" (72.2, a
+# miss at 85) and "yoga" / "yoga meditation" (42.1). MIN_TITLE_SIM on the
+# fused-score path stays 70: dropping it would collapse distinct roundup
+# slides on one post ("GARDEN hosted by Remoto Rec" vs "GREEN hosted by
+# Handmade DJ" token_set 59).
+WIDE_TITLE_SIM = 70.0        # token_SORT_ratio: a subset title is not the same title
+WIDE_PLACE_TITLE_SIM = 45.0  # at one place on one day, leftover titles this alike
+WIDE_NEAR_TITLE_RATIO = 85.0 # leftover fuzz.ratio: OCR typos ("Alexis Ley" / "Alex Isley" = 90)
 WIDE_PLACE_NAME_SIM = 90.0
 WIDE_PLACE_ADDRESS_SIM = 85.0
-# What a wide-net pair is stored with. Above FUZZY_THRESHOLD so it reads as a
-# candidate, far below any auto-merge bar: "Happy Hour" at two venues on one
-# night must reach a human, not vanish.
+# Review-only wide pairs. Above FUZZY_THRESHOLD so they read as candidates,
+# far below any auto-merge bar: "Happy Hour" at two venues on one night
+# must reach a human, not vanish.
 WIDE_NET_SCORE = 85.0
+# Same room, same local day, and either the same clock time, a near-title
+# OCR typo, or leftover titles that agree with no conflicting times. Sits
+# just over the nightly auto-merge bar (95). Measured on the owner's
+# 2026-09-22 screenshots: three Poppy Lounge workshop cards, four Tonalá
+# 308 bazaar cards, Alexis Ley / Alex Isley at Blue Note.
+WIDE_MERGE_SCORE = 96.0
+# Same flyer, same local day. 6 bits is the JPEG/resize ceiling from
+# test_imagehash (2026-09-19: recompress/resize 0-1 bits, different flyers
+# 24-33). Sits in the wide net as FLAG only: a shared template at two
+# venues is a human decision, and the same image a week later is a series.
+DHASH_MATCH_BITS = 6
+
+
+def same_flyer(a, b):
+    """True when both signatures carry a dhash and they are within 6 bits.
+
+    Checked last in the wide net so same-place-same-time auto-merge still
+    wins when the artwork agrees too. A blank hash is not a match.
+    """
+    ha, hb = a.get('image_dhash') or '', b.get('image_dhash') or ''
+    if len(ha) != 16 or len(hb) != 16:
+        return False
+    try:
+        return hamming(ha, hb) <= DHASH_MATCH_BITS
+    except ValueError:
+        return False
 
 
 def same_place(a, b):
@@ -286,16 +326,39 @@ def same_place(a, b):
                 and fuzz.token_set_ratio(a['venue'], b['venue']) >= WIDE_PLACE_ADDRESS_SIM)
 
 
+def _times_aligned(a, b):
+    """True when start times agree, or neither row has one.
+
+    One side timed and the other blank is NOT aligned: a 5pm listing next
+    to an untimed row at the same room is how a matinee and an evening
+    show used to collapse (measured 2026-09-01, 14 of 115 merges).
+    """
+    ta, tb = a.get('start_time') or '', b.get('start_time') or ''
+    if ta and tb:
+        return ta == tb
+    return not ta and not tb
+
+
 def wide_net_reason(a, b):
-    """Why a pair the fused score missed should still reach the review page,
-    or None. Same LOCAL day only; never a reason to merge."""
+    """Why a pair the fused score missed should still be a candidate, or None.
+
+    Same LOCAL day only. Some reasons auto-merge (see wide_net_merge_score);
+    same_title at two different rooms, and two shows at one room with
+    different clock times, only ever flag.
+    """
     if not a.get('local_date') or a.get('local_date') != b.get('local_date'):
         return None
     titled = bool(a['name'] and b['name'])
     title_sim = fuzz.token_sort_ratio(a['name'], b['name']) if titled else 0.0
+    place = same_place(a, b)
     if titled and title_sim >= WIDE_TITLE_SIM:
+        # Same-looking title at one room, times not in conflict: one event
+        # posted twice. Same title at TWO rooms stays 'same_title' (Happy
+        # Hour) so a human sees it.
+        if place and _times_aligned(a, b):
+            return 'same_title_same_place'
         return 'same_title'
-    if same_place(a, b):
+    if place:
         if not titled:
             return 'same_place_untitled'
         if a.get('start_time') and a.get('start_time') == b.get('start_time'):
@@ -304,9 +367,33 @@ def wide_net_reason(a, b):
         # at Bohnengold" and "Booze Night at Bohnengold" matched only on
         # "at Bohnengold" (rehearsal on production data, 2026-09-18). What
         # is left of the titles has to agree.
-        if fuzz.token_sort_ratio(_without_venue_words(a['name'], a, b),
-                                 _without_venue_words(b['name'], a, b)) >= WIDE_PLACE_TITLE_SIM:
-            return 'same_place_similar_title'
+        leftover_a = _without_venue_words(a['name'], a, b)
+        leftover_b = _without_venue_words(b['name'], a, b)
+        if leftover_a and leftover_b:
+            leftover_ratio = fuzz.ratio(leftover_a, leftover_b)
+            leftover_sort = fuzz.token_sort_ratio(leftover_a, leftover_b)
+            if leftover_ratio >= WIDE_NEAR_TITLE_RATIO and _times_aligned(a, b):
+                return 'same_place_near_title'
+            if leftover_sort >= WIDE_PLACE_TITLE_SIM:
+                return 'same_place_similar_title'
+    if same_flyer(a, b):
+        return 'same_flyer'
+    return None
+
+
+def wide_net_merge_score(reason, a, b):
+    """Score to yield for a wide-net pair, or None if it should not merge.
+
+    same_place_similar_title only merges when times are not in conflict
+    (Dekmantel 4pm vs 5pm at Potato Head must stay on the review page).
+    Untitled same-place pairs stay review-only: an untitled row is the
+    one we know least about.
+    """
+    if reason in ('same_place_same_time', 'same_place_near_title',
+                  'same_title_same_place'):
+        return WIDE_MERGE_SCORE
+    if reason == 'same_place_similar_title' and _times_aligned(a, b):
+        return WIDE_MERGE_SCORE
     return None
 
 
@@ -349,6 +436,10 @@ def find_fuzzy_pairs(signatures):
                 if s >= FUZZY_THRESHOLD:
                     lo, hi = sorted((a['id'], b['id']))
                     yield lo, hi, round(s, 1)
-                elif wide_net_reason(a, b):
+                else:
+                    reason = wide_net_reason(a, b)
+                    if not reason:
+                        continue
                     lo, hi = sorted((a['id'], b['id']))
-                    yield lo, hi, WIDE_NET_SCORE
+                    yield lo, hi, (wide_net_merge_score(reason, a, b)
+                                   or WIDE_NET_SCORE)
