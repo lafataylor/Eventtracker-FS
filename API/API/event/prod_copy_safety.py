@@ -89,6 +89,53 @@ def run_backup_restore_roundtrip(copy):
         raise AssertionError('restore changed event_count on the working copy')
 
 
+def _dummy_for_sqlite_type(ctype):
+    t = (ctype or '').upper()
+    if 'INT' in t or 'BOOL' in t:
+        return 0
+    if 'REAL' in t or 'FLOA' in t or 'DOUB' in t or 'NUM' in t:
+        return 0
+    if 'DATE' in t or 'TIME' in t:
+        return '2000-01-01 00:00:00'
+    if 'BLOB' in t:
+        return b''
+    return 'x'
+
+
+def insert_probe_row(conn):
+    """Insert one fingerprint-changing row that satisfies the live table.
+
+    Production event_event.created_at is datetime NOT NULL with no DB
+    default (Django auto_now_add). A fixed column list fails there; we
+    fill any NOT NULL column that has no default. 2026-11-07.
+    """
+    info = list(conn.execute('PRAGMA table_info(event_event)'))
+    present = {row[1] for row in info}
+    wanted = {
+        'name': PROBE_NAME,
+        'is_event': 1,
+        'is_duplicate': 0,
+        'suppressed': 0,
+    }
+    cols = []
+    vals = []
+    for name, value in wanted.items():
+        if name in present:
+            cols.append(name)
+            vals.append(value)
+    for _cid, name, ctype, notnull, dflt, pk in info:
+        if pk or name in wanted:
+            continue
+        if not notnull or dflt is not None:
+            continue
+        cols.append(name)
+        vals.append(_dummy_for_sqlite_type(ctype))
+    conn.execute(
+        'INSERT INTO event_event (%s) VALUES (%s)' % (
+            ', '.join(cols), ', '.join('?' * len(cols))),
+        vals)
+
+
 def run_write_blocks_restore(copy):
     copy = Path(copy)
     backups = copy.parent / 'backups-write'
@@ -96,10 +143,7 @@ def run_write_blocks_restore(copy):
     bak = take_verified_backup(copy, backups)
     post = fingerprint(copy)
     conn = sqlite3.connect(str(copy))
-    conn.execute(
-        "INSERT INTO event_event (name, is_event, is_duplicate, suppressed) "
-        "VALUES (?, 1, 0, 0)",
-        (PROBE_NAME,))
+    insert_probe_row(conn)
     conn.commit()
     conn.close()
     try:

@@ -6,6 +6,7 @@ owner will on AWS: one process, a snapshot path, no Django settings.
 """
 import hashlib
 import os
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -80,3 +81,33 @@ class ProdCopySafetyRunnerTests(SimpleTestCase):
         for needle in ('django', 'dotenv', 'openai', 'apify', 'firebase',
                        '.env.local'):
             self.assertNotIn(needle, lowered)
+
+    def test_write_guard_on_schema_with_created_at_not_null(self):
+        # Production event_event.created_at is datetime NOT NULL with no DB
+        # default (Django auto_now_add). The probe insert must fill it; the
+        # restore refusal must still fire. Reproduced 2026-11-07 on AWS.
+        path = self.dir / 'created-at.sqlite3'
+        conn = sqlite3.connect(str(path))
+        conn.execute(
+            'CREATE TABLE event_event ('
+            'id INTEGER PRIMARY KEY AUTOINCREMENT,'
+            'name TEXT,'
+            'is_event INTEGER,'
+            'is_duplicate INTEGER DEFAULT 0,'
+            'suppressed INTEGER NOT NULL DEFAULT 0,'
+            'created_at datetime NOT NULL)')
+        conn.execute(
+            'CREATE TABLE c_admin_logs ('
+            'id INTEGER PRIMARY KEY AUTOINCREMENT,'
+            'scraped_at TEXT)')
+        conn.execute(
+            "INSERT INTO event_event (name, is_event, created_at) "
+            "VALUES ('event-0', 1, '2026-01-01 00:00:00')")
+        conn.commit()
+        conn.close()
+        before = _sha256(path)
+        result = self._run(str(path), '--live-db', str(self.live))
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        self.assertIn('PASS test_a_write_on_the_copy_blocks_restore',
+                      result.stdout)
+        self.assertEqual(_sha256(path), before)
