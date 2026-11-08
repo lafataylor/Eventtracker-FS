@@ -20,6 +20,10 @@ from django.test import SimpleTestCase, TransactionTestCase
 from django.utils import timezone
 
 from event.models import Event
+from event.prod_copy_safety import (
+    run_backup_restore_roundtrip,
+    run_write_blocks_restore,
+)
 from event.safe_migrate import run_safe_migrate
 from event.sqlite_backup import (
     RestoreRefused,
@@ -253,29 +257,9 @@ class RealProdSnapshotCopyTests(SimpleTestCase):
     def setUp(self):
         self.dir = _tmp()
         self.copy = _maybe_prod_snapshot_copy(self.dir)
-        self.backups = self.dir / 'backups'
-        self.backups.mkdir()
 
     def test_backup_restore_roundtrip_on_the_copy(self):
-        before = fingerprint(self.copy)
-        bak = take_verified_backup(self.copy, self.backups)
-        self.assertEqual(fingerprint(self.copy), before)
-        restore_if_safe(self.copy, bak, post_change=fingerprint(self.copy))
-        self.assertEqual(fingerprint(self.copy)['event_count'],
-                         before['event_count'])
+        run_backup_restore_roundtrip(self.copy)
 
     def test_a_write_on_the_copy_blocks_restore(self):
-        bak = take_verified_backup(self.copy, self.backups)
-        post = fingerprint(self.copy)
-        conn = sqlite3.connect(str(self.copy))
-        conn.execute(
-            "INSERT INTO event_event (name, is_event, is_duplicate, suppressed) "
-            "VALUES ('probe-row-from-safe-migrate-test', 1, 0, 0)")
-        conn.commit()
-        conn.close()
-        with self.assertRaises(RestoreRefused):
-            restore_if_safe(self.copy, bak, post_change=post)
-        still = sqlite3.connect(str(self.copy)).execute(
-            "SELECT COUNT(*) FROM event_event "
-            "WHERE name='probe-row-from-safe-migrate-test'").fetchone()[0]
-        self.assertEqual(still, 1)
+        run_write_blocks_restore(self.copy)
