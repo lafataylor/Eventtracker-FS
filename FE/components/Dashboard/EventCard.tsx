@@ -821,7 +821,11 @@ function EventCard({
         />
         <div className="w-10 shrink-0 flex flex-col items-center justify-center text-center">
           {!hideListDateForSpanningEvent && listDateParts.weekday ? (
-            <p className="text-[10px] tracking-[0.14em] text-mist-white/45 leading-none">
+            // /45 is not on Tailwind's opacity scale, so the class never
+            // emitted and the weekday rendered browser-default black.
+            // Match muted text elsewhere in this row (subtitle, desktop
+            // weekday): text-mist-white/50. 2026-11-15.
+            <p className="text-[10px] tracking-[0.14em] text-mist-white/50 leading-none">
               {listDateParts.weekday}
             </p>
           ) : null}
