@@ -265,11 +265,22 @@ export function readEventMatchGroups(limit: number = 20, offset: number = 0) {
 }
 
 // One verdict for a whole group.
-// action: 'keep' (keep_id required) | 'keep_all' | 'delete_all'
-export function resolveEventMatchGroup(match_ids: number[], action: string, keep_id?: number) {
-  return axiosClient.post('event/matches/groups/resolve/',
-    keep_id === undefined ? { match_ids, action } : { match_ids, action, keep_id },
-    { headers: getHeader() });
+// action: 'keep' (keep_id or keep_ids) | 'keep_all' | 'delete_all'
+export function resolveEventMatchGroup(
+  match_ids: number[],
+  action: string,
+  keep_id?: number,
+  keep_ids?: number[],
+) {
+  const body: { match_ids: number[]; action: string; keep_id?: number; keep_ids?: number[] } = {
+    match_ids,
+    action,
+  };
+  if (keep_id !== undefined) body.keep_id = keep_id;
+  if (keep_ids !== undefined) body.keep_ids = keep_ids;
+  return axiosClient.post('event/matches/groups/resolve/', body, {
+    headers: getHeader(),
+  });
 }
 
 // Ticket 1: record the owner's verdict on a pair.

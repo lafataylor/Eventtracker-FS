@@ -225,6 +225,36 @@ class WideNetTests(TestCase):
         self.assertTrue(self._pending(a, b))
         self.assertEqual(Event.objects.filter(suppressed=True).count(), 0)
 
+    def test_the_same_flyer_at_the_same_place_keeps_the_fuller_row(self):
+        # Owner 2026-11-14: same artwork, same room — pick the flyer that
+        # extracted more text. A shared template at TWO rooms still flags
+        # (test above). Times must not conflict.
+        h = 'a1b2c3d4e5f60718'
+        thin = self._ev('Night', 'FLY1', venue='Studio A',
+                        address='Tonalá 23', city='Roma', image_dhash=h)
+        full = self._ev('All-night workshop with a long lineup', 'FLY2',
+                        venue='Studio A', address='Tonalá 23', city='Roma',
+                        image_dhash=h)
+        self._assert_the_old_rule_misses(thin, full)
+        self._run()
+        self.assertEqual(len(self._visible(thin, full)), 1)
+        thin.refresh_from_db(); full.refresh_from_db()
+        hidden = thin if thin.suppressed else full
+        kept = full if thin.suppressed else thin
+        self.assertEqual(hidden.canonical_id, kept.id)
+        self.assertEqual(kept.id, full.id)
+
+    def test_the_same_flyer_at_one_place_with_clashing_times_stays_queued(self):
+        h = 'a1b2c3d4e5f60718'
+        a = self._ev('Matinee', 'FLY1', venue='Studio A', address='Tonalá 23',
+                     city='Roma', image_dhash=h, start_time='05:00 PM')
+        b = self._ev('Late set with a long extra lineup', 'FLY2',
+                     venue='Studio A', address='Tonalá 23', city='Roma',
+                     image_dhash=h, start_time='10:00 PM')
+        self._run()
+        self.assertTrue(self._pending(a, b))
+        self.assertEqual(Event.objects.filter(suppressed=True).count(), 0)
+
     def test_near_identical_flyer_hashes_still_flag(self):
         # 3 bits: JPEG recompress / resize stay inside 6 (test_imagehash).
         a = self._ev('Alpha Night', 'NEAR1', venue='Club Uno',

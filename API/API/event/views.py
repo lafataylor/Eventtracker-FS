@@ -8,6 +8,7 @@ from .verdicts import (carry_keep_to_other_dates, carry_rejection_to_other_dates
                        keep_over)
 from .visibility import (hide_pending_duplicate_extras,
                          pending_duplicate_loser_ids, reviewable_matches)
+from .management.commands.detect_duplicates import completeness
 from .ingest import (build_source_key, coerce_int, normalize_poster_name,
                      normalize_text, resolve_venue, upsert_event)
 from django.db import transaction
@@ -1520,15 +1521,20 @@ def get_event_match_groups(request):
 
         ordered = sorted(groups.values(), key=soonest)
         page = ordered[offset:offset + limit]
-        data = [{
-            "key": min(g['ids']),
-            "soonest": (soonest(g)[1].isoformat() if not soonest(g)[0] else None),
-            "events": [EventSerializer(events[i]).data
-                       for i in sorted(g['ids'], key=lambda i: (events[i].start_date is None,
-                                                                events[i].start_date or timezone.now(), i))],
-            "pairs": [{"match_id": m.id, "event_a_id": m.event_a_id, "event_b_id": m.event_b_id,
-                       "score": m.score, "match_type": m.match_type} for m in g['pairs']],
-        } for g in page]
+        data = []
+        for g in page:
+            # Fuller extracted text wins a field-count tie (owner 2026-11-14).
+            suggested = max(g['ids'], key=lambda i: (completeness(events[i]), -i))
+            data.append({
+                "key": min(g['ids']),
+                "soonest": (soonest(g)[1].isoformat() if not soonest(g)[0] else None),
+                "suggested_keep_id": suggested,
+                "events": [EventSerializer(events[i]).data
+                           for i in sorted(g['ids'], key=lambda i: (events[i].start_date is None,
+                                                                    events[i].start_date or timezone.now(), i))],
+                "pairs": [{"match_id": m.id, "event_a_id": m.event_a_id, "event_b_id": m.event_b_id,
+                           "score": m.score, "match_type": m.match_type} for m in g['pairs']],
+            })
         return Success({"groups": data, "total_groups": len(ordered),
                         "pending_total": len(matches), "offset": offset, "limit": limit})
     except Exception as e:
@@ -1542,8 +1548,9 @@ def resolve_event_match_group(request):
 
     match_ids: the group's pairs (only PENDING ones are acted on; a pair the
     owner already decided is never redone).
-    action: keep (keep_id required, must be a member) -> every other member
-            hides behind it and every pair is confirmed;
+    action: keep (keep_id or keep_ids, members of the group) -> unselected
+            members hide behind the most complete selected listing; pairs
+            among selected listings are rejected (two of three can stay);
             keep_all -> every pair rejected, nothing hidden;
             delete_all -> every member deleted, posts blacklisted unless a
             surviving listing still uses them.
@@ -1555,6 +1562,7 @@ def resolve_event_match_group(request):
     match_ids = request.data.get("match_ids")
     action = request.data.get("action")
     keep_id = request.data.get("keep_id")
+    keep_ids_raw = request.data.get("keep_ids")
     if validator.is_missing([match_ids, action]) or not isinstance(match_ids, list):
         return MissingInformation()
     if action not in ("keep", "keep_all", "delete_all"):
@@ -1562,6 +1570,12 @@ def resolve_event_match_group(request):
     try:
         ids = [int(x) for x in match_ids]
         keep_id = int(keep_id) if keep_id is not None else None
+        if keep_ids_raw is None:
+            chosen_ids = [keep_id] if keep_id is not None else []
+        else:
+            if not isinstance(keep_ids_raw, list) or len(keep_ids_raw) == 0:
+                return InvalidParameters()
+            chosen_ids = [int(x) for x in keep_ids_raw]
     except (TypeError, ValueError):
         return InvalidParameters()
     try:
@@ -1573,27 +1587,33 @@ def resolve_event_match_group(request):
                 members[m.event_a_id] = m.event_a
                 members[m.event_b_id] = m.event_b
             if action == "keep":
-                if keep_id not in members:
+                if not chosen_ids or any(eid not in members for eid in chosen_ids):
                     return InvalidParameters()
-                keep = members[keep_id]
-                for eid, ev in members.items():
-                    if eid != keep_id:
+                keep_set = set(chosen_ids)
+                if keep_set == set(members):
+                    action = "keep_all"
+                else:
+                    kept_rows = [members[eid] for eid in keep_set]
+                    keep = max(kept_rows, key=lambda e: (completeness(e), -e.id))
+                    losers = [ev for eid, ev in members.items() if eid not in keep_set]
+                    for ev in losers:
                         keep_over(keep, ev)
-                for m in pending:
-                    m.status = 'confirmed'
-                    m.reviewed_at = timezone.now()
-                    m.save(update_fields=['status', 'reviewed_at'])
-                # The verdict is about the whole group on every date the posts
-                # share, including members no pair links to the keeper.
-                carry_keep_to_other_dates(
-                    keep, [ev for eid, ev in members.items() if eid != keep_id])
-            elif action == "keep_all":
+                    for m in pending:
+                        both_kept = (m.event_a_id in keep_set
+                                     and m.event_b_id in keep_set)
+                        m.status = 'rejected' if both_kept else 'confirmed'
+                        m.reviewed_at = timezone.now()
+                        m.save(update_fields=['status', 'reviewed_at'])
+                        if both_kept:
+                            carry_rejection_to_other_dates(m.event_a, m.event_b)
+                    carry_keep_to_other_dates(keep, losers)
+            if action == "keep_all":
                 for m in pending:
                     m.status = 'rejected'
                     m.reviewed_at = timezone.now()
                     m.save(update_fields=['status', 'reviewed_at'])
                     carry_rejection_to_other_dates(m.event_a, m.event_b)
-            else:
+            elif action == "delete_all":
                 delete_with_blacklist(list(members.values()), "Deleted from duplicates review")
         return Success({"status": "success", "resolved": action, "pairs": len(pending)})
     except Exception as e:

@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import AdminSideBar from '../../../components/Admin/AdminSideBar';
 import { useStore } from '../../../store/store';
 import LoadingDialog from '../../../components/overlay/LoadingDialog';
@@ -18,6 +18,13 @@ import {
 import { HIDE_INFO_OVERLAY, SHOW_INFO_OVERLAY } from '../../../store/actions/type';
 import { Event } from '../../../interface/objects/simpleObject';
 import { pageChunks } from '../../../utils/pageChunks';
+import {
+  arrowPicks,
+  idsToKeep,
+  initialKeepId,
+  reviewKeyAction,
+  togglePinned,
+} from '../../../utils/duplicateReview';
 
 type ViewMode = 'pairs' | 'flagged';
 
@@ -44,6 +51,7 @@ interface GroupPair {
 interface Group {
   key: number;
   soonest: string | null;
+  suggested_keep_id?: number;
   events: Event[];
   pairs: GroupPair[];
 }
@@ -74,6 +82,26 @@ const Index = () => {
   // A set, not a scalar: resolving two cards at once must keep both disabled
   // independently (a scalar re-enabled the first card mid-flight).
   const [busyIds, setBusyIds] = useState<Set<number>>(new Set());
+  // Keyboard review: one group is active, the fuller flyer starts selected,
+  // Enter keeps and hops, arrows change the pick, Space pins an extra card.
+  const [activeGroupKey, setActiveGroupKey] = useState<number | null>(null);
+  const [focusId, setFocusId] = useState<number | null>(null);
+  const [keepPicks, setKeepPicks] = useState<number[]>([]);
+  const [pinningExtras, setPinningExtras] = useState(false);
+  const groupsRef = useRef<Group[]>([]);
+  const resolveRef = useRef<(
+    g: Group,
+    action: 'keep' | 'keep_all' | 'delete_all',
+    keepId?: number,
+    keepIds?: number[],
+  ) => Promise<void>>(async () => {});
+  const reviewRef = useRef({
+    activeGroupKey: null as number | null,
+    focusId: null as number | null,
+    keepPicks: [] as number[],
+    pinningExtras: false,
+    busy: false,
+  });
 
   const notify = (message: unknown, isError = false) =>
     dispatch({
@@ -207,23 +235,25 @@ const Index = () => {
   // One verdict for a whole group. The server hides, rejects or deletes
   // every member and carries the verdict to the other dates of the same
   // posts, so the group (and its later-week twins) leave the list together.
-  const resolveGroup = async (g: Group, action: 'keep' | 'keep_all' | 'delete_all', keepId?: number) => {
+  const resolveGroup = async (
+    g: Group,
+    action: 'keep' | 'keep_all' | 'delete_all',
+    keepId?: number,
+    keepIds?: number[],
+  ) => {
     if (action === 'delete_all' &&
         !window.confirm(`Delete all ${g.events.length} events of this group? Their posts will be blacklisted. This cannot be undone.`)) return;
     if (!(await requestMiddleware(dispatch))) return;
     setBusyIds((prev) => new Set(prev).add(g.key));
     try {
-      await resolveEventMatchGroup(g.pairs.map((p) => p.match_id), action, keepId);
+      await resolveEventMatchGroup(g.pairs.map((p) => p.match_id), action, keepId, keepIds);
       // Refetch rather than drop the group locally: a verdict also carries
       // to later weeks of the same posts, and a hidden member removes other
       // groups from the list, so only the server knows what is left.
       await reloadLoadedGroups();
-      notify(
-        action === 'keep_all' ? 'Kept all of them.'
-        : action === 'delete_all' ? 'All deleted; their posts are blacklisted.'
-        : 'Kept one, hid the rest. You can restore them later.',
-        false
-      );
+      if (action === 'delete_all') notify('All deleted; their posts are blacklisted.', false);
+      // Keep and keep-all: no toast. Enter / [ should hop to the next group
+      // without a 2-second overlay in the way (owner 2026-11-14).
     } catch (error) {
       notify('Could not save your choice. Please try again.', true);
     } finally {
@@ -301,6 +331,96 @@ const Index = () => {
     fetchFlagged(0);
   };
 
+  const activateGroup = (g: Group | undefined) => {
+    if (!g) {
+      setActiveGroupKey(null);
+      setFocusId(null);
+      setKeepPicks([]);
+      setPinningExtras(false);
+      return;
+    }
+    const keep = initialKeepId(g.events.map((e) => e.id), g.suggested_keep_id ?? null);
+    setActiveGroupKey(g.key);
+    setFocusId(keep);
+    setKeepPicks(keep != null ? [keep] : []);
+    setPinningExtras(false);
+  };
+
+  groupsRef.current = groups;
+  resolveRef.current = resolveGroup;
+  reviewRef.current = {
+    activeGroupKey,
+    focusId,
+    keepPicks,
+    pinningExtras,
+    busy: busyIds.size > 0 || bulkBusy,
+  };
+
+  useEffect(() => {
+    if (view !== 'pairs') return;
+    if (groups.length === 0) {
+      activateGroup(undefined);
+      return;
+    }
+    if (!groups.some((g) => g.key === activeGroupKey)) {
+      activateGroup(groups[0]);
+    }
+  }, [groups, view]);
+
+  useEffect(() => {
+    if (view !== 'pairs' || activeGroupKey == null) return;
+    const el = document.querySelector(`[data-review-group="${activeGroupKey}"]`);
+    if (el) (el as HTMLElement).scrollIntoView({ block: 'nearest' });
+  }, [activeGroupKey, view]);
+
+  useEffect(() => {
+    if (view !== 'pairs') return;
+    const onKey = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement | null;
+      const tag = target?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || target?.isContentEditable) {
+        return;
+      }
+      const action = reviewKeyAction(e.key);
+      if (!action) return;
+      const live = reviewRef.current;
+      const list = groupsRef.current;
+      if (live.busy || list.length === 0) return;
+      const g = list.find((x) => x.key === live.activeGroupKey) || list[0];
+      if (!g) return;
+      e.preventDefault();
+      const eventIds = g.events.map((ev) => ev.id);
+      if (action.type === 'arrow') {
+        const moved = arrowPicks(
+          eventIds, live.keepPicks, live.focusId, action.direction, live.pinningExtras,
+        );
+        setActiveGroupKey(g.key);
+        setFocusId(moved.focus);
+        setKeepPicks(moved.picks);
+        return;
+      }
+      if (action.type === 'pin') {
+        if (live.focusId == null) return;
+        setKeepPicks(togglePinned(live.keepPicks, live.focusId));
+        setPinningExtras(true);
+        return;
+      }
+      if (action.type === 'keep') {
+        const ids = idsToKeep(live.keepPicks, live.focusId);
+        if (ids.length === 0) return;
+        resolveRef.current(g, 'keep', ids.length === 1 ? ids[0] : undefined, ids);
+        return;
+      }
+      if (action.type === 'keep_all') {
+        resolveRef.current(g, 'keep_all');
+        return;
+      }
+      resolveRef.current(g, 'delete_all');
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [view]);
+
   return (
     <div className="w-full flex h-full font-montserrat">
       <AdminSideBar currentPage="duplicates" />
@@ -332,7 +452,7 @@ const Index = () => {
 
         <p className="mt-4 px-3 text-stone-gray max-w-3xl">
           {view === 'pairs'
-            ? 'Each group is one event the system found more than once, by title, place, date or the same flyer. Keep one (the rest are hidden, restorable), keep all, or delete all. A decision also covers the other dates of the same posts.'
+            ? 'The fuller flyer is pre-selected. Enter keeps it and hops to the next group. Left/right pick a different card. Space keeps an extra (two of three). [ keeps all. ] deletes all (it asks first).'
             : 'Events currently hidden as duplicates by the automatic scraper. If any is a real event that should be live, restore it.'}
         </p>
 
@@ -534,8 +654,18 @@ const Index = () => {
                 const busy = busyIds.has(g.key) || bulkBusy;
                 const best = g.pairs.reduce((m, p) => Math.max(m, p.score), 0);
                 const samePost = g.pairs.some((p) => p.match_type === 'exact_link');
+                const isActive = g.key === activeGroupKey;
                 return (
-                  <div key={g.key} className="p-6 bg-stone-gray bg-opacity-20 rounded-2xl">
+                  <div
+                    key={g.key}
+                    data-review-group={g.key}
+                    className={`p-6 bg-stone-gray bg-opacity-20 rounded-2xl ${
+                      isActive ? 'ring-2 ring-beaming-orange' : ''
+                    }`}
+                    onClick={() => {
+                      if (!isActive) activateGroup(g);
+                    }}
+                  >
                     <div className="flex items-center gap-3 mb-4 flex-wrap">
                       <input
                         type="checkbox"
@@ -555,32 +685,56 @@ const Index = () => {
                         onClick={() => resolveGroup(g, 'keep_all')}
                         disabled={busy}
                       >
-                        Keep all
+                        Keep all [
                       </button>
                       <button
                         className="py-2 px-4 rounded-lg border border-stone-gray text-off-white hover:border-red-500 hover:text-red-400 disabled:opacity-50 whitespace-nowrap"
                         onClick={() => resolveGroup(g, 'delete_all')}
                         disabled={busy}
                       >
-                        Delete all
+                        Delete all ]
                       </button>
                     </div>
 
                     <div className="flex flex-wrap gap-4">
-                      {g.events.map((ev) => (
-                        <div key={ev.id} className="flex flex-col items-center gap-3">
-                          <div className="w-56">
-                            <EventCard event={ev} disabled={false} isFavorite={false} />
-                          </div>
-                          <button
-                            className="py-2 px-4 w-56 rounded-lg bg-beaming-orange text-black font-semibold disabled:opacity-50"
-                            onClick={() => resolveGroup(g, 'keep', ev.id)}
-                            disabled={busy}
+                      {g.events.map((ev) => {
+                        const focused = isActive && ev.id === focusId;
+                        const pinned = isActive && keepPicks.includes(ev.id);
+                        const suggested = ev.id === g.suggested_keep_id;
+                        return (
+                          <div
+                            key={ev.id}
+                            className={`flex flex-col items-center gap-3 rounded-2xl p-2 ${
+                              focused ? 'ring-2 ring-beaming-orange bg-beaming-orange/10' : ''
+                            }`}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setActiveGroupKey(g.key);
+                              setFocusId(ev.id);
+                              if (!pinningExtras) setKeepPicks([ev.id]);
+                            }}
                           >
-                            Keep this one
-                          </button>
-                        </div>
-                      ))}
+                            <div className="w-56 text-xs text-center h-4">
+                              {suggested && (
+                                <span className="text-beaming-orange font-semibold">More text</span>
+                              )}
+                              {pinned && keepPicks.length > 1 && (
+                                <span className="text-off-white"> · keeping</span>
+                              )}
+                            </div>
+                            <div className="w-56">
+                              <EventCard event={ev} disabled={false} isFavorite={false} />
+                            </div>
+                            <button
+                              className="py-2 px-4 w-56 rounded-lg bg-beaming-orange text-black font-semibold disabled:opacity-50"
+                              onClick={() => resolveGroup(g, 'keep', ev.id, [ev.id])}
+                              disabled={busy}
+                            >
+                              {focused ? 'Keep this one ⏎' : 'Keep this one'}
+                            </button>
+                          </div>
+                        );
+                      })}
                     </div>
 
                     {busy && (
