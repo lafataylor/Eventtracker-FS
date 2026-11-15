@@ -1,6 +1,8 @@
 // Run: npm test
 //
-// Mobile list date column: muted weekday, large padded day, orange month.
+// Mobile list date column: muted weekday (text-mist-white/50 in EventCard;
+// /45 is not a Tailwind opacity step and left the label black), large
+// padded day, orange month.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { listDateStack } from './listDateStack.ts';
