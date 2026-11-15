@@ -1,5 +1,11 @@
-import React from 'react';
-import { ViewMode, ViewModeLayout, VIEW_MODE_ORDER } from '../../utils/viewMode';
+import React, { useEffect, useRef, useState } from 'react';
+import { FaChevronDown } from 'react-icons/fa';
+import {
+  ViewMode,
+  ViewModeLayout,
+  VIEW_MODE_MENU_LABELS,
+  VIEW_MODE_ORDER,
+} from '../../utils/viewMode';
 
 interface ViewModeToggleProps {
   mode: ViewMode;
@@ -8,7 +14,7 @@ interface ViewModeToggleProps {
   className?: string;
 }
 
-const LABELS: Record<ViewMode, string> = {
+const ARIA_LABELS: Record<ViewMode, string> = {
   masonry: 'Masonry view',
   list: 'Compact list view',
   board: 'Grid view',
@@ -62,8 +68,95 @@ function ModeIcon({ mode }: { mode: ViewMode }) {
 }
 
 /**
+ * Phone: one compact button (current icon + chevron) that opens a menu of
+ * all four views. Desktop keeps the four-icon pill. 2026-11-15: four icons
+ * were too wide next to search + filter on small screens.
+ */
+function MobileViewModeDropdown({
+  mode,
+  onChange,
+  className = '',
+}: Omit<ViewModeToggleProps, 'layout'>) {
+  const [isOpen, setIsOpen] = useState(false);
+  const dropdownRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!isOpen) return;
+
+    const handleClickOutside = (event: MouseEvent) => {
+      if (
+        dropdownRef.current &&
+        !dropdownRef.current.contains(event.target as Node)
+      ) {
+        setIsOpen(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [isOpen]);
+
+  const selectMode = (next: ViewMode) => {
+    onChange(next);
+    setIsOpen(false);
+  };
+
+  return (
+    <div className={`relative ${className}`} ref={dropdownRef}>
+      <button
+        type="button"
+        aria-label={ARIA_LABELS[mode]}
+        aria-expanded={isOpen}
+        aria-haspopup="listbox"
+        onClick={() => setIsOpen((open) => !open)}
+        className="inline-flex !h-12 min-h-12 max-h-12 box-border items-center gap-1.5 rounded-lg border-2 border-slate-black bg-transparent px-2.5 text-mist-white transition-colors"
+      >
+        <span className="flex items-center justify-center text-beaming-orange">
+          <ModeIcon mode={mode} />
+        </span>
+        <FaChevronDown
+          className={`w-2.5 h-2.5 text-mist-white opacity-70 transition-transform duration-200 ${
+            isOpen ? 'rotate-180' : ''
+          }`}
+          aria-hidden="true"
+        />
+      </button>
+
+      {isOpen && (
+        <div
+          className="absolute top-full right-0 mt-2 min-w-[168px] rounded-lg shadow-lg bg-slate-black border-2 border-midnight-transparent z-30 animate-fade-in overflow-hidden"
+          role="listbox"
+          aria-label="View mode"
+        >
+          {VIEW_MODE_ORDER.mobile.map((id) => {
+            const active = mode === id;
+            return (
+              <button
+                key={id}
+                type="button"
+                role="option"
+                aria-selected={active}
+                onClick={() => selectMode(id)}
+                className={`flex w-full items-center gap-2.5 px-3 py-2.5 text-sm font-medium transition-colors duration-150 ${
+                  active
+                    ? 'bg-beaming-orange text-black'
+                    : 'text-mist-white opacity-80 hover:bg-gunmetal-gray hover:opacity-100'
+                }`}
+              >
+                <ModeIcon mode={id} />
+                <span>{VIEW_MODE_MENU_LABELS[id]}</span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
  * Narrow icon pill. Desktop order: masonry, list, grid, cards.
- * Phone order: grid, list, masonry, cards.
+ * Phone uses MobileViewModeDropdown instead of four icons.
  * Fixed 48px height to match SearchBar + filter button.
  */
 function ViewModeToggle({
@@ -72,6 +165,16 @@ function ViewModeToggle({
   layout,
   className = '',
 }: ViewModeToggleProps) {
+  if (layout === 'mobile') {
+    return (
+      <MobileViewModeDropdown
+        mode={mode}
+        onChange={onChange}
+        className={className}
+      />
+    );
+  }
+
   const btn = (active: boolean) =>
     `flex h-full w-8 items-center justify-center transition-colors ${
       active
@@ -85,11 +188,11 @@ function ViewModeToggle({
       role="group"
       aria-label="View mode"
     >
-      {VIEW_MODE_ORDER[layout].map((id, index) => (
+      {VIEW_MODE_ORDER.desktop.map((id, index) => (
         <button
           key={id}
           type="button"
-          aria-label={LABELS[id]}
+          aria-label={ARIA_LABELS[id]}
           aria-pressed={mode === id}
           onClick={() => onChange(id)}
           className={`${index > 0 ? 'border-l-2 border-slate-black ' : ''}${btn(mode === id)}`}
