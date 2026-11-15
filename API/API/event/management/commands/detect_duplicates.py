@@ -30,9 +30,10 @@ from event.models import Event, EventMatch
 from event.verdicts import decided_sibling_verdict, keep_over
 from rapidfuzz import fuzz
 
-from event.dedupe import (MIN_TITLE_SIM, VENUE_ANCHOR_SCORE,
-                          event_signature, find_fuzzy_pairs,
-                          same_post_is_redundant, venue_anchor_applies)
+from event.dedupe import (FUZZY_THRESHOLD, MIN_TITLE_SIM, VENUE_ANCHOR_SCORE,
+                          _times_aligned, event_signature, find_fuzzy_pairs,
+                          same_place, same_post_is_redundant,
+                          venue_anchor_applies, venue_text)
 
 COMPLETENESS_FIELDS = ('name', 'artist', 'start_date', 'start_time', 'price',
                        'genres', 'ticket_link', 'orig_thumb', 'venue_id')
@@ -93,28 +94,43 @@ def cluster_same_post_rows(rows):
     return [sorted(c['rows'], key=lambda r: r.id) for c in clusters]
 
 
+def _field_text(event, field):
+    """Plain extracted text for one completeness field, for volume scoring."""
+    if field == 'start_date':
+        return ''
+    if field == 'venue_id':
+        venue = getattr(event, 'venue', None)
+        return venue_text(venue) if venue else ''
+    val = getattr(event, field, None)
+    return str(val).strip() if val else ''
+
+
 def completeness(event):
     """Sort key for choosing a group's keeper, in strict tiers:
 
       1. identifying fields (title, date) — a row with more always wins;
-      2. other extracted text (time, artist, genre, price, venue);
-      3. thumbnail / post link — present on nearly every row, so only a
-         last-resort tie-break.
+      2. how much text the vision pass pulled off the flyer (owner 2026-11-14:
+         pick the image with the most text). image_dhash only says two
+         flyers are the same artwork; it cannot count words, so this is
+         the scan we already have;
+      3. how many other fields are filled (time, artist, genre, price, venue)
+         — the listing with more information, when the text volume ties;
+      4. thumbnail / post link — present on nearly every row, last resort.
 
     A flat count let an undated, untitled row with several descriptive
     fields beat the post's only dated row — verified on production
-    (2026-08-26): 5 of 25,192 collapses did exactly that. Tier 3 is kept
-    below tier 2 so a row that is only a thumbnail can never outrank a row
-    carrying real extracted text (the same rule has_extracted_text() applies
-    when deciding whether a pair is reviewable). Remaining ties fall to the
-    caller, which orders rows by id so the oldest row wins deterministically.
+    (2026-08-26): 5 of 25,192 collapses did exactly that. Identifying
+    fields still outrank volume, so a dated sparse row beats an undated
+    essay. Remaining ties fall to the caller, which orders rows by id so
+    the oldest row wins deterministically.
     """
     identifying = sum(1 for f in IDENTIFYING_FIELDS if getattr(event, f, None))
-    text = sum(1 for f in TEXT_FIELDS
+    volume = sum(len(_field_text(event, f)) for f in TEXT_FIELDS)
+    info = sum(1 for f in TEXT_FIELDS
                if f not in IDENTIFYING_FIELDS and getattr(event, f, None))
     media = sum(1 for f in COMPLETENESS_FIELDS
                 if f not in TEXT_FIELDS and getattr(event, f, None))
-    return (identifying, text, media)
+    return (identifying, volume, info, media)
 
 
 class Command(BaseCommand):
@@ -490,15 +506,31 @@ class Command(BaseCommand):
             examined += 1
             if lo in suppressed_now or hi in suppressed_now:
                 continue
-            # Auto-merge only clears the HIGH bar the owner saw evidence for
-            # (2026-08-30 measurement): score at or above the threshold AND
-            # the exact same day. score_pair tolerates ±1 day for nightlife;
-            # that tolerance stays review-only — a date difference is real
-            # counter-evidence, so those pairs always go to a human.
+            # Auto-merge only on the exact same day. score_pair tolerates
+            # ±1 day for nightlife; that tolerance stays review-only — a
+            # date difference is real counter-evidence (LADW3, 2026-08-26).
+            #
+            # Two bars, both same-day:
+            #   * score >= threshold (nightly 95): the original high bar.
+            #   * same room, times not in conflict, already a candidate
+            #     (>= 82): the 82-95 flyers the owner keeps resolving by
+            #     picking the one with more text (2026-11-14). Different
+            #     rooms stay queued — Happy Hour / Paga lo que puedas at
+            #     two restaurants on one citywide day.
+            sa, sb = sig_by_id.get(lo), sig_by_id.get(hi)
+            # Both sides must be titled: an untitled row at the same room
+            # is the Zinco / "Diplo at Savaya" case and stays on review.
+            same_room = bool(
+                sa and sb
+                and sa.get('name') and sb.get('name')
+                and same_place(sa, sb)
+                and _times_aligned(sa, sb)
+                and score >= FUZZY_THRESHOLD)
             auto = (auto_threshold
                     and dates.get(lo) == dates.get(hi)
                     and (score >= auto_threshold
-                         or unambiguous_anchor(lo, hi)))
+                         or unambiguous_anchor(lo, hi)
+                         or same_room))
             existing = EventMatch.objects.filter(
                 event_a_id=lo, event_b_id=hi).first()
             # An owner verdict is never overridden: rejected means "not

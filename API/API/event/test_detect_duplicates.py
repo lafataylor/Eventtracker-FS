@@ -32,6 +32,35 @@ class KeeperChoiceTests(TestCase):
                          orig_thumb='https://img/b.jpg')
         self.assertGreater(completeness(titled), completeness(untitled))
 
+    def test_the_flyer_with_more_extracted_text_wins_a_field_count_tie(self):
+        # Owner 2026-11-14: on the duplicates page the fuller flyer is
+        # obviously the one to keep, but presence-only scoring tied two
+        # rows that both had a name, artist and time, so the older id won.
+        day = timezone.now()
+        thin = Event(name='Party', start_date=day, artist='DJ',
+                     start_time='22:00')
+        full = Event(name='Party at Club X with a long lineup',
+                     start_date=day,
+                     artist='DJ Foo, DJ Bar, DJ Baz',
+                     start_time='22:00')
+        self.assertEqual(
+            completeness(thin)[0], completeness(full)[0],
+            'guard: both rows identify the event, so volume can decide')
+        self.assertGreater(completeness(full)[1], completeness(thin)[1])
+        self.assertGreater(completeness(full), completeness(thin))
+
+    def test_more_flyer_text_beats_a_row_with_more_fields_but_less_text(self):
+        # Owner 2026-11-14: the image with more words on it first, then the
+        # listing with more information. A short title with time/price/genre
+        # filled must not beat a long lineup pulled off the fuller flyer.
+        day = timezone.now()
+        wordy = Event(
+            name='Paint and Sound Workshop at Poppy Wellness Lounge tonight',
+            start_date=day)
+        terse = Event(name='Workshop', start_date=day, artist='A Painter',
+                      start_time='18:00', price='20', genres='art')
+        self.assertGreater(completeness(wordy), completeness(terse))
+
 
 class BlankPairGuardTests(TestCase):
     """Keyed nameless rows from the same post are ambiguous (one event split
@@ -197,15 +226,17 @@ class RoundupClusterTests(TestCase):
         # differ. Neither row can appear in any feed or search, so review
         # would be a choice between two invisible rows; the loser stays
         # restorable from the merged scope.
-        keeper = self._row('P__0__0', None, 0, shortcode='P', is_event=False,
-                           artist='DJ A', genres='house')
+        self._row('P__0__0', None, 0, shortcode='P', is_event=False,
+                  artist='DJ A', genres='house')
         self._row('P__0__1', None, 1, shortcode='P', is_event=False,
                   artist='DJ B', genres='techno')
         call_command('detect_duplicates', '--exact')
         self.assertEqual(self._pending(), 0)
         hidden = Event.objects.filter(shortcode='P', suppressed=True)
+        visible = Event.objects.filter(shortcode='P', suppressed=False)
         self.assertEqual(hidden.count(), 1)
-        self.assertEqual(hidden.get().canonical_id, keeper.id)
+        self.assertEqual(visible.count(), 1)
+        self.assertEqual(hidden.get().canonical_id, visible.get().id)
 
     def test_unclassified_row_is_not_treated_as_a_non_event(self):
         # is_event NULL means "never classified", not "not an event":
@@ -511,6 +542,44 @@ class FuzzyAutoMergeTests(TestCase):
         # guard: the fixture really sits in the review band
         s = score_pair(event_signature(a), event_signature(b))
         self.assertTrue(82 <= s < 95, f'fixture score {s} left the band')
+        self._run()
+        a.refresh_from_db(); b.refresh_from_db()
+        self.assertFalse(a.suppressed or b.suppressed)
+        self.assertEqual(EventMatch.objects.filter(status='pending').count(), 1)
+
+    def test_mid_band_same_place_keeps_the_flyer_with_more_text(self):
+        # Owner 2026-11-14: same room, same night, one flyer clearly says
+        # more. Presence-only scoring tied; different restaurants on one
+        # pay-what-you-can day still must queue (the next test).
+        from event.dedupe import event_signature, score_pair
+        room = Venue.objects.create(name='Salón Los Ángeles',
+                                    address='Lerdo 206')
+        # Same title + same room fused ~93 when the artists are not subsets
+        # of each other (token_set 67). The fuller flyer is the longer name.
+        thin = self._ev('Taco Tuesday Fiesta', 3, 'POSTA',
+                        artist='Sonido Gallo', venue=room)
+        full = self._ev('Taco Tuesday Fiesta live band guests and more', 3,
+                        'POSTB', artist='Sonido Martines', venue=room)
+        s = score_pair(event_signature(thin), event_signature(full))
+        self.assertTrue(82 <= s < 95, f'fixture score {s} left the band')
+        self._run()
+        thin.refresh_from_db(); full.refresh_from_db()
+        self.assertTrue(thin.suppressed)
+        self.assertFalse(full.suppressed)
+        self.assertEqual(thin.canonical_id, full.id)
+
+    def test_mid_band_different_places_still_queued(self):
+        # Paga lo que puedas @ Outline vs Mamma Ricotta: citywide day,
+        # two restaurants, must not hide one behind the other.
+        from event.dedupe import event_signature, score_pair
+        a = self._ev('Paga lo que puedas', 3, 'POSTA',
+                     venue=Venue.objects.create(name='Outline',
+                                                address='Calle 1'))
+        b = self._ev('Paga lo que puedas', 3, 'POSTB',
+                     venue=Venue.objects.create(name='Mamma Ricotta',
+                                                address='Calle 99'))
+        s = score_pair(event_signature(a), event_signature(b))
+        self.assertGreaterEqual(s, 82, f'fixture score {s} is not a candidate')
         self._run()
         a.refresh_from_db(); b.refresh_from_db()
         self.assertFalse(a.suppressed or b.suppressed)

@@ -58,10 +58,12 @@ class GroupFixtureMixin:
         self.assertEqual(res.status_code, 200, res.content[:300])
         return res.json()   # Success(dict) answers with the dict itself, like the pairs view
 
-    def _resolve_group(self, match_ids, action, keep_id=None):
+    def _resolve_group(self, match_ids, action, keep_id=None, keep_ids=None):
         body = {'match_ids': match_ids, 'action': action}
         if keep_id is not None:
             body['keep_id'] = keep_id
+        if keep_ids is not None:
+            body['keep_ids'] = keep_ids
         return self.client.post('/v1/event/matches/groups/resolve/', body,
                                 content_type='application/json',
                                 HTTP_AUTHORIZATION='Token ' + self.tok)
@@ -74,6 +76,16 @@ class GroupFixtureMixin:
 
 
 class GroupingTests(GroupFixtureMixin, TestCase):
+    def test_the_group_names_the_fuller_flyer_as_the_suggested_keep(self):
+        # Owner 2026-11-14: looking at two cards, the one with more text
+        # on the flyer is the one to keep. The page should say which.
+        thin = self._ev('Party', artist='DJ')
+        full = self._ev('Party at Club X with a long lineup',
+                        artist='DJ Foo, DJ Bar, DJ Baz')
+        self._pair(thin, full)
+        data = self._groups()
+        self.assertEqual(data['groups'][0]['suggested_keep_id'], full.id)
+
     def test_pairs_sharing_an_event_form_one_group(self):
         a, b, c = self._ev('Kinshasa Vibes'), self._ev('Kinshasa Nights'), self._ev('Nights at Kinshasa')
         p1, p2 = self._pair(a, b), self._pair(b, c)
@@ -164,6 +176,42 @@ class GroupVerdictTests(GroupFixtureMixin, TestCase):
         r = self._resolve_group(self.ids, 'keep', keep_id=stranger.id)
         self.assertEqual(r.status_code, 400)
         self.assertEqual(Event.objects.filter(suppressed=True).count(), 0)
+
+    def test_keep_two_of_three_leaves_both_on_the_site(self):
+        # Owner 2026-11-14: a group of three is not always one event. Two
+        # rooms that night should stay; the third listing is the extra.
+        r = self._resolve_group(self.ids, 'keep',
+                                keep_ids=[self.a.id, self.c.id])
+        self.assertEqual(r.status_code, 200)
+        self.assertFalse(self._fresh(self.a).suppressed)
+        self.assertFalse(self._fresh(self.c).suppressed)
+        hidden = self._fresh(self.b)
+        self.assertTrue(hidden.suppressed and hidden.is_duplicate)
+        self.assertIn(hidden.canonical_id, {self.a.id, self.c.id})
+
+    def test_keep_two_rejects_the_pair_between_them(self):
+        # A and B are both real; hiding B behind A would be the old
+        # keep-one path. The pair between two keepers is "not duplicates".
+        self._resolve_group(self.ids, 'keep', keep_ids=[self.a.id, self.b.id])
+        self.assertEqual(EventMatch.objects.get(id=self.p1.id).status, 'rejected')
+        self.assertEqual(EventMatch.objects.get(id=self.p2.id).status, 'confirmed')
+        self.assertFalse(self._fresh(self.a).suppressed)
+        self.assertFalse(self._fresh(self.b).suppressed)
+        self.assertTrue(self._fresh(self.c).suppressed)
+        # Loser hides behind the most complete kept listing; A and B tie,
+        # so the oldest (A) is the canonical.
+        self.assertEqual(self._fresh(self.c).canonical_id, self.a.id)
+
+    def test_keep_ids_must_all_be_members(self):
+        stranger = self._ev('stranger')
+        r = self._resolve_group(self.ids, 'keep',
+                                keep_ids=[self.a.id, stranger.id])
+        self.assertEqual(r.status_code, 400)
+        self.assertEqual(Event.objects.filter(suppressed=True).count(), 0)
+
+    def test_keep_ids_empty_is_rejected(self):
+        r = self._resolve_group(self.ids, 'keep', keep_ids=[])
+        self.assertEqual(r.status_code, 400)
 
     def test_an_already_decided_pair_is_not_redone(self):
         self.p2.status = 'rejected'; self.p2.save()
@@ -295,6 +343,17 @@ class GroupKeepAcrossWeeksTests(GroupFixtureMixin, TestCase):
 
     def _fresh(self, e):
         return Event.objects.get(id=e.id)
+
+    def test_keeping_two_leaves_both_visible_next_week(self):
+        # Owner 2026-11-14: keep two of three. Next week those two posts
+        # stay up; the extra hides. The pair between the two keepers must
+        # be rejected so inheritance does not hide one behind the other.
+        self._resolve_group([self.ab1.id, self.bc1.id], 'keep',
+                            keep_ids=[self.a1.id, self.b1.id])
+        self.assertFalse(self._fresh(self.a2).suppressed)
+        self.assertFalse(self._fresh(self.b2).suppressed)
+        self.assertTrue(self._fresh(self.c2).suppressed)
+        self.assertEqual(EventMatch.objects.get(id=self.ab2.id).status, 'rejected')
 
     def test_every_member_is_carried_to_next_week_not_only_the_keepers_pairs(self):
         self._resolve_group([self.ab1.id, self.bc1.id], 'keep', keep_id=self.a1.id)
