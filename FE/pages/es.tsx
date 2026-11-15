@@ -16,11 +16,13 @@ import SortOverlay from '../components/SortOverlay';
 import ActionDialog from '../components/overlay/ActionDialog';
 import LoadingDialog from '../components/overlay/LoadingDialog';
 import DashboardFilter from '../components/Filter/DashboardFilter';
-import { FaEye, FaTimes } from 'react-icons/fa';
+import { FaTimes } from 'react-icons/fa';
 import { useRouter } from 'next/router';
 import { logout } from '../store/actions/auth';
 import Image from 'next/image';
 import UserDropdown from '../components/Dashboard/UserDropdown';
+import ViewModeToggle from '../components/Dashboard/ViewModeToggle';
+import { useViewMode } from '../utils/viewMode';
 
 const Home: NextPage = () => {
   const [state, dispatch] = useStore();
@@ -52,14 +54,11 @@ const Home: NextPage = () => {
 
   const [activeDropdown, setActiveDropdown] = useState<string>('');
 
-  const [isList, setIsList] = useState(false);
+  const [viewMode, setViewMode] = useViewMode();
 
   const [mounted, setMounted] = useState(false);
 
   useEffect(() => {
-    if (typeof window !== 'undefined' && window.innerWidth < 768) {
-      setIsList(true);
-    }
     setMounted(true);
   }, []);
 
@@ -698,13 +697,6 @@ const Home: NextPage = () => {
               width={240}
               height={80}
             />
-            <button className="flex items-center text-sm gap-2 hidden text-mist-white border border-slate-black px-3 rounded-lg h-8 mb-[-1px] md:hover:bg-mist-white md:hover:text-midnight transition-all duration-300 ease-in-out" 
-              onClick={()=>{
-                setIsList(prev => !prev);
-              }}>
-              <FaEye />
-              {isList ? 'Grid' : 'List'}
-            </button>
           </div>
         )}
         <div className="ex:px-0 px-6 flex font-normal text-mist-white flex items-end justify-between hidden md:flex mb-[-1px] gap-4 max-h-[40px]">
@@ -714,28 +706,22 @@ const Home: NextPage = () => {
             width={240}
             height={80}
           />
-          <button className="flex items-center text-xs gap-2 hidden ex:flex text-mist-white border border-slate-black px-3 rounded-lg h-8 mb-[-1px] md:hover:bg-mist-white md:hover:text-midnight transition-all duration-300 ease-in-out" 
-            onClick={()=>{
-              setIsList(prev => !prev);
-            }}>
-            <FaEye />
-            {isList ? 'Grid' : 'List'}
-          </button>
         </div>
         <div className="flex flex-1 justify-between md:justify-end gap-4 z-[2] pl-6 pr-0 max-w-[94vw] ex:relative ex:px-0">
+          <ViewModeToggle
+            mode={viewMode}
+            onChange={setViewMode}
+            layout="desktop"
+            className="hidden md:inline-flex"
+          />
           <SearchBar language="es" forceShrink={Object.values(appliedFilters).filter(value => value !== null && value !== '').length+2} />
           <div className="flex items-center gap-2">
-            <button 
-              className={`flex p-2 flex-col h-[45px] justify-center items-center text-xs gap-2 ex:hidden text-mist-white px-3 rounded-lg
-                ${isList 
-                  ? 'border border-2 border-slate-black font-semibold text-black bg-beaming-orange' 
-                  : 'border border-2 border-slate-black bg-transparent-white opacity-50'
-                } transition-all duration-300`}
-              onClick={()=>{
-                setIsList(prev => !prev);
-              }}>
-              List
-            </button>
+            <ViewModeToggle
+              mode={viewMode}
+              onChange={setViewMode}
+              layout="mobile"
+              className="md:hidden"
+            />
             <DashboardFilter
               onFilterChange={handleFilterChange}
               appliedFilters={appliedFilters}
@@ -855,7 +841,7 @@ const Home: NextPage = () => {
             onClick={() => {}}
             isLoading={search.loading}
             language="es"
-            isInListView={isList}
+            viewMode={viewMode}
           />
         ) : isDateFilter && filteredEvents ? (
           <EventsSection
@@ -869,7 +855,7 @@ const Home: NextPage = () => {
             onClick={() => {}}
             isLoading={search.loading}
             language="es"
-            isInListView={isList}
+            viewMode={viewMode}
           />
         ) : (
           <>
@@ -910,7 +896,7 @@ const Home: NextPage = () => {
                   onClick={() => setLastClickedSection('today')}
                   isLoading={isTodayLoading}
                   language="es"
-                  isInListView={isList}
+                  viewMode={viewMode}
                 />
               );
               
@@ -942,7 +928,7 @@ const Home: NextPage = () => {
                     onClick={() => setLastClickedSection('tomorrow')}
                     isLoading={isTomorrowLoading}
                     language="es"
-                    isInListView={isList}
+                    viewMode={viewMode}
                   />
                 );
               }
@@ -972,7 +958,7 @@ const Home: NextPage = () => {
                       onClick={() => setLastClickedSection(`day${day}`)}
                       isLoading={isWeekLoading}
                       language="es"
-                      isInListView={isList}
+                      viewMode={viewMode}
                     />
                   );
                 });
@@ -1000,7 +986,7 @@ const Home: NextPage = () => {
                       onClick={() => setLastClickedSection(`day${day}`)}
                       isLoading={isWeekLoading}
                       language="es"
-                      isInListView={isList}
+                      viewMode={viewMode}
                     />
                   );
                 });
@@ -1028,7 +1014,7 @@ const Home: NextPage = () => {
                       onClick={() => setLastClickedSection(`day${day}`)}
                       isLoading={isWeekLoading}
                       language="es"
-                      isInListView={isList}
+                      viewMode={viewMode}
                     />
                   );
                 });
@@ -1056,7 +1042,7 @@ const Home: NextPage = () => {
                       onClick={() => setLastClickedSection(`day${day}`)}
                       isLoading={isWeekLoading}
                       language="es"
-                      isInListView={isList}
+                      viewMode={viewMode}
                     />
                   );
                 });
@@ -1084,7 +1070,7 @@ const Home: NextPage = () => {
                       onClick={() => setLastClickedSection(`day${day}`)}
                       isLoading={isWeekLoading}
                       language="es"
-                      isInListView={isList}
+                      viewMode={viewMode}
                     />
                   );
                 });
@@ -1111,7 +1097,7 @@ const Home: NextPage = () => {
                   onClick={() => setLastClickedSection('nextWeek')}
                   isLoading={isWeekLoading}
                   language="es"
-                  isInListView={isList}
+                  viewMode={viewMode}
                 />
               );
               
@@ -1132,7 +1118,7 @@ const Home: NextPage = () => {
                   onClick={() => setLastClickedSection('afterNextWeek')}
                   isLoading={isYearLoading}
                   language="es"
-                  isInListView={isList}
+                  viewMode={viewMode}
                   spaceAfter={true}
                 />
               );

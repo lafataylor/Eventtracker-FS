@@ -1,4 +1,5 @@
 export const DESKTOP_LIST_CHIP_MAX_ROWS = 3;
+export const MOBILE_LIST_CHIP_MAX_ROWS = 1;
 
 export type FitOfferingChipsInput = {
   chipWidths: number[];

@@ -1,5 +1,6 @@
 import axios from 'axios';
 import { getApiBase } from '../utils/locations';
+import { cityPath, DEFAULT_CITY_NAME } from '../utils/utils';
 
 const axiosClient = axios.create({
   // Defaults to production so deployed behaviour is unchanged when the env var
@@ -23,7 +24,7 @@ axiosClient.interceptors.response.use(
     //console.log(error);
     let res = error.response;
     if (res?.status == 401) {
-      window.location.href = '/mexico-city';
+      window.location.href = cityPath(DEFAULT_CITY_NAME);
     }
     // console.error(“Looks like there was a problem. Status Code: “ + res.status);
     return Promise.reject('Axios error: ' + error);

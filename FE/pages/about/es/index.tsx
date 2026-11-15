@@ -5,6 +5,7 @@ import Head from 'next/head';
 import Image from 'next/image';
 import { FaChevronDown, FaArrowLeft } from 'react-icons/fa';
 import UserDropdown from '../../../components/Dashboard/UserDropdown';
+import { cityPath, displayLocationName, toLocationSlug } from '../../../utils/utils';
 
 interface FAQItemProps {
   question: string;
@@ -70,15 +71,6 @@ const FAQSection: React.FC<FAQSectionProps> = ({ title, items }) => {
   );
 };
 
-const formatCityNameFromSlug = (slug: string) => {
-  if (!slug) return '';
-  return slug
-    .replace(/-/g, ' ')
-    .split(' ')
-    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
-    .join(' ');
-};
-
 const FAQ = () => {
   const router = useRouter();
   const [state, dispatch] = useStore();
@@ -88,7 +80,7 @@ const FAQ = () => {
   const [language, setLanguage] = useState('en');
   const [activeDropdown, setActiveDropdown] = useState<string>('');
   const [mounted, setMounted] = useState(false);
-  const [citySlug, setCitySlug] = useState('mexico-city');
+  const [citySlug, setCitySlug] = useState(toLocationSlug('Mexico City'));
 
   useEffect(() => {
     setMounted(true);
@@ -99,7 +91,7 @@ const FAQ = () => {
     try {
       const storedCity = localStorage.getItem('lastCity');
       if (storedCity) {
-        setCitySlug(storedCity);
+        setCitySlug(toLocationSlug(storedCity));
       }
     } catch (e) {
       // ignore if localStorage is unavailable
@@ -123,7 +115,7 @@ const FAQ = () => {
       window.removeEventListener('scroll', handleScroll);
     };
   }, [lastScrollY, router]);
-  const formattedCityName = formatCityNameFromSlug(citySlug);
+  const formattedCityName = displayLocationName(citySlug);
 
   const generalFAQs: FAQItemProps[] = [
     {
@@ -216,7 +208,7 @@ const FAQ = () => {
           <img
             src="/images/leftChevron.svg"
             className="mr-1 w-8 h-8 text-beaming-orange-light brightness-[1.3] hover:text-beaming-orange hover:cursor-pointer"
-            onClick={() => router.push(`/es/${citySlug}`)}
+            onClick={() => router.push(cityPath(citySlug, 'es'))}
           />
           <div className="flex items-end gap-3">
             <div className="w-[125px] overflow-hidden">
@@ -225,7 +217,7 @@ const FAQ = () => {
                 alt="Lafa's List"
                 width={240}
                 height={80}
-                onClick={() => router.push(`/es/${citySlug}`)}
+                onClick={() => router.push(cityPath(citySlug, 'es'))}
                 className="cursor-pointer max-w-none"
               />
             </div>
@@ -249,7 +241,7 @@ const FAQ = () => {
 
       <div className="container hidden px-6 py-6 text-beaming-orange-light">
         <button 
-          onClick={() => router.push(`/es/${citySlug}`)}
+          onClick={() => router.push(cityPath(citySlug, 'es'))}
           className="flex items-center hover:text-beaming-orange transition-colors"
         >
           <FaArrowLeft className="mr-2" />
@@ -297,7 +289,7 @@ const FAQ = () => {
         <div className="mt-12 pt-6 text-center">
           <p
             className="text-mist-white cursor-pointer hover:text-beaming-orange transition-colors"
-            onClick={() => router.push(`/es/${citySlug}`)}
+            onClick={() => router.push(cityPath(citySlug, 'es'))}
           >
             {language === 'es'
               ? 'Haz clic aquí para volver al inicio'

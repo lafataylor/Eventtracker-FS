@@ -35,12 +35,7 @@ export const format24HrTime = (date: Date) => {
   return `${hour}:${minute}`;
 };
 
-export const makeSlugFromName = (name: string) => {
-  name = name.toLowerCase();
-  name = name.replaceAll(' ', '');
-
-  return name;
-};
+export { toLocationSlug as makeSlugFromName } from './locationSlug';
 
 
 export const checkTokenExpiredStatus = (isAdmin: boolean): boolean => {
@@ -437,18 +432,19 @@ export const matchSortNameToColumnName = (sortBy: string, selectedColumn: string
 export const isStateCode = (location: String) =>
   Constants.validStates.includes(location.toUpperCase());
 
-export const formatLocationSlug = (slug: string): string => {
-  if (!slug) return '';
-  if (slug === 'general') return 'General';
-  return slug
-    .replace(/-/g, ' ')
-    .split(' ')
-    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
-    .join(' ');
-};
-
-export const normalizeLocationSlug = (slug: string): string =>
-  slug.toLowerCase().replace(/[-\s]/g, '');
+export {
+  displayLocationName as formatLocationSlug,
+  toLocationSlug as normalizeLocationSlug,
+  toLocationSlug,
+  displayLocationName,
+  locationSlugMatches,
+  cityPath,
+  isMexicoCity,
+  isSanFrancisco,
+  DEFAULT_CITY_NAME,
+  sharedEventCityPath,
+  isSharedEventPage,
+} from './locationSlug';
 
 export const extractLocationsFromEvents = (events: Event[]): string[] => {
   const locs = new Set<string>();

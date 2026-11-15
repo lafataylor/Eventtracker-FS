@@ -41,10 +41,11 @@ def carry_rejection_to_other_dates(a, b):
     """
     a_key, b_key = series_key(a), series_key(b)
     # Both sides in ONE series (two rows of one post with one title, a
-    # same-post pair): there are no "other dates of the same two posts", and
-    # spreading the verdict would reject every other pair of that post.
+    # same-post pair): spreading on THIS night would reject every other pair
+    # of that post (a roundup). Later nights of the same extras are the
+    # series — reject those without touching this night's other slides.
     if a_key == b_key:
-        return 0
+        return _carry_rejection_same_series_other_days(a, b)
     posts = [x for x in (a.shortcode, b.shortcode) if x]
     if len(posts) < 2:
         return 0
@@ -62,6 +63,36 @@ def carry_rejection_to_other_dates(a, b):
     return done
 
 
+def _carry_rejection_same_series_other_days(a, b):
+    """'Not duplicates' for two extra rows of one series: later nights of
+    those extras leave the queue, this night's other pairs do not.
+
+    Same-post twins used to come back every week of a recurring expansion
+    because carry refused same-series pairs outright (Klubnacht extras).
+    """
+    key = series_key(a)
+    verdict_days = {d for d in (_local_day(a), _local_day(b)) if d}
+    sc = a.shortcode or b.shortcode
+    if not sc:
+        return 0
+    skip = {a.id, b.id}
+    siblings = (EventMatch.objects.filter(status='pending',
+                                          event_a__shortcode=sc,
+                                          event_b__shortcode=sc)
+                .select_related('event_a', 'event_b'))
+    done = 0
+    for m in siblings:
+        if m.event_a_id in skip or m.event_b_id in skip:
+            continue
+        if series_key(m.event_a) != key or series_key(m.event_b) != key:
+            continue
+        if {_local_day(m.event_a), _local_day(m.event_b)} & verdict_days:
+            continue
+        m.status = 'rejected'
+        m.reviewed_at = timezone.now()
+        m.save(update_fields=['status', 'reviewed_at'])
+        done += 1
+    return done
 
 
 def decided_sibling_verdict(a, b):
@@ -140,7 +171,7 @@ def carry_keep_to_other_dates(keep, losers):
                 or occ.is_event is False or not occ.start_date):
             continue
         keepers.setdefault(_local_day(occ), occ)
-    done = 0
+    done = _carry_same_series_extras(keep)
     for loser in losers:
         if series_key(loser) == keep_key:
             continue
@@ -158,6 +189,42 @@ def carry_keep_to_other_dates(keep, losers):
             if EventMatch.objects.filter(between, status='rejected').exists():
                 continue
             keep_over(keeper, occ)
+            (EventMatch.objects.filter(between, status='pending')
+             .update(status='confirmed', reviewed_at=timezone.now()))
+            done += 1
+    return done
+
+
+def _carry_same_series_extras(keep):
+    """Hide re-scrape twins of `keep`'s series on later nights.
+
+    Two rows of one post on Friday, two more next Friday: a keep used to
+    skip them (same series_key, to avoid hiding an event behind itself).
+    Each later night still needs one listing; extras hide behind THAT
+    night's keeper.
+    """
+    from event.management.commands.detect_duplicates import completeness
+    keep_day = _local_day(keep)
+    by_day = {}
+    for occ in _series_occurrences(keep):
+        if occ.is_event is False or not occ.start_date:
+            continue
+        by_day.setdefault(_local_day(occ), []).append(occ)
+    done = 0
+    for day, rows in by_day.items():
+        if day == keep_day:
+            continue
+        visible = [r for r in rows if not r.suppressed and not r.is_duplicate]
+        if len(visible) < 2:
+            continue
+        visible.sort(key=lambda e: (completeness(e), -e.id), reverse=True)
+        day_keep, extras = visible[0], visible[1:]
+        for drop in extras:
+            between = (Q(event_a=day_keep, event_b=drop)
+                       | Q(event_a=drop, event_b=day_keep))
+            if EventMatch.objects.filter(between, status='rejected').exists():
+                continue
+            keep_over(day_keep, drop)
             (EventMatch.objects.filter(between, status='pending')
              .update(status='confirmed', reviewed_at=timezone.now()))
             done += 1

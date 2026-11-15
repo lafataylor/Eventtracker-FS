@@ -567,7 +567,7 @@ function EventCreate({ isEdit, onClose, account }: EventCreateProps) {
   const displayName = getDisplayName(updatedEvent as Event, isEdit);
 
   const handleCopyLink = () => {
-    const link = `eventtracker.lafaslist.com/event/share/${
+    const link = `https://lafaslist.com/event/share/${
       (updatedEvent as Event).id
     }/`;
     if (copy(link)) {

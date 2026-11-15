@@ -1,5 +1,6 @@
 import React from 'react';
 import { getApiBase } from '../utils/locations';
+import { cityPath } from '../utils/utils';
 
 interface Props {
   children: React.ReactNode;
@@ -91,8 +92,8 @@ class ErrorBoundary extends React.Component<Props, State> {
           Try again
         </button>
         <div className="flex flex-wrap gap-3 justify-center pt-2">
-          {[['Mexico City', '/mexico-city/'], ['Los Angeles', '/los-angeles/'],
-            ['Berlin', '/berlin/'], ['Bali', '/bali/']].map(([label, href]) => (
+          {[['Mexico City', `${cityPath('Mexico City')}/`], ['Los Angeles', `${cityPath('Los Angeles')}/`],
+            ['Berlin', `${cityPath('Berlin')}/`], ['Bali', `${cityPath('Bali')}/`]].map(([label, href]) => (
             <a
               key={href}
               href={href}

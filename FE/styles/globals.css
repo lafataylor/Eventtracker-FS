@@ -301,3 +301,23 @@ input:focus-visible {
 .animate-fade-in {
   animation: fadeIn 0.3s ease-out forwards;
 }
+
+/* Slight pop on every favorite-heart click. 2026-11-15: owner asked
+   for a small site-wide animation, not a pulse. */
+@keyframes heartPop {
+  0% {
+    transform: scale(1);
+  }
+  40% {
+    transform: scale(1.22);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+.animate-heart-pop {
+  display: inline-block;
+  animation: heartPop 0.09s ease-out;
+  transform-origin: center;
+}

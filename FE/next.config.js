@@ -6,15 +6,16 @@ const nextConfig = {
   },
   trailingSlash: true,
   async redirects() {
+    // Dashless city URLs — same rule as FE/utils/locationSlug.ts.
     return [
       {
         source: '/',
-        destination: '/mexico-city',
+        destination: '/mexicocity',
         permanent: true,
       },
       {
         source: '/es',
-        destination: '/es/mexico-city',
+        destination: '/es/mexicocity',
         permanent: true,
       },
     ];

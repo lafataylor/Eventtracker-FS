@@ -51,6 +51,7 @@ interface GroupPair {
 interface Group {
   key: number;
   soonest: string | null;
+  later_dates?: number;
   suggested_keep_id?: number;
   events: Event[];
   pairs: GroupPair[];
@@ -678,6 +679,7 @@ const Index = () => {
                       <span className="text-stone-gray text-sm">
                         {samePost ? 'same Instagram post' : `up to ${Math.round(best)}% match`}
                         {g.soonest ? ` · ${new Date(g.soonest + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}` : ''}
+                        {g.later_dates ? ` · ${g.later_dates} later date${g.later_dates === 1 ? '' : 's'} covered` : ''}
                       </span>
                       <span className="flex-1" />
                       <button

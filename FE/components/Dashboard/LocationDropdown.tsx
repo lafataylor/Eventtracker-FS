@@ -3,7 +3,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/router';
 import { FaChevronDown } from 'react-icons/fa';
-import { formatLocationSlug, normalizeLocationSlug } from '../../utils/utils';
+import { formatLocationSlug, normalizeLocationSlug, cityPath } from '../../utils/utils';
 
 interface LocationDropdownProps {
   currentLocation: string;
@@ -71,8 +71,7 @@ const LocationDropdown: React.FC<LocationDropdownProps> = ({
   };
 
   const handleNavigate = (slug: string) => {
-    const urlSlug = slug.toLowerCase().replace(/\s+/g, '-');
-    const path = language === 'es' ? `/es/${urlSlug}` : `/${urlSlug}`;
+    const path = cityPath(slug, language);
     setIsOpen(false);
     router.push(path);
   };

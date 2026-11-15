@@ -192,14 +192,23 @@ const EventsListItem = ({
     }
   };
 
+  const openEvent = () => {
+    deleteItemsInStack();
+    showEvent(event)(dispatch);
+  };
+
   return (
     <tr
       className={
-        'w-fit flex flex-row ' +
+        'w-fit flex flex-row hover:cursor-pointer hover:bg-slate-black/40 ' +
         (isLast ? '' : 'border-b-[1px] border-slate-black')
       }
+      onClick={openEvent}
     >
-      <td className="w-[50px] border-r-[1px] border-slate-black flex justify-center items-center p-3">
+      <td
+        className="w-[50px] border-r-[1px] border-slate-black flex justify-center items-center p-3"
+        onClick={(e) => e.stopPropagation()}
+      >
         <label className="custom_checkbox relative">
           <input
             type="checkbox"
@@ -215,14 +224,10 @@ const EventsListItem = ({
             <td
               key={`column_value_${index}`}
               className={
-                'border-r-[1px] w-[200px] border-slate-black flex items-center justify-center p-3 hover:cursor-pointer ' +
+                'border-r-[1px] w-[200px] border-slate-black flex items-center justify-center p-3 ' +
                 (column in hiddenColumns.columns ? 'hidden ' : '') +
                 (index === 0 && isHighlighted ? 'bg-beaming-orange' : '')
               }
-              onClick={() => {
-                deleteItemsInStack();
-                showEvent(event)(dispatch);
-              }}
             >
               <div className="flex flex-col items-center gap-1">
                 <img

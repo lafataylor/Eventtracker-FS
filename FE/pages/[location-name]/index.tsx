@@ -5,7 +5,7 @@ import EventDetails from '../../components/Dashboard/EventDetails';
 import { closePopup } from '../../store/actions/popup';
 import { BiSortAlt2 } from 'react-icons/bi';
 import EventService from '../../services/lib/event';
-import { formatDate, formatLocationSlug, isStateCode } from '../../utils/utils';
+import { formatDate, displayLocationName, isSanFrancisco, locationSlugMatches, isStateCode } from '../../utils/utils';
 import { fetchAllLocations } from '../../utils/locations';
 import { eventSpanOverlapsWindow } from '../../utils/eventDateSpan';
 import { Option } from '../../interface/filterInterface';
@@ -23,6 +23,7 @@ import Image from 'next/image';
 import UserDropdown from '../../components/Dashboard/UserDropdown';
 import LocationDropdown from '../../components/Dashboard/LocationDropdown';
 import ViewModeToggle from '../../components/Dashboard/ViewModeToggle';
+import { useViewMode } from '../../utils/viewMode';
 import Head from 'next/head';
 import { GetServerSideProps, NextPage } from 'next';
 
@@ -63,7 +64,7 @@ const LocationPage: NextPage<LocationPageProps> = ({ locationName, locations: in
   const [activeDropdown, setActiveDropdown] = useState<string>('');
   const [locations, setLocations] = useState<string[]>(initialLocations);
 
-  const [isList, setIsList] = useState(false);
+  const [viewMode, setViewMode] = useViewMode();
   const [showSignupToast, setShowSignupToast] = useState(false);
   const [showBackdropBlur, setShowBackdropBlur] = useState(false);
 
@@ -165,23 +166,19 @@ const LocationPage: NextPage<LocationPageProps> = ({ locationName, locations: in
       
       if (!event.poster.forLocation && !event.forLocation) return false;
       
-      const normalizedLocationName = decodedLocationName.toLowerCase();
       const eventLocations = event.forLocation
         ? event.forLocation
             .split(',')
-            .map(loc => loc.trim().toLowerCase())
+            .map(loc => loc.trim())
         : (event.poster.forLocation
             ? event.poster.forLocation
                 .split(',')
-                .map(loc => loc.trim().toLowerCase())
+                .map(loc => loc.trim())
             : []);
-        
-      // Check if any of the event locations match the normalized location name
-      // This allows for case-insensitive matching and variations in formatting
-      return eventLocations.some(loc => 
-        loc === normalizedLocationName || 
-        loc.replace('-', ' ') === normalizedLocationName ||
-        normalizedLocationName.replace('-', ' ') === loc
+
+      // Dashless URL /losangeles matches stored "Los Angeles" and old /los-angeles.
+      return eventLocations.some(loc =>
+        locationSlugMatches(loc, decodedLocationName)
       );
     });
   };
@@ -779,8 +776,8 @@ const LocationPage: NextPage<LocationPageProps> = ({ locationName, locations: in
   const [isAtTop, setIsAtTop] = useState(true);
 
   const formattedLocationName = useMemo(() => {
-    return formatLocationSlug(locationName);
-  }, [locationName]);
+    return displayLocationName(locationName, locations);
+  }, [locationName, locations]);
 
   useEffect(() => {
     const handleScroll = () => {
@@ -839,10 +836,10 @@ const LocationPage: NextPage<LocationPageProps> = ({ locationName, locations: in
         {/* Open Graph Meta Tags */}
         <meta property="og:title" content={locationName ? `lafaslist | ${formattedLocationName}` : "lafaslist"} />
         <meta property="og:description" content="Lafa's List is a comprehensive list of events, venues, and artists in your city. Find the best events, venues, and artists in your city." />
-        <meta property="og:image" content={locationName?.includes('san-fran') ? '/sf_social_share_preview.jpg' : '/social_share_preview.jpg'} />
+        <meta property="og:image" content={isSanFrancisco(locationName) ? '/sf_social_share_preview.jpg' : '/social_share_preview.jpg'} />
         <meta property="og:image:width" content="1200" />
         <meta property="og:image:height" content="630" />
-        <meta property="og:image:alt" content={locationName?.includes('san-fran') ? 'San Francisco Events on Lafa\'s List' : 'Events on Lafa\'s List'} />
+        <meta property="og:image:alt" content={isSanFrancisco(locationName) ? 'San Francisco Events on Lafa\'s List' : 'Events on Lafa\'s List'} />
         <meta property="og:url" content={locationName ? `https://lafaslist.com/${locationName}` : 'https://lafaslist.com'} />
         <meta property="og:type" content="website" />
         <meta property="og:site_name" content="lafaslist" />
@@ -850,7 +847,7 @@ const LocationPage: NextPage<LocationPageProps> = ({ locationName, locations: in
         {/* Twitter Meta Tags */}
         <meta name="twitter:title" content={locationName ? `lafaslist | ${formattedLocationName}` : "lafaslist"} />
         <meta name="twitter:description" content="Lafa's List is a comprehensive list of events, venues, and artists in your city. Find the best events, venues, and artists in your city." />
-        <meta name="twitter:image" content={locationName?.includes('san-fran') ? '/sf_social_share_preview.jpg' : '/social_share_preview.jpg'} />
+        <meta name="twitter:image" content={isSanFrancisco(locationName) ? '/sf_social_share_preview.jpg' : '/social_share_preview.jpg'} />
         <meta name="twitter:card" content="summary_large_image" />
         
         {/* Debug info - remove this after testing */}
@@ -861,8 +858,8 @@ const LocationPage: NextPage<LocationPageProps> = ({ locationName, locations: in
               console.log('Location Name: ${locationName}');
               console.log('Formatted Location Name: ${formattedLocationName}');
               console.log('Page URL: ${locationName ? `https://lafaslist.com/${locationName}` : 'https://lafaslist.com'}');
-              console.log('Is San Francisco: ${locationName?.includes('san-fran')}');
-              console.log('Social Share Image: ${locationName?.includes('san-fran') ? '/sf_social_share_preview.jpg' : '/social_share_preview.jpg'}');
+              console.log('Is San Francisco: ${isSanFrancisco(locationName)}');
+              console.log('Social Share Image: ${isSanFrancisco(locationName) ? '/sf_social_share_preview.jpg' : '/social_share_preview.jpg'}');
             `,
           }}
         />
@@ -922,8 +919,9 @@ const LocationPage: NextPage<LocationPageProps> = ({ locationName, locations: in
         </div>
         <div className="flex flex-1 justify-between md:justify-end gap-4 z-[2] pl-6 pr-0 max-w-[94vw] md:max-w-[calc(100vw-400px)] md:pr-6 ex:relative ex:px-0 ex:pr-0">
           <ViewModeToggle
-            isList={isList}
-            onChange={setIsList}
+            mode={viewMode}
+            onChange={setViewMode}
+            layout="desktop"
             className="hidden md:inline-flex"
           />
           <SearchBar
@@ -937,8 +935,9 @@ const LocationPage: NextPage<LocationPageProps> = ({ locationName, locations: in
           />
           <div className="flex items-center gap-2">
             <ViewModeToggle
-              isList={isList}
-              onChange={setIsList}
+              mode={viewMode}
+              onChange={setViewMode}
+              layout="mobile"
               className="md:hidden"
             />
             <DashboardFilter
@@ -1059,7 +1058,7 @@ const LocationPage: NextPage<LocationPageProps> = ({ locationName, locations: in
             highlightedFields={highlightedFields}
             onClick={() => {}}
             isLoading={search.loading}
-            isInListView={isList}
+            viewMode={viewMode}
             locationName={locationName as string}
           />
         ) : isDateFilter && filteredEvents ? (
@@ -1073,7 +1072,7 @@ const LocationPage: NextPage<LocationPageProps> = ({ locationName, locations: in
             highlightedFields={highlightedFields}
             onClick={() => {}}
             isLoading={isFetchingEvents}
-            isInListView={isList}
+            viewMode={viewMode}
             locationName={locationName as string}
           />
         ) : (
@@ -1122,7 +1121,7 @@ const LocationPage: NextPage<LocationPageProps> = ({ locationName, locations: in
                   highlightedFields={highlightedFields}
                   onClick={() => setLastClickedSection('today')}
                   isLoading={isTodayLoading}
-                  isInListView={isList}
+                  viewMode={viewMode}
                   locationName={locationName as string}
                 />
               );
@@ -1155,7 +1154,7 @@ const LocationPage: NextPage<LocationPageProps> = ({ locationName, locations: in
                     highlightedFields={highlightedFields}
                     onClick={() => setLastClickedSection('tomorrow')}
                     isLoading={isTomorrowLoading}
-                    isInListView={isList}
+                    viewMode={viewMode}
                     locationName={locationName as string}
                   />
                 );
@@ -1187,7 +1186,7 @@ const LocationPage: NextPage<LocationPageProps> = ({ locationName, locations: in
                       highlightedFields={highlightedFields}
                       onClick={() => setLastClickedSection(`day${day}`)}
                       isLoading={isWeekLoading}
-                      isInListView={isList}
+                      viewMode={viewMode}
                       locationName={locationName as string}
                     />
                   );
@@ -1217,7 +1216,7 @@ const LocationPage: NextPage<LocationPageProps> = ({ locationName, locations: in
                       highlightedFields={highlightedFields}
                       onClick={() => setLastClickedSection(`day${day}`)}
                       isLoading={isWeekLoading}
-                      isInListView={isList}
+                      viewMode={viewMode}
                       locationName={locationName as string}
                     />
                   );
@@ -1247,7 +1246,7 @@ const LocationPage: NextPage<LocationPageProps> = ({ locationName, locations: in
                       highlightedFields={highlightedFields}
                       onClick={() => setLastClickedSection(`day${day}`)}
                       isLoading={isWeekLoading}
-                      isInListView={isList}
+                      viewMode={viewMode}
                       locationName={locationName as string}
                     />
                   );
@@ -1277,7 +1276,7 @@ const LocationPage: NextPage<LocationPageProps> = ({ locationName, locations: in
                       highlightedFields={highlightedFields}
                       onClick={() => setLastClickedSection(`day${day}`)}
                       isLoading={isWeekLoading}
-                      isInListView={isList}
+                      viewMode={viewMode}
                       locationName={locationName as string}
                     />
                   );
@@ -1307,7 +1306,7 @@ const LocationPage: NextPage<LocationPageProps> = ({ locationName, locations: in
                       highlightedFields={highlightedFields}
                       onClick={() => setLastClickedSection(`day${day}`)}
                       isLoading={isWeekLoading}
-                      isInListView={isList}
+                      viewMode={viewMode}
                       locationName={locationName as string}
                     />
                   );
@@ -1335,7 +1334,7 @@ const LocationPage: NextPage<LocationPageProps> = ({ locationName, locations: in
                   highlightedFields={highlightedFields}
                   onClick={() => setLastClickedSection('nextWeek')}
                   isLoading={isWeekLoading}
-                  isInListView={isList}
+                  viewMode={viewMode}
                   locationName={locationName as string}
                 />
               );
@@ -1356,7 +1355,7 @@ const LocationPage: NextPage<LocationPageProps> = ({ locationName, locations: in
                   highlightedFields={highlightedFields}
                   onClick={() => setLastClickedSection('afterNextWeek')}
                   isLoading={isYearLoading}
-                  isInListView={isList}
+                  viewMode={viewMode}
                   locationName={locationName as string}
                   spaceAfter={true}
                 />
