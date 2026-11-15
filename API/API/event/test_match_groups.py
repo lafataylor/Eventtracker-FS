@@ -14,7 +14,9 @@ Essex Club Thursday, five accounts, judged once per week for ten weeks).
 Rules pinned here:
 * a group is every pending pair on one local day connected through shared
   events, plus events on that day carrying the identical flyer image;
-* the same image on a different day does NOT join (that is the series);
+* the same image on a different day from different posts does NOT join;
+* later weeks of the SAME posts are one review group (soonest), not a copy
+  for every Thursday (Toledo Rooftop / Ololo, owner 2026-11-14);
 * groups list soonest first and page with offset;
 * keep one / keep all / delete all act on the whole group at once;
 * a verdict on one date carries to the other dates of the same posts.
@@ -106,13 +108,53 @@ class GroupingTests(GroupFixtureMixin, TestCase):
         self.assertEqual({e['id'] for e in data['groups'][0]['events']}, {a.id, b.id, c.id, d.id})
 
     def test_the_same_flyer_on_another_day_does_not_join(self):
-        # That is the series, handled elsewhere; two Thursdays are two groups.
+        # Different posts, even with the same artwork: two Thursdays are two
+        # groups. Same two posts on two Thursdays collapse (see below).
         a = self._ev('Thu Thu', thumb='https://img/same.jpg')
         b = self._ev('Essex Thursday')
         c = self._ev('Thu Thu', day=self.next_week, post='PThuThu2', thumb='https://img/same.jpg')
         d = self._ev('Essex Thursday', day=self.next_week, post='PEssex2')
         self._pair(a, b); self._pair(c, d)
         self.assertEqual(self._groups()['total_groups'], 2)
+
+    def test_later_weeks_of_the_same_posts_are_one_review_group(self):
+        # Owner 2026-11-14: "I keep seeing the same groups again and again".
+        # The Essex Club Thursday is two posts expanded weekly; a verdict on
+        # this week already covers next week, so next week must not sit on
+        # the page as a second copy of the same flyers.
+        a1, b1 = (self._ev('Thu Thu', post='PA'),
+                  self._ev('Essex Thursday', post='PB'))
+        self._ev('Thu Thu', day=self.next_week, post='PA')
+        self._ev('Essex Thursday', day=self.next_week, post='PB')
+        self._pair(a1, b1)
+        self._pair(
+            Event.objects.get(shortcode='PA', start_date__date=self.next_week),
+            Event.objects.get(shortcode='PB', start_date__date=self.next_week))
+        data = self._groups()
+        self.assertEqual(data['total_groups'], 1)
+        g = data['groups'][0]
+        self.assertEqual({e['id'] for e in g['events']}, {a1.id, b1.id})
+        self.assertEqual(g['later_dates'], 1)
+
+    def test_a_weekend_cluster_does_not_repeat_next_week(self):
+        # Toledo Rooftop screenshots 2026-11-14: Sat tiki + Sun golden hour,
+        # then the same two posts next weekend. Fuzzy joins adjacent days
+        # into one group; the later weekend must not sit on the page again.
+        sat, sun = self.day, self.day + timedelta(days=1)
+        next_sat = self.next_week
+        next_sun = self.next_week + timedelta(days=1)
+        a1 = self._ev('Smoky Tiki', day=sat, post='PTIKI')
+        b1 = self._ev('Golden Hour', day=sun, post='PGOLD')
+        self._ev('Smoky Tiki', day=next_sat, post='PTIKI')
+        self._ev('Golden Hour', day=next_sun, post='PGOLD')
+        self._pair(a1, b1)
+        self._pair(
+            Event.objects.get(shortcode='PTIKI', start_date__date=next_sat),
+            Event.objects.get(shortcode='PGOLD', start_date__date=next_sun))
+        data = self._groups()
+        self.assertEqual(data['total_groups'], 1)
+        self.assertEqual({e['id'] for e in data['groups'][0]['events']}, {a1.id, b1.id})
+        self.assertEqual(data['groups'][0]['later_dates'], 1)
 
     def test_groups_list_soonest_first_and_page_by_offset(self):
         a, b = self._ev('later A', day=self.next_week), self._ev('later B', day=self.next_week)
@@ -295,6 +337,33 @@ class SameSeriesPairTests(GroupFixtureMixin, TestCase):
         from event.verdicts import decided_sibling_verdict
         self.ab.status = 'rejected'; self.ab.reviewed_at = timezone.now(); self.ab.save()
         self.assertIsNone(decided_sibling_verdict(self.a, self.c))
+
+    def test_keeping_an_extra_row_hides_extras_on_later_dates(self):
+        # Same post, two rows per night (a re-scrape twin). A keep on this
+        # Friday used to leave next Friday's twin in the queue — the carry
+        # skipped same-series pairs so it would not hide an event behind
+        # itself. The later night still has two rows; hide the extra behind
+        # THAT night's keeper, not behind this Friday.
+        a2 = self._ev('Klubnacht', day=self.next_week, post='PSAME')
+        b2 = self._ev('Klubnacht', day=self.next_week, post='PSAME')
+        later = self._pair(a2, b2, score=0.0, match_type='exact_link')
+        self._resolve_pair(self.ab, 'keep_a' if self.ab.event_a_id == self.a.id else 'keep_b')
+        later_rows = list(Event.objects.filter(id__in=[a2.id, b2.id]))
+        visible = [e for e in later_rows if not e.suppressed]
+        hidden = [e for e in later_rows if e.suppressed]
+        self.assertEqual(len(visible), 1, 'next Friday must still have one listing')
+        self.assertEqual(len(hidden), 1)
+        self.assertEqual(hidden[0].canonical_id, visible[0].id)
+        self.assertEqual(EventMatch.objects.get(id=later.id).status, 'confirmed')
+
+    def test_not_duplicates_clears_later_dates_of_the_same_extras(self):
+        a2 = self._ev('Klubnacht', day=self.next_week, post='PSAME')
+        b2 = self._ev('Klubnacht', day=self.next_week, post='PSAME')
+        later = self._pair(a2, b2, score=0.0, match_type='exact_link')
+        self._resolve_pair(self.ab, 'not_duplicate')
+        self.assertEqual(EventMatch.objects.get(id=later.id).status, 'rejected')
+        self.assertEqual(EventMatch.objects.get(id=self.ac.id).status, 'pending')
+        self.assertEqual(Event.objects.filter(suppressed=True).count(), 0)
 
 
 class KeeperInheritsHiddenRowsTests(GroupFixtureMixin, TestCase):

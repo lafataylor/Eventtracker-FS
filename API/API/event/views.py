@@ -1461,14 +1461,55 @@ def _local_day(event):
     return timezone.localtime(event.start_date).date() if event.start_date else None
 
 
+def _group_posts(g, events):
+    """Instagram posts in a review group. Later weeks of the same posts are
+    the same cluster (Toledo Rooftop Sat/Sun, Ololo's eight cards, owner
+    screenshots 2026-11-14); one decision already carries, so the page
+    should not list them again."""
+    posts = set()
+    for i in g['ids']:
+        e = events[i]
+        posts.add(e.shortcode or e.orig_link or ('id', e.id))
+    return frozenset(posts)
+
+
+def _collapse_later_weeks(ordered, events):
+    """Keep the soonest group of each set of posts; count skipped later weeks.
+
+    A later cluster whose posts are the same set, or a subset (Saint-Jacques
+    with two extra rows one week), is the series, not a new decision.
+    Different posts with the same artwork stay separate — that is a new
+    flyer, and Happy Hour at two venues must not vanish into one card.
+    """
+    shown = []
+    later_dates = []
+    collapsed = []
+    for g in ordered:
+        posts = _group_posts(g, events)
+        twin = None
+        for i, prev in enumerate(shown):
+            if posts <= prev or prev <= posts:
+                twin = i
+                break
+        if twin is not None:
+            later_dates[twin] += 1
+            continue
+        shown.append(posts)
+        later_dates.append(0)
+        collapsed.append(g)
+    return collapsed, later_dates
+
+
 @api_view(["GET"])
 def get_event_match_groups(request):
     """The review page as GROUPS: every reviewable pending pair on one local
     day connected through shared events, plus events on that day carrying the
     identical flyer image. Measured 2026-09-18: 137 pairs were 76 groups, 21
     of them with 3 to 6 events, so one event was judged up to five times.
-    The same image on another day does NOT join: that is the series. Soonest
-    first; `offset`/`limit` page through the groups.
+    Later weeks of the SAME posts are not listed: a verdict already carries
+    (Toledo Rooftop / Ololo / Saint-Jacques, owner 2026-11-14). Different
+    posts with the same artwork stay separate. Soonest first; `offset`/`limit`
+    page through the groups.
     """
     try:
         limit = max(1, min(int(request.GET.get("limit", 20)), 100))
@@ -1520,14 +1561,16 @@ def get_event_match_groups(request):
             return (not upcoming, min(upcoming) if upcoming else today, min(g['ids']))
 
         ordered = sorted(groups.values(), key=soonest)
+        ordered, later_dates = _collapse_later_weeks(ordered, events)
         page = ordered[offset:offset + limit]
         data = []
-        for g in page:
+        for idx, g in enumerate(page):
             # Fuller extracted text wins a field-count tie (owner 2026-11-14).
-            suggested = max(g['ids'], key=lambda i: (completeness(events[i]), -i))
+            suggested = max(g['ids'], key=lambda eid: (completeness(events[eid]), -eid))
             data.append({
                 "key": min(g['ids']),
                 "soonest": (soonest(g)[1].isoformat() if not soonest(g)[0] else None),
+                "later_dates": later_dates[offset + idx],
                 "suggested_keep_id": suggested,
                 "events": [EventSerializer(events[i]).data
                            for i in sorted(g['ids'], key=lambda i: (events[i].start_date is None,

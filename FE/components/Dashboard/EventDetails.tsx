@@ -29,7 +29,10 @@ import { Constants } from '../../utils/constants';
 import {
   formatLongDate,
   formatTime,
+  isMexicoCity,
+  isSharedEventPage,
   makeSlugFromName,
+  sharedEventCityPath,
 } from '../../utils/utils';
 import ImageDialog from './ImageDialog';
 import { showMap } from '../../store/actions/mapDialog';
@@ -46,6 +49,7 @@ import InfoOverlay from '../Admin/InfoOverlay';
 import Spinner from '../Spinner';
 import EventService from '../../services/lib/event';
 import { favoriteEvent } from '../../store/actions/event';
+import { HEART_POP_MS, useHeartPop } from '../../utils/heartPop';
 
 interface EventDetailsProps {
   isEdit: boolean;
@@ -59,12 +63,13 @@ function EventDetails({ isEdit, locationName }: EventDetailsProps) {
 
   // Helper function to determine currency symbol
   const getCurrencySymbol = () => {
-    if (locationName === 'mexico-city') {
+    if (isMexicoCity(locationName)) {
       return 'MXN';
     }
     return '$';
   };
 
+  const { pop, heartPopClass, heartPopKey } = useHeartPop();
   const [favoriteStatusJustEdited, setFavoriteStatusJustEdited] =
     useState(false);
   const [hasNewFavoritedValue, setHasNewFavoritedValue] = useState(false);
@@ -92,26 +97,6 @@ function EventDetails({ isEdit, locationName }: EventDetailsProps) {
   useEffect(() => {
     setIsMobile(window.innerWidth < 600);
   }, []);
-
-  useEffect(() => {
-    const handleEscapeKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        //console.log("Escape key pressed");
-        makePageScrollable();
-        setIsMapDialogOpen(false);
-        hideImage()(dispatch);
-        hideEvent()(dispatch);
-        hideFeedbackDialog()(dispatch);
-      }
-    };
-
-    document.addEventListener('keydown', handleEscapeKey);
-
-    // Cleanup the event listener when component unmounts
-    return () => {
-      document.removeEventListener('keydown', handleEscapeKey);
-    };
-  }, [dispatch]); // Only re-run if dispatch changes
 
   const formatProperty = (propertyVal: any) => {
     if (propertyVal) {
@@ -147,6 +132,38 @@ function EventDetails({ isEdit, locationName }: EventDetailsProps) {
       body.style.overflow = 'auto';
     }
   };
+
+  // Shared-link landings sit on /event/share/:id with Home (Mexico City)
+  // underneath. Closing should go to the event's own city page instead.
+  const closeDetails = () => {
+    setNewImageUrl(null);
+    makePageScrollable();
+    setIsMapDialogOpen(false);
+    hideImage()(dispatch);
+    hideFeedbackDialog()(dispatch);
+    const event = eventDetailsDialog.event;
+    hideEvent()(dispatch);
+    if (!event || !isSharedEventPage(router.pathname)) return;
+    const language =
+      event.viewing_language === 'es' ||
+      (typeof window !== 'undefined' && localStorage.getItem('language') === 'es')
+        ? 'es'
+        : 'en';
+    router.replace(sharedEventCityPath(event, language));
+  };
+
+  useEffect(() => {
+    const handleEscapeKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        closeDetails();
+      }
+    };
+
+    document.addEventListener('keydown', handleEscapeKey);
+    return () => {
+      document.removeEventListener('keydown', handleEscapeKey);
+    };
+  }, [dispatch, router.pathname, eventDetailsDialog.event]);
 
   const formattedDate = (start_date: string) => {
     if (start_date) {
@@ -425,7 +442,7 @@ function EventDetails({ isEdit, locationName }: EventDetailsProps) {
   const displayName = getDisplayName(eventDetailsDialog.event, isEdit);
 
   const handleCopyLink = () => {
-    const link = `eventtracker.lafaslist.com/event/share/${
+    const link = `https://lafaslist.com/event/share/${
       (eventDetailsDialog.event as Event).id
     }/`;
     if (copy(link)) {
@@ -452,6 +469,7 @@ function EventDetails({ isEdit, locationName }: EventDetailsProps) {
   };
 
   async function handleFavoriteClick(id: number): Promise<void> {
+    pop();
     if (!auth.isUserLoggedIn) {
       router.push('/login'); // Redirect to login if not logged in
       return;
@@ -470,10 +488,11 @@ function EventDetails({ isEdit, locationName }: EventDetailsProps) {
       setFavoriteStatusJustEdited(false);
       setHasNewFavoritedValue(true);
       setIsFavorite(true);
-    }, 1000);
+    }, HEART_POP_MS);
   }
 
   async function handleUnfavoriteClick(id: number): Promise<void> {
+    pop();
     if (!auth.isUserLoggedIn) {
       router.push('/login'); // Redirect to login if not logged in
       return;
@@ -491,7 +510,7 @@ function EventDetails({ isEdit, locationName }: EventDetailsProps) {
       setFavoriteStatusJustEdited(false);
       setHasNewFavoritedValue(true);
       setIsFavorite(false);
-    }, 1000);
+    }, HEART_POP_MS);
   }
 
   function handleImageEdit(id: number) {
@@ -525,8 +544,7 @@ function EventDetails({ isEdit, locationName }: EventDetailsProps) {
       <div
         className="fixed top-0 left-0   z-20 overflow-y-auto  w-full h-full  backdrop-blur-sm"
         onClick={() => {
-          makePageScrollable();
-          hideEvent()(dispatch);
+          closeDetails();
         }}
       >
         <div
@@ -542,20 +560,22 @@ function EventDetails({ isEdit, locationName }: EventDetailsProps) {
             </p>
             <FiX
               onClick={() => {
-                setNewImageUrl(null);
-                makePageScrollable();
-                hideEvent()(dispatch);
+                closeDetails();
               }}
               className="flex flex-shrink-0 justify-end w-5 h-5 lg:w-7 lg:h-7 hover:cursor-pointer text-white"
             />
           </div>
           <span className="text-beaming-orange md:hidden flex-1 mt-[-16px] mb-[18px]">
             {favoriteStatusJustEdited ? (
-              <FaHeart className="w-6 h-6 text-beaming-orange animate-pulse" />
+              <FaHeart
+                key={heartPopKey}
+                className="w-6 h-6 text-beaming-orange animate-heart-pop"
+              />
             ) : hasNewFavoritedValue ? (
               isFavorite ? (
                 <FaHeart
-                  className="w-6 h-6 text-beaming-orange "
+                  key={heartPopKey}
+                  className={`w-6 h-6 text-beaming-orange ${heartPopClass}`}
                   onClick={(e) => {
                     e.stopPropagation();
                     handleUnfavoriteClick(eventDetailsDialog.event.id);
@@ -563,7 +583,8 @@ function EventDetails({ isEdit, locationName }: EventDetailsProps) {
                 />
               ) : (
                 <FaRegHeart
-                  className="w-6 h-6 text-beaming-orange "
+                  key={heartPopKey}
+                  className={`w-6 h-6 text-beaming-orange ${heartPopClass}`}
                   onClick={(e) => {
                     e.stopPropagation();
                     handleFavoriteClick(eventDetailsDialog.event.id);
@@ -572,7 +593,8 @@ function EventDetails({ isEdit, locationName }: EventDetailsProps) {
               )
             ) : eventDetailsDialog.event.is_favorite ? (
               <FaHeart
-                className="w-6 h-6 text-beaming-orange "
+                key={heartPopKey}
+                className={`w-6 h-6 text-beaming-orange ${heartPopClass}`}
                 onClick={(e) => {
                   e.stopPropagation();
                   handleUnfavoriteClick(eventDetailsDialog.event.id);
@@ -580,7 +602,8 @@ function EventDetails({ isEdit, locationName }: EventDetailsProps) {
               />
             ) : (
               <FaRegHeart
-                className="w-6 h-6 text-beaming-orange "
+                key={heartPopKey}
+                className={`w-6 h-6 text-beaming-orange ${heartPopClass}`}
                 onClick={(e) => {
                   e.stopPropagation();
                   handleFavoriteClick(eventDetailsDialog.event.id);
@@ -729,11 +752,15 @@ function EventDetails({ isEdit, locationName }: EventDetailsProps) {
                   {!isEdit && (
                     <div className="flex items-center gap-3 mt-[10px] hidden md:flex hover:cursor-pointer">
                       {favoriteStatusJustEdited ? (
-                        <FaHeart className="w-6 h-6 text-beaming-orange animate-pulse" />
+                        <FaHeart
+                          key={heartPopKey}
+                          className="w-6 h-6 text-beaming-orange animate-heart-pop"
+                        />
                       ) : hasNewFavoritedValue ? (
                         isFavorite ? (
                           <FaHeart
-                            className="w-6 h-6 text-beaming-orange "
+                            key={heartPopKey}
+                            className={`w-6 h-6 text-beaming-orange ${heartPopClass}`}
                             onClick={(e) => {
                               e.stopPropagation();
                               handleUnfavoriteClick(
@@ -743,7 +770,8 @@ function EventDetails({ isEdit, locationName }: EventDetailsProps) {
                           />
                         ) : (
                           <FaRegHeart
-                            className="w-6 h-6 text-beaming-orange "
+                            key={heartPopKey}
+                            className={`w-6 h-6 text-beaming-orange ${heartPopClass}`}
                             onClick={(e) => {
                               e.stopPropagation();
                               handleFavoriteClick(eventDetailsDialog.event.id);
@@ -752,7 +780,8 @@ function EventDetails({ isEdit, locationName }: EventDetailsProps) {
                         )
                       ) : eventDetailsDialog.event.is_favorite ? (
                         <FaHeart
-                          className="w-6 h-6 text-beaming-orange "
+                          key={heartPopKey}
+                          className={`w-6 h-6 text-beaming-orange ${heartPopClass}`}
                           onClick={(e) => {
                             e.stopPropagation();
                             handleUnfavoriteClick(eventDetailsDialog.event.id);
@@ -760,7 +789,8 @@ function EventDetails({ isEdit, locationName }: EventDetailsProps) {
                         />
                       ) : (
                         <FaRegHeart
-                          className="w-6 h-6 text-beaming-orange "
+                          key={heartPopKey}
+                          className={`w-6 h-6 text-beaming-orange ${heartPopClass}`}
                           onClick={(e) => {
                             e.stopPropagation();
                             handleFavoriteClick(eventDetailsDialog.event.id);

@@ -395,7 +395,7 @@ def upload_image(request):
         file_name = image.name
             
         try:
-            image_url = saveImage("-1", "admin", file_name, image_path, "https://eventtracker.lafaslist.com")
+            image_url = saveImage("-1", "admin", file_name, image_path, "https://lafaslist.com")
             return Success({"image_url": image_url})
         except Exception as e:
             return ServerProcessingError(message="An error occurred while saving the image: "+str(e))

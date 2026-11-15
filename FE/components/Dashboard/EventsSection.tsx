@@ -9,6 +9,7 @@ import { useStore } from '../../store/store';
 import NextImage from 'next/image';
 import { APIProvider, Map, AdvancedMarker, useMap } from '@vis.gl/react-google-maps';
 import { geocodeLocation } from '../../utils/geocode';
+import { ViewMode } from '../../utils/viewMode';
 
 interface EventsSectionProps {
   title: string;
@@ -29,6 +30,7 @@ interface EventsSectionProps {
   language?: string;
   isShareable?: boolean;
   isInListView?: boolean;
+  viewMode?: ViewMode;
   locationName?: string;
   sectionDayStartMs?: number;
 }
@@ -141,9 +143,15 @@ const EventsSection = ({
   language,
   isShareable,
   isInListView,
+  viewMode,
   locationName,
   sectionDayStartMs,
 }: EventsSectionProps) => {
+  const mode: ViewMode = viewMode ?? (isInListView ? 'list' : 'flyer');
+  const isList = mode === 'list';
+  const isBoard = mode === 'board';
+  const isMasonry = mode === 'masonry';
+  const isImageTile = isBoard || isMasonry;
   const [store, dispatch] = useStore();
   const [isExpanded, setIsExpanded] = useState(defaultIsExpanded ?? false);
   const [userEmail, setUserEmail] = useState('');
@@ -303,7 +311,7 @@ const EventsSection = ({
   }, [isMapView, events]);
 
   return (
-    <div className={`flex flex-col ${spaceAfter ? 'pb-10' : ''} ${isInListView ? isMapView ? 'mb-0' : 'mb-4' : ''}`}>
+    <div className={`flex flex-col ${spaceAfter ? 'pb-10' : ''} ${isList || isImageTile ? isMapView ? 'mb-0' : 'mb-4' : ''}`}>
       <div
         onClick={() => {
           setIsExpanded(!isExpanded);
@@ -338,7 +346,7 @@ const EventsSection = ({
               onClick={(e) => {
                 e.stopPropagation(); // Prevent triggering the onClick for expanding
                 navigator.clipboard.writeText(
-                  `https://eventtracker.lafaslist.com/favorites/?email=${userEmail}&name=${userFirstName}`
+                  `https://lafaslist.com/favorites/?email=${userEmail}&name=${userFirstName}`
                 );
                 setLinkCopied(true);
                 setTimeout(() => {
@@ -365,12 +373,12 @@ const EventsSection = ({
         </div>
       </div>
       {isExpanded ? (
-        <div className={`-mt-2 rounded-b-xl overflow-clip relative z-0 ${isInListView && events?.length ? 'p-0 pt-5' : 'p-6 pt-8'} ${isMapView ? 'p-0 pt-0 mb-8' : ''}`}>
+        <div className={`-mt-2 rounded-b-xl overflow-clip relative z-0 ${(isList || isImageTile) && events?.length ? 'p-0 pt-5' : 'p-6 pt-8'} ${isMapView ? 'p-0 pt-0 mb-8' : ''}`}>
           <div
             className={
-              'w-full h-full absolute top-0 left-0 opacity-30  ' +
+              'w-full h-full absolute top-0 left-0 opacity-30 pointer-events-none ' +
               (isAlt ? 'bg-beaming-orange' : 'bg-beaming-orange') +
-              (isInListView && events?.length ? 'bg-none' : ' bg-stone-gray ')
+              ((isList || isImageTile) && events?.length ? 'bg-none' : ' bg-stone-gray ')
             }
           ></div>
           {linkCopied && (
@@ -486,18 +494,22 @@ const EventsSection = ({
                 </div>
               )}
             </div>
+          ) : isLoading ? (
+            <div className="w-full h-full flex items-center justify-center">
+              <Spinner colorClass={'text-beaming-orange'} size={48} />
+            </div>
+          ) : events?.length == 0 ? (
+            <div className="w-full h-full flex items-center justify-center font-medium text-slate-gray z-[1]">
+              No Events Found...
+            </div>
           ) : (
-            <div className={`w-full flex flex-wrap justify-center md:justify-start z-[1] ${isInListView ? 'gap-3 md:gap-2' : 'gap-6'}`}>
-            {isLoading ? (
-              <div className="w-full h-full flex items-center justify-center">
-                <Spinner colorClass={'text-beaming-orange'} size={48} />
-              </div>
-            ) : events?.length == 0 ? (
-              <div className="w-full h-full flex items-center justify-center font-medium text-slate-gray z-[1]">
-                No Events Found...
-              </div>
-            ) : (
-                <>
+            <div className={
+              isMasonry
+                ? 'w-full columns-2 sm:columns-3 md:columns-4 lg:columns-5 xl:columns-6 gap-2 z-[1]'
+                : isBoard
+                ? 'w-full grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8 gap-2 z-[1]'
+                : `w-full flex flex-wrap justify-center md:justify-start z-[1] ${isList ? 'gap-2' : 'gap-6'}`
+            }>
                   {((() => {
                     const isToday = title === 'Today' || title === 'Hoy';
                     if (!isToday || !events) return events;
@@ -536,7 +548,9 @@ const EventsSection = ({
                   isFavorite={favoritedEvents.includes(event.id)}
                   language={language}
                   locationName={locationName}
-                  isInListView={isInListView}
+                  isInListView={isList}
+                  isInBoardView={isBoard}
+                  isInMasonryView={isMasonry}
                   sectionDayStartMs={sectionDayStartMs}
                 />
                   );
@@ -545,9 +559,7 @@ const EventsSection = ({
                   <div className="hidden w-full text-right text-xs text-white opacity-50 mt-4">
                     Press Shift+M to toggle map view
                   </div>
-                </>
-            )}
-          </div>
+            </div>
           )}
         </div>
       ) : (

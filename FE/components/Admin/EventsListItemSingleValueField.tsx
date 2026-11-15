@@ -71,6 +71,7 @@ const EventsListItemSingleValueField = ({
           (!isInputVisible && 'hidden')
         }
         value={freeInp}
+        onClick={(e) => e.stopPropagation()}
         onChange={(e) => {
           setFreeInp(e.target.value);
         }}

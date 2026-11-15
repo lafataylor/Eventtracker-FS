@@ -31,6 +31,17 @@ test('chips may fill up to three rows without a +N chip when everything fits', (
   assert.deepEqual(fit, { visibleIndexes: [0, 1, 2], extraCount: 0 });
 });
 
+test('mobile list keeps one row of chips and a +N overflow', () => {
+  const fit = fitOfferingChips({
+    chipWidths: [40, 40, 40],
+    extraWidthFor: () => 30,
+    containerWidth: 90,
+    gapX,
+    maxRows: 1,
+  });
+  assert.deepEqual(fit, { visibleIndexes: [0], extraCount: 2 });
+});
+
 test('more chips than three rows keeps a prefix and a +N chip', () => {
   const fit = fitOfferingChips({
     chipWidths: [90, 90, 90, 90],

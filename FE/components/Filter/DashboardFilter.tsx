@@ -15,6 +15,7 @@ import { BiSortAlt2 } from 'react-icons/bi';
 import SortOverlay from '../SortOverlay';
 import { Constants } from '../../utils/constants';
 import { Option } from '../../interface/filterInterface';
+import { isMexicoCity } from '../../utils/utils';
 
 interface DashboardFilterProps {
   onFilterChange: (filters: any) => void;
@@ -47,14 +48,14 @@ const DashboardFilter: React.FC<DashboardFilterProps> = ({
 }) => {
   // Helper function to determine currency symbol
   const getCurrencySymbol = () => {
-    if (locationName === 'mexico-city') {
+    if (isMexicoCity(locationName)) {
       return 'MXN';
     }
     return '$';
   };
 
   const USD_MAX = 50;
-  const isMexicoCityPrice = locationName === 'mexico-city';
+  const isMexicoCityPrice = isMexicoCity(locationName);
   const priceMax = isMexicoCityPrice ? 1000 : USD_MAX;
   const priceDisplay = (i: 0 | 1): number | string => {
     if (isMexicoCityPrice) return priceRange[i] * 10;

@@ -28,6 +28,7 @@ const EventDetailsPage = ({ event }: { event: Event | null }) => {
           <title>{event.name}</title>
           <meta property="og:title" content={"lafaslist"} />
           <meta property="og:image" content={event.orig_thumb} />
+          <meta property="og:url" content={`https://lafaslist.com/event/share/${event.id}/`} />
           <meta property="og:description" content={`Check out this event on lafaslist!: ${event.name}`} />
           <meta name="twitter:card" content="summary_large_image" />
           <meta name="twitter:title" content={"lafaslist"} />

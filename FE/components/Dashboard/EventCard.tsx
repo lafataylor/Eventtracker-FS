@@ -13,10 +13,14 @@ import { FaCalendar } from 'react-icons/fa';
 import { Constants } from '../../utils/constants';
 import {
   DESKTOP_LIST_CHIP_MAX_ROWS,
+  MOBILE_LIST_CHIP_MAX_ROWS,
   fitOfferingChips,
 } from '../../utils/fitOfferingChips';
+import { listDateStack } from '../../utils/listDateStack';
 import { favoriteEvent } from '../../store/actions/event';
 import { useRouter } from 'next/router';
+import { isMexicoCity } from '../../utils/utils';
+import { HEART_POP_MS, useHeartPop } from '../../utils/heartPop';
 
 interface EventCardsProp {
   event: Event;
@@ -33,22 +37,32 @@ interface EventCardsProp {
   locationName?: string;
   almostOver?: boolean;
   isInListView?: boolean;
+  isInBoardView?: boolean;
+  isInMasonryView?: boolean;
   sectionDayStartMs?: number;
 }
 
 const DESKTOP_LIST_CHIP_CLASS =
   'text-[11px] text-mist-white bg-[#353432] rounded-md px-2.5 py-[3px] whitespace-nowrap shrink-0';
+const MOBILE_LIST_CHIP_CLASS =
+  'text-[10px] text-mist-white/80 bg-[#353432] rounded-md px-1.5 py-[2px] whitespace-nowrap shrink-0';
 
 const desktopListChipWidthCache = new Map<string, number>();
+const mobileListChipWidthCache = new Map<string, number>();
 
-function measureDesktopListChipWidth(label: string, container: HTMLElement) {
+function measureListChipWidth(
+  label: string,
+  container: HTMLElement,
+  className: string,
+  cache: Map<string, number>
+) {
   const font = getComputedStyle(container).font;
   const cacheKey = `${font}\n${label}`;
-  const cached = desktopListChipWidthCache.get(cacheKey);
+  const cached = cache.get(cacheKey);
   if (cached != null) return cached;
 
   const span = document.createElement('span');
-  span.className = DESKTOP_LIST_CHIP_CLASS;
+  span.className = className;
   span.textContent = label;
   span.style.position = 'absolute';
   span.style.visibility = 'hidden';
@@ -57,23 +71,43 @@ function measureDesktopListChipWidth(label: string, container: HTMLElement) {
   container.appendChild(span);
   const width = Math.ceil(span.getBoundingClientRect().width);
   span.remove();
-  desktopListChipWidthCache.set(cacheKey, width);
+  cache.set(cacheKey, width);
   return width;
 }
 
-function DesktopListOfferingChip({
+function measureDesktopListChipWidth(label: string, container: HTMLElement) {
+  return measureListChipWidth(
+    label,
+    container,
+    DESKTOP_LIST_CHIP_CLASS,
+    desktopListChipWidthCache
+  );
+}
+
+function measureMobileListChipWidth(label: string, container: HTMLElement) {
+  return measureListChipWidth(
+    label,
+    container,
+    MOBILE_LIST_CHIP_CLASS,
+    mobileListChipWidthCache
+  );
+}
+
+function ListOfferingChip({
   label,
   title,
   extraClassName = '',
+  compact = false,
 }: {
   label: string;
   title?: string;
   extraClassName?: string;
+  compact?: boolean;
 }) {
   return (
     <span
       title={title ?? label}
-      className={`${DESKTOP_LIST_CHIP_CLASS} ${extraClassName}`.trim()}
+      className={`${compact ? MOBILE_LIST_CHIP_CLASS : DESKTOP_LIST_CHIP_CLASS} ${extraClassName}`.trim()}
     >
       {label}
     </span>
@@ -90,8 +124,12 @@ function EventCard({
   locationName,
   almostOver,
   isInListView,
+  isInBoardView,
+  isInMasonryView,
   sectionDayStartMs,
 }: EventCardsProp) {
+  const isImageTileView = isInBoardView || isInMasonryView;
+  const { pop, heartPopClass, heartPopKey } = useHeartPop();
   const [state, dispatch] = useStore();
   const [justEdited, setJustEdited] = useState(false);
   const router = useRouter();
@@ -99,7 +137,7 @@ function EventCard({
 
   // Helper function to determine currency symbol
   const getCurrencySymbol = () => {
-    if (locationName === 'mexico-city') {
+    if (isMexicoCity(locationName)) {
       return 'MXN';
     }
     return '$';
@@ -312,16 +350,7 @@ function EventCard({
     return chips;
   })();
 
-  const listDateParts = (() => {
-    if (!event.start_date) return { weekday: '', monthDay: '' };
-    const date = new Date(event.start_date);
-    return {
-      weekday: date.toLocaleDateString('en-US', { weekday: 'short' }).toUpperCase(),
-      monthDay: date
-        .toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
-        .toUpperCase(),
-    };
-  })();
+  const listDateParts = listDateStack(event.start_date);
 
   const listCityLine = (() => {
     const city = event.venue.city && event.venue.city.trim() !== '' ? event.venue.city.trim() : '';
@@ -335,7 +364,12 @@ function EventCard({
 
   const offeringChipsKey = listOfferingChips.join('\u0001');
   const listChipContainerRef = useRef<HTMLDivElement>(null);
+  const mobileListChipContainerRef = useRef<HTMLDivElement>(null);
   const [listChipFit, setListChipFit] = useState({
+    visibleIndexes: [] as number[],
+    extraCount: 0,
+  });
+  const [mobileListChipFit, setMobileListChipFit] = useState({
     visibleIndexes: [] as number[],
     extraCount: 0,
   });
@@ -368,36 +402,95 @@ function EventCard({
     return () => observer.disconnect();
   }, [isInListView, offeringChipsKey]);
 
+  useLayoutEffect(() => {
+    if (!isInListView) return;
+    const container = mobileListChipContainerRef.current;
+    if (!container) return;
+
+    const compute = () => {
+      const width = container.clientWidth;
+      if (width <= 0) return;
+      const gapX = parseFloat(getComputedStyle(container).columnGap);
+      setMobileListChipFit(
+        fitOfferingChips({
+          chipWidths: listOfferingChips.map((label) =>
+            measureMobileListChipWidth(label, container)
+          ),
+          extraWidthFor: (n) => measureMobileListChipWidth(`+${n}`, container),
+          containerWidth: width,
+          gapX: Number.isFinite(gapX) ? gapX : 4,
+          maxRows: MOBILE_LIST_CHIP_MAX_ROWS,
+        })
+      );
+    };
+
+    compute();
+    const observer = new ResizeObserver(compute);
+    observer.observe(container);
+    return () => observer.disconnect();
+  }, [isInListView, offeringChipsKey]);
+
   const visibleOfferingChips = listChipFit.visibleIndexes.map(
     (index) => listOfferingChips[index]
   );
   const extraOfferingCount = listChipFit.extraCount;
+  const mobileVisibleOfferingChips = mobileListChipFit.visibleIndexes.map(
+    (index) => listOfferingChips[index]
+  );
+  const mobileExtraOfferingCount = mobileListChipFit.extraCount;
 
   const favoriteHeart = (
-    <div className="flex-shrink-0 z-[4]">
+    <div
+      className="relative z-10 flex h-8 w-8 flex-shrink-0 items-center justify-center pointer-events-auto cursor-pointer"
+      role="button"
+      tabIndex={0}
+      aria-label={isFavorite ? 'Remove from favorites' : 'Save to favorites'}
+      onClick={(e) => {
+        e.stopPropagation();
+        e.preventDefault();
+        if (justEdited) return;
+        if (isFavorite) {
+          handleUnfavoriteClick(event.id);
+        } else {
+          handleFavoriteClick(event.id);
+        }
+      }}
+      onMouseDown={(e) => e.stopPropagation()}
+      onPointerDown={(e) => e.stopPropagation()}
+      onKeyDown={(e) => {
+        e.stopPropagation();
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          if (justEdited) return;
+          if (isFavorite) {
+            handleUnfavoriteClick(event.id);
+          } else {
+            handleFavoriteClick(event.id);
+          }
+        }
+      }}
+    >
       {justEdited ? (
-        <FaHeart className="w-7 h-7 text-beaming-orange-transparent" />
+        <FaHeart
+          key={heartPopKey}
+          className="w-7 h-7 text-beaming-orange-transparent animate-heart-pop pointer-events-none"
+        />
       ) : isFavorite ? (
         <FaHeart
-          className="w-7 h-7 text-beaming-orange"
-          onClick={(e) => {
-            e.stopPropagation();
-            handleUnfavoriteClick(event.id);
-          }}
+          key={heartPopKey}
+          className={`w-7 h-7 text-beaming-orange pointer-events-none ${heartPopClass}`}
         />
       ) : (
         <FaRegHeart
-          className="w-7 h-7 text-beaming-orange"
-          onClick={(e) => {
-            e.stopPropagation();
-            handleFavoriteClick(event.id);
-          }}
+          key={heartPopKey}
+          className={`w-7 h-7 text-beaming-orange pointer-events-none ${heartPopClass}`}
         />
       )}
     </div>
   );
 
   async function handleFavoriteClick(id: number): Promise<void> {
+    pop();
     if (!auth.isUserLoggedIn) {
       router.push('/login'); // Redirect to login if not logged in
       return;
@@ -411,10 +504,11 @@ function EventCard({
     });
 
     favoriteEvent()(dispatch);
-    setTimeout(() => setJustEdited(false), 1000);
+    setTimeout(() => setJustEdited(false), HEART_POP_MS);
   }
 
   async function handleUnfavoriteClick(id: number): Promise<void> {
+    pop();
     if (!auth.isUserLoggedIn) {
       router.push('/login'); // Redirect to login if not logged in
       return;
@@ -428,27 +522,143 @@ function EventCard({
     });
 
     favoriteEvent()(dispatch);
-    setTimeout(() => setJustEdited(false), 1000);
+    setTimeout(() => setJustEdited(false), HEART_POP_MS);
   }
 
   return (
     <>
-    {isInListView && (
+    {isImageTileView && (
       <div
-        onClick={() => (disabled ? {} : showDetails())}
-        className="hidden md:grid w-full items-center gap-x-4 lg:gap-x-5 cursor-pointer rounded-xl bg-slate-black px-3 py-2.5 hover:bg-stone-gray/50 transition-colors grid-cols-[130px_minmax(0,3fr)_1px_6.75rem_1px_minmax(0,1fr)_1px_minmax(0,1fr)_2rem]"
+        role="button"
+        tabIndex={disabled ? -1 : 0}
+        onClick={() => {
+          if (!disabled) showDetails();
+        }}
+        onKeyDown={(e) => {
+          if (disabled) return;
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            showDetails();
+          }
+        }}
+        className={
+          'relative z-[1] flex flex-col gap-1 min-w-0 cursor-pointer ' +
+          (isInMasonryView ? 'mb-2 break-inside-avoid ' : '') +
+          (almostOver ? 'opacity-70 ' : '')
+        }
       >
-        <div className="relative w-[130px] h-[86px] rounded-lg overflow-hidden bg-stone-gray">
+        <div
+          className={
+            isInMasonryView
+              ? 'relative w-full overflow-hidden rounded-md bg-stone-gray'
+              : 'relative w-full aspect-square overflow-hidden rounded-md bg-stone-gray'
+          }
+        >
+          <img
+            src={event.orig_thumb ? event.orig_thumb : ''}
+            alt=""
+            className={
+              isInMasonryView
+                ? 'block w-full h-auto'
+                : 'absolute inset-0 w-full h-full object-cover'
+            }
+          />
+          {isInMasonryView && (
+            <div
+              className="absolute top-1.5 right-1.5 z-[2] cursor-pointer pointer-events-auto"
+              onClick={(e) => {
+                e.stopPropagation();
+                if (justEdited) return;
+                if (isFavorite) {
+                  handleUnfavoriteClick(event.id);
+                } else {
+                  handleFavoriteClick(event.id);
+                }
+              }}
+              onMouseDown={(e) => e.stopPropagation()}
+              onPointerDown={(e) => e.stopPropagation()}
+              onKeyDown={(e) => {
+                e.stopPropagation();
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  if (justEdited) return;
+                  if (isFavorite) {
+                    handleUnfavoriteClick(event.id);
+                  } else {
+                    handleFavoriteClick(event.id);
+                  }
+                }
+              }}
+              role="button"
+              tabIndex={0}
+              aria-label={isFavorite ? 'Remove from favorites' : 'Save to favorites'}
+            >
+              {justEdited ? (
+                <FaHeart
+                  key={heartPopKey}
+                  className="w-5 h-5 text-beaming-orange-transparent animate-heart-pop pointer-events-none"
+                />
+              ) : isFavorite ? (
+                <FaHeart
+                  key={heartPopKey}
+                  className={`w-5 h-5 text-beaming-orange pointer-events-none ${heartPopClass}`}
+                />
+              ) : (
+                <FaHeart
+                  key={heartPopKey}
+                  className={`w-5 h-5 text-beaming-orange opacity-25 pointer-events-none ${heartPopClass}`}
+                />
+              )}
+            </div>
+          )}
+        </div>
+        <p
+          className={
+            'text-[10px] md:text-[11px] font-normal uppercase tracking-wide leading-tight text-mist-white/90 overflow-hidden ' +
+            nameStyle
+          }
+          style={{
+            display: '-webkit-box',
+            WebkitBoxOrient: 'vertical',
+            WebkitLineClamp: 2,
+          }}
+        >
+          {eventTitle}
+        </p>
+      </div>
+    )}
+    {isInListView && !isImageTileView && (
+      <div
+        role="button"
+        tabIndex={disabled ? -1 : 0}
+        onClick={() => {
+          if (!disabled) showDetails();
+        }}
+        onKeyDown={(e) => {
+          if (disabled) return;
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            showDetails();
+          }
+        }}
+        className="hidden md:grid w-full items-center gap-x-4 lg:gap-x-5 cursor-pointer rounded-xl bg-slate-black px-3 py-2.5 hover:bg-stone-gray/50 transition-colors grid-cols-[130px_minmax(0,3fr)_1px_minmax(0,1fr)_1px_6.75rem_1px_minmax(0,1fr)_2.5rem]"
+      >
+        {/* pointer-events-none so a click on title/date/venue/chips
+            hits the row, not a child that can swallow it. The heart
+            wrapper has pointer-events-auto and its own handler so a
+            heart click does not open the event. Owner 2026-11-14 / 15:
+            list view, the whole row opens the event, not just the flyer. */}
+        <div className="relative w-[130px] h-[86px] rounded-lg overflow-hidden bg-stone-gray pointer-events-none">
           <img
             src={event.orig_thumb ? event.orig_thumb : ''}
             alt="Event Thumbnail"
             className="absolute top-0 left-0 w-full h-full object-cover"
           />
         </div>
-        <div className="min-w-0">
+        <div className="min-w-0 pointer-events-none">
           <p
             className={
-              'text-xl lg:text-[22px] font-semibold text-mist-white uppercase tracking-wide leading-tight overflow-hidden ' +
+              'text-base lg:text-[18px] font-semibold text-mist-white uppercase tracking-wide leading-tight overflow-hidden ' +
               nameStyle
             }
             style={{
@@ -466,7 +676,28 @@ function EventCard({
           )}
         </div>
         <div className="w-px self-stretch my-1.5 bg-[#403E3C]" aria-hidden="true" />
-        <div className="text-left leading-tight">
+        <div className="min-w-0 pointer-events-none">
+          {hasVenueDisplay && (
+            <>
+              <p
+                className={
+                  'flex items-center gap-1.5 min-w-0 text-base text-mist-white leading-tight ' +
+                  locationStyle
+                }
+              >
+                <MdLocationOn className="text-beaming-orange w-5 h-5 flex-shrink-0" />
+                <span className="truncate">{venueDisplayLine}</span>
+              </p>
+              {listCityLine && (
+                <p className="text-[13px] text-mist-white/50 truncate mt-0.5 pl-7">
+                  {listCityLine}
+                </p>
+              )}
+            </>
+          )}
+        </div>
+        <div className="w-px self-stretch my-1.5 bg-[#403E3C]" aria-hidden="true" />
+        <div className="text-left leading-tight pointer-events-none">
           {!hideListDateForSpanningEvent && (
             <>
               {listDateParts.weekday && (
@@ -488,45 +719,180 @@ function EventCard({
           )}
         </div>
         <div className="w-px self-stretch my-1.5 bg-[#403E3C]" aria-hidden="true" />
-        <div className="min-w-0">
-          {hasVenueDisplay && (
-            <>
-              <p
-                className={
-                  'flex items-center gap-1.5 min-w-0 text-base text-mist-white leading-tight ' +
-                  locationStyle
-                }
-              >
-                <MdLocationOn className="text-beaming-orange w-5 h-5 flex-shrink-0" />
-                <span className="truncate">{venueDisplayLine}</span>
-              </p>
-              {listCityLine && (
-                <p className="text-[13px] text-mist-white/50 truncate mt-0.5 pl-7">
-                  {listCityLine}
-                </p>
-              )}
-            </>
-          )}
-        </div>
-        <div className="w-px self-stretch my-1.5 bg-[#403E3C]" aria-hidden="true" />
         <div
           ref={listChipContainerRef}
-          className="min-w-0 flex flex-wrap items-center justify-end content-start gap-x-1.5 gap-y-1"
+          className="min-w-0 overflow-hidden flex flex-wrap items-center justify-end content-start gap-x-1.5 gap-y-1 pointer-events-none"
         >
           {visibleOfferingChips.map((chip, i) => (
-            <DesktopListOfferingChip
+            <ListOfferingChip
               key={`${chip}-${i}`}
               label={chip}
               extraClassName={genreOrOfferingStyle}
             />
           ))}
           {extraOfferingCount > 0 && (
-            <DesktopListOfferingChip label={`+${extraOfferingCount}`} />
+            <ListOfferingChip label={`+${extraOfferingCount}`} />
           )}
         </div>
         {favoriteHeart}
       </div>
     )}
+    {isInListView && !isImageTileView && (
+      <div
+        role="button"
+        tabIndex={disabled ? -1 : 0}
+        onClick={() => {
+          if (!disabled) showDetails();
+        }}
+        onKeyDown={(e) => {
+          if (disabled) return;
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            showDetails();
+          }
+        }}
+        className={
+          'md:hidden w-full flex items-stretch gap-2.5 cursor-pointer rounded-xl bg-slate-black px-2.5 py-2 ' +
+          (almostOver ? 'opacity-70 ' : '')
+        }
+      >
+        <div className="relative w-[5.75rem] h-[4.5rem] rounded-lg overflow-hidden bg-stone-gray shrink-0 pointer-events-none">
+          <img
+            src={event.orig_thumb ? event.orig_thumb : ''}
+            alt=""
+            className="absolute inset-0 w-full h-full object-cover"
+          />
+        </div>
+        <div className="min-w-0 flex-1 flex flex-col justify-center gap-0.5 pointer-events-none">
+          <p
+            className={
+              'text-[14px] font-semibold text-mist-white leading-tight overflow-hidden ' +
+              nameStyle
+            }
+            style={{
+              display: '-webkit-box',
+              WebkitBoxOrient: 'vertical',
+              WebkitLineClamp: 2,
+            }}
+          >
+            {eventTitle}
+          </p>
+          {listSubtitle ? (
+            <p className="text-[12px] text-mist-white/50 truncate leading-snug">
+              {listSubtitle}
+            </p>
+          ) : null}
+          {hasVenueDisplay ? (
+            <p
+              className={
+                'flex items-center gap-1 min-w-0 text-[12px] text-mist-white/80 leading-snug ' +
+                locationStyle
+              }
+            >
+              <MdLocationOn className="text-beaming-orange w-3.5 h-3.5 flex-shrink-0" />
+              <span className="truncate">{venueDisplayLine}</span>
+            </p>
+          ) : null}
+          {listOfferingChips.length > 0 ? (
+            <div
+              ref={mobileListChipContainerRef}
+              className="min-w-0 overflow-hidden flex flex-wrap items-center gap-x-1 gap-y-1 mt-0.5"
+            >
+              {mobileVisibleOfferingChips.map((chip, i) => (
+                <ListOfferingChip
+                  key={`${chip}-${i}`}
+                  label={chip}
+                  extraClassName={genreOrOfferingStyle}
+                  compact
+                />
+              ))}
+              {mobileExtraOfferingCount > 0 && (
+                <ListOfferingChip
+                  label={`+${mobileExtraOfferingCount}`}
+                  compact
+                />
+              )}
+            </div>
+          ) : null}
+        </div>
+        <div
+          className="w-px self-stretch my-0.5 bg-[#403E3C] shrink-0"
+          aria-hidden="true"
+        />
+        <div className="w-10 shrink-0 flex flex-col items-center justify-center text-center">
+          {!hideListDateForSpanningEvent && listDateParts.weekday ? (
+            <p className="text-[10px] tracking-[0.14em] text-mist-white/45 leading-none">
+              {listDateParts.weekday}
+            </p>
+          ) : null}
+          {!hideListDateForSpanningEvent && listDateParts.day ? (
+            <p
+              className={
+                'text-[22px] font-semibold text-mist-white leading-none mt-[3px] ' +
+                dateStyle
+              }
+            >
+              {listDateParts.day}
+            </p>
+          ) : null}
+          {!hideListDateForSpanningEvent && listDateParts.month ? (
+            <p className="text-[10px] font-semibold tracking-[0.12em] text-beaming-orange leading-none mt-[3px]">
+              {listDateParts.month}
+            </p>
+          ) : null}
+          <div
+            className="relative z-10 mt-1.5 flex h-6 w-6 items-center justify-center pointer-events-auto cursor-pointer"
+            role="button"
+            tabIndex={0}
+            aria-label={
+              isFavorite ? 'Remove from favorites' : 'Save to favorites'
+            }
+            onClick={(e) => {
+              e.stopPropagation();
+              e.preventDefault();
+              if (justEdited) return;
+              if (isFavorite) {
+                handleUnfavoriteClick(event.id);
+              } else {
+                handleFavoriteClick(event.id);
+              }
+            }}
+            onMouseDown={(e) => e.stopPropagation()}
+            onPointerDown={(e) => e.stopPropagation()}
+            onKeyDown={(e) => {
+              e.stopPropagation();
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                if (justEdited) return;
+                if (isFavorite) {
+                  handleUnfavoriteClick(event.id);
+                } else {
+                  handleFavoriteClick(event.id);
+                }
+              }
+            }}
+          >
+            {justEdited ? (
+              <FaHeart
+                key={heartPopKey}
+                className="w-5 h-5 text-beaming-orange-transparent animate-heart-pop pointer-events-none"
+              />
+            ) : isFavorite ? (
+              <FaHeart
+                key={heartPopKey}
+                className={`w-5 h-5 text-beaming-orange pointer-events-none ${heartPopClass}`}
+              />
+            ) : (
+              <FaRegHeart
+                key={heartPopKey}
+                className={`w-5 h-5 text-beaming-orange pointer-events-none ${heartPopClass}`}
+              />
+            )}
+          </div>
+        </div>
+      </div>
+    )}
+    {!isImageTileView && !isInListView && (
     <div
       onClick={() => (disabled ? {} : showDetails())}
       className={
@@ -556,7 +922,7 @@ function EventCard({
                   event.promoter,
                   event.poster?.user
                 )}</span>
-                <span className={`${nameStyle} font-semibold block md:hidden ${isInListView ? ' break-words text-xs md:text-lg w-[100%] ' : ''}`}>{getValue(
+                <span className={`${nameStyle} font-semibold block md:hidden ${isInListView ? ' break-words text-[10px] md:text-lg w-[100%] ' : ''}`}>{getValue(
                   event.name,
                   event.artist,
                   event.promoter,
@@ -654,26 +1020,38 @@ function EventCard({
               
             </span>
 
-            <div className={`mr-1 mt-[6px] z-[4]`}>
+            <div
+              className="relative z-10 mr-1 mt-[6px] flex h-7 w-7 flex-shrink-0 items-center justify-center pointer-events-auto cursor-pointer"
+              role="button"
+              tabIndex={0}
+              aria-label={isFavorite ? 'Remove from favorites' : 'Save to favorites'}
+              onClick={(e) => {
+                e.stopPropagation();
+                e.preventDefault();
+                if (justEdited) return;
+                if (isFavorite) {
+                  handleUnfavoriteClick(event.id);
+                } else {
+                  handleFavoriteClick(event.id);
+                }
+              }}
+              onMouseDown={(e) => e.stopPropagation()}
+              onPointerDown={(e) => e.stopPropagation()}
+            >
               {justEdited ? (
                 <FaHeart
-                  className={`w-5 h-5 text-beaming-orange-transparent`}
+                  key={heartPopKey}
+                  className="w-5 h-5 text-beaming-orange-transparent animate-heart-pop pointer-events-none"
                 />
               ) : isFavorite ? (
                 <FaHeart
-                  className={`w-5 h-5 text-beaming-orange`}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    handleUnfavoriteClick(event.id);
-                  }}
+                  key={heartPopKey}
+                  className={`w-5 h-5 text-beaming-orange pointer-events-none ${heartPopClass}`}
                 />
               ) : (
                 <FaRegHeart
-                  className="w-5 h-5 text-beaming-orange"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    handleFavoriteClick(event.id);
-                  }}
+                  key={heartPopKey}
+                  className={`w-5 h-5 text-beaming-orange pointer-events-none ${heartPopClass}`}
                 />
               )}
             </div>
@@ -752,6 +1130,7 @@ function EventCard({
         )}
       </div>
     </div>
+    )}
     </>
   );
 }

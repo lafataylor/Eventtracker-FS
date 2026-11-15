@@ -2,7 +2,7 @@ import { useRouter } from 'next/router';
 import React, { ReactNode, useEffect, useCallback } from 'react';
 import { logout } from '../store/actions/auth';
 import { useStore } from '../store/store';
-import { checkTokenExpiredStatus } from '../utils/utils';
+import { checkTokenExpiredStatus, cityPath, DEFAULT_CITY_NAME } from '../utils/utils';
 import { refetchToken } from '../services/lib/admin';
 import { refetchUserToken } from '../services/lib/user';
 
@@ -95,9 +95,9 @@ const AuthManager = ({ children }: AuthManagerProps) => {
           }
         }
         if (path === '/login/es') {
-          router.push('/es/mexico-city');
+          router.push(cityPath(DEFAULT_CITY_NAME, 'es'));
         } else if (path.includes('login')) {
-          router.push('/mexico-city');
+          router.push(cityPath(DEFAULT_CITY_NAME));
         }
       }
     }

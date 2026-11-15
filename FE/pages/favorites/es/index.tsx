@@ -3,7 +3,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import EventsSection from '../../../components/Dashboard/EventsSection';
 import { BiSortAlt2 } from 'react-icons/bi';
 import EventService from '../../../services/lib/event';
-import { formatDate, isStateCode } from '../../../utils/utils';
+import { formatDate, isStateCode, cityPath, DEFAULT_CITY_NAME } from '../../../utils/utils';
 import { eventSpanOverlapsWindow } from '../../../utils/eventDateSpan';
 import { Option } from '../../../interface/filterInterface';
 import { Constants } from '../../../utils/constants';
@@ -13,7 +13,8 @@ import SortOverlay from '../../../components/SortOverlay';
 import ActionDialog from '../../../components/overlay/ActionDialog';
 import LoadingDialog from '../../../components/overlay/LoadingDialog';
 import DashboardFilter from '../../../components/Filter/DashboardFilter';
-import { FaChevronLeft, FaTimes, FaEye } from 'react-icons/fa';
+import ViewModeToggle from '../../../components/Dashboard/ViewModeToggle';
+import { useViewMode } from '../../../utils/viewMode';
 import { useRouter } from 'next/router';
 import { logout } from '../../../store/actions/auth';
 import axios from 'axios';
@@ -48,12 +49,9 @@ const Home: NextPage = () => {
   const [isOtherUser, setIsOtherUser] = useState(false);
   const [mounted, setMounted] = useState(false);
   const [activeDropdown, setActiveDropdown] = useState<string>('');
-  const [isList, setIsList] = useState(false);
+  const [viewMode, setViewMode] = useViewMode();
 
   useEffect(() => {
-    if (typeof window !== 'undefined' && window.innerWidth < 768) {
-      setIsList(true);
-    }
     setMounted(true);
   }, []);
 
@@ -575,7 +573,7 @@ const Home: NextPage = () => {
           <img
             src="/images/leftChevron.svg"
             className="mr-1 w-8 h-8 lg:w-10 lg:h-10 text-beaming-orange hover:text-beaming-orange-dark hover:cursor-pointer"
-            onClick={() => router.push('/es/mexico-city')}
+            onClick={() => router.push(cityPath(DEFAULT_CITY_NAME, 'es'))}
           />
         </div>
         
@@ -584,34 +582,18 @@ const Home: NextPage = () => {
         </div>
         
         <div className="flex items-center gap-2">
-          <button 
-            className={`flex p-2 flex-col h-[45px] justify-center items-center text-xs gap-2 ex:hidden text-mist-white px-3 rounded-lg
-              ${isList 
-                ? 'border border-2 border-slate-black font-semibold text-black bg-beaming-orange' 
-                : 'border border-2 border-slate-black bg-transparent-white opacity-50'
-              } transition-all duration-300`}
-            onClick={() => setIsList(prev => !prev)}
-          >
-            List
-          </button>
-          <button 
-            className="flex justify-center items-center text-xs p-1 lg:p-2 text-mist-white border border-2 border-slate-black rounded-lg md:hover:bg-mist-white md:hover:text-midnight transition-all duration-300 ease-in-out hidden ex:flex" 
-            onClick={() => setIsList(prev => !prev)}
-          >
-            {isList ? (
-              <span className="flex items-center justify-center h-[30px] md:h-auto">
-                <FaEye className="mr-1 hidden lg:block" />
-                <span className="hidden lg:inline">Vista de Cuadrícula</span>
-                <span className="lg:hidden px-2">Grid</span>
-              </span>
-            ) : (
-              <span className="flex items-center justify-center h-[30px] md:h-auto">
-                <FaEye className="mr-1 hidden lg:block" />
-                <span className="hidden lg:inline">Vista de Lista</span>
-                <span className="lg:hidden px-2">List</span>
-              </span>
-            )}
-          </button>
+          <ViewModeToggle
+            mode={viewMode}
+            onChange={setViewMode}
+            layout="desktop"
+            className="hidden md:inline-flex"
+          />
+          <ViewModeToggle
+            mode={viewMode}
+            onChange={setViewMode}
+            layout="mobile"
+            className="md:hidden"
+          />
           {mounted && auth.isUserLoggedIn && (
             <UserDropdown isFavoritesSelected={true} language="es" setActiveDropdown={setActiveDropdown} resetDropdowns={activeDropdown != 'user'} hideDropdown={!isNavbarVisible} />
           )}
@@ -643,7 +625,7 @@ const Home: NextPage = () => {
             onClick={() => {}}
             isLoading={isFetchingEvents}
             language="es"
-            isInListView={isList}
+            viewMode={viewMode}
           />
         ) : isDateFilter && filteredEvents ? (
           <EventsSection
@@ -657,7 +639,7 @@ const Home: NextPage = () => {
             onClick={() => {}}
             isLoading={isFetchingEvents}
             language="es"
-            isInListView={isList}
+            viewMode={viewMode}
           />
         ) : (
           <>
@@ -680,7 +662,7 @@ const Home: NextPage = () => {
               isLoading={isFetchingEvents}
               spaceAfter={true}
               language="es"
-              isInListView={isList}
+              viewMode={viewMode}
             />
           </>
         )}

@@ -6,6 +6,7 @@ import { logout } from '../../store/actions/auth';
 import { useStore } from '../../store/store';
 import GeneralFeedbackDialog from './GeneralFeedbackDialog';
 import { FaBars } from 'react-icons/fa';
+import { cityPath, DEFAULT_CITY_NAME, toLocationSlug } from '../../utils/utils';
 
 interface UserDropdownProps {
   isHomeSelected?: boolean; // Made optional
@@ -56,13 +57,13 @@ const UserDropdown: React.FC<UserDropdownProps> = ({ isHomeSelected = false, isF
         let citySlug: string | null = null;
 
         if (segments.length === 1) {
-          // e.g. "/mexico-city"
+          // e.g. "/losangeles"
           const candidate = segments[0];
           if (!['about', 'favorites', 'login', 'register', 'admin', 'es'].includes(candidate)) {
             citySlug = candidate;
           }
         } else if (segments.length === 2 && segments[0] === 'es') {
-          // e.g. "/es/mexico-city"
+          // e.g. "/es/losangeles"
           const candidate = segments[1];
           if (!['about', 'favorites', 'login', 'register', 'admin'].includes(candidate)) {
             citySlug = candidate;
@@ -70,7 +71,7 @@ const UserDropdown: React.FC<UserDropdownProps> = ({ isHomeSelected = false, isF
         }
 
         if (citySlug) {
-          localStorage.setItem('lastCity', citySlug);
+          localStorage.setItem('lastCity', toLocationSlug(citySlug));
         }
       } catch (e) {
         // fail silently if localStorage is unavailable
@@ -106,10 +107,10 @@ const UserDropdown: React.FC<UserDropdownProps> = ({ isHomeSelected = false, isF
   const handleLanguageChange = (lang: string) => {
     if (lang === 'es') {
       localStorage.setItem('language', 'es');
-      router.push('/es/mexico-city');
+      router.push(cityPath(DEFAULT_CITY_NAME, 'es'));
     } else {
       localStorage.setItem('language', 'en');
-      router.push('/mexico-city');
+      router.push(cityPath(DEFAULT_CITY_NAME));
     }
   };
 
@@ -149,7 +150,10 @@ const UserDropdown: React.FC<UserDropdownProps> = ({ isHomeSelected = false, isF
               <span className="block py-2 text-sm  text-white text-left"> {userFirstName} {userLastName}</span>
             </div>
             <button
-              onClick={() => handleNavigation('/mexico-city')}
+              onClick={() => {
+                setIsOpen(false);
+                router.push(cityPath(DEFAULT_CITY_NAME, language === 'es' ? 'es' : 'en'));
+              }}
               className={`block w-full text-left px-4 py-2 mt-2 text-[16px] md:text-[16px] md:text-md font-semibold text-beaming-orange-light mx-3 w-[90%] text-center ${isHomeSelected ? 'bg-gunmetal-gray mx-2 rounded-lg border border-2 border-midnight-transparent' : ' hover:bg-gray-100'}`}
             >
               {language === 'es' ? 'Inicio' : 'Home'}

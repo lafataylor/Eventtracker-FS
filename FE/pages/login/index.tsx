@@ -6,6 +6,7 @@ import { useRouter } from 'next/router';
 import InfoOverlay from '../../components/Admin/InfoOverlay';
 import { HIDE_INFO_OVERLAY } from '../../store/actions/type';
 import Image from 'next/image';
+import { cityPath, DEFAULT_CITY_NAME } from '../../utils/utils';
 const Index = () => {
   const [showPassword, setShowPassword] = useState(false);
   const [state, dispatch] = useStore();
@@ -62,7 +63,7 @@ const Index = () => {
     <div className="flex flex-col min-h-screen p-5  font-montserrat">
       <nav className=" font-montserrat">
         <h2 
-          onClick={() => router.push('/mexico-city')}
+          onClick={() => router.push(cityPath(DEFAULT_CITY_NAME))}
           className="text-2xl lg:text-4xl font-semibold text-mist-white pb-3 md:px-3  flex items-center">
           <Image
             src="/images/wordMark.png"

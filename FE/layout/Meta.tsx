@@ -9,7 +9,7 @@ interface MetaProps {
 
 const Meta = ({ title, keywords, description, locationName }: MetaProps) => {
   // Determine which social share image to use
-  const socialShareImage = locationName?.includes('san-fran') ? '/sf_social_share_preview.jpg' : '/sf_social_share_preview.jpg';
+  const socialShareImage = locationName?.includes('sanfran') || locationName?.includes('san-fran') ? '/sf_social_share_preview.jpg' : '/sf_social_share_preview.jpg';
   
   // Determine the correct URL
   const pageUrl = locationName ? `https://lafaslist.com/${locationName}` : 'https://lafaslist.com';

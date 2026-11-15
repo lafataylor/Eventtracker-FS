@@ -33,7 +33,7 @@ BASE="${SMOKE_BASE_URL:-https://lafaslist.com}"
 # the default session is where interactive debugging happens, and an hourly
 # job navigating it away mid-investigation (or being navigated away itself)
 # makes both unreliable.
-PAGES=("/" "/mexico-city/" "/los-angeles/" "/berlin/" "/bali/")
+PAGES=("/" "/mexicocity/" "/losangeles/" "/berlin/" "/bali/")
 PER_PAGE_TIMEOUT=60
 FAILED=0
 
