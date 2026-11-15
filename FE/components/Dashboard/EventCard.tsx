@@ -21,6 +21,7 @@ import { favoriteEvent } from '../../store/actions/event';
 import { useRouter } from 'next/router';
 import { isMexicoCity } from '../../utils/utils';
 import { HEART_POP_MS, useHeartPop } from '../../utils/heartPop';
+import { imageTileFrameClass } from '../../utils/imageTileFrame';
 
 interface EventCardsProp {
   event: Event;
@@ -547,13 +548,7 @@ function EventCard({
           (almostOver ? 'opacity-70 ' : '')
         }
       >
-        <div
-          className={
-            isInMasonryView
-              ? 'relative w-full overflow-hidden rounded-md bg-stone-gray'
-              : 'relative w-full aspect-square overflow-hidden rounded-md bg-stone-gray'
-          }
-        >
+        <div className={imageTileFrameClass(!!isInMasonryView)}>
           <img
             src={event.orig_thumb ? event.orig_thumb : ''}
             alt=""
