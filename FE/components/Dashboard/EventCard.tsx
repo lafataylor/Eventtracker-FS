@@ -25,6 +25,7 @@ import {
   desktopListThumbFrameClass,
   flyerCardImageFrameClass,
   imageTileFrameClass,
+  imageTileImgClass,
   mobileListThumbFrameClass,
 } from '../../utils/imageTileFrame';
 
@@ -557,15 +558,11 @@ function EventCard({
           <img
             src={event.orig_thumb ? event.orig_thumb : ''}
             alt=""
-            className={
-              isInMasonryView
-                ? 'block w-full h-auto'
-                : 'absolute inset-0 w-full h-full object-cover'
-            }
+            className={imageTileImgClass(!!isInMasonryView)}
           />
           {isInMasonryView && (
             <div
-              className="absolute top-1.5 right-1.5 z-[2] cursor-pointer pointer-events-auto"
+              className="absolute top-3 right-3 z-[2] cursor-pointer pointer-events-auto"
               onClick={(e) => {
                 e.stopPropagation();
                 if (justEdited) return;
@@ -614,7 +611,9 @@ function EventCard({
         </div>
         <p
           className={
-            'text-[10px] md:text-[11px] font-normal uppercase tracking-wide leading-tight text-mist-white/90 overflow-hidden ' +
+            // px-2 matches imageTileFrame pad so the HTML title lines up with
+            // the inset flyer and stays clear of the rounded chrome.
+            'px-2 text-[10px] md:text-[11px] font-normal uppercase tracking-wide leading-tight text-mist-white/90 overflow-hidden ' +
             nameStyle
           }
           style={{
