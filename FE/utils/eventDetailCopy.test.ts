@@ -70,3 +70,28 @@ test('EventDetails wires disclaimer, IG link, left-align, no bio, no RSVP CTA', 
     /text-\[0\.7rem\][^"]*text-left/
   );
 });
+
+// 2026-11-16: owner — "Instagram text should not be full width button."
+// poster.user must be a compact inline orange underline <a>, not a padded
+// CTA / flex-1 row hit target. Copy Event Link keeps its own midnight bar.
+test('IG handle is a compact inline link, not a full-width button', () => {
+  const handleAnchor = eventDetailsSrc.match(
+    /href=\{posterProfileUrl\}[\s\S]*?className="([^"]*)"[\s\S]*?\{eventDetailsDialog\.event\.poster\.user\}/
+  );
+  assert.ok(handleAnchor, 'expected poster.user <a href={posterProfileUrl}>');
+  const className = handleAnchor[1];
+  assert.match(className, /\binline\b/);
+  assert.match(className, /text-beaming-orange/);
+  assert.match(className, /\bunderline\b/);
+  assert.doesNotMatch(className, /\bflex-1\b/);
+  assert.doesNotMatch(className, /\bw-full\b/);
+  assert.doesNotMatch(className, /\bw-\[90%\]\b/);
+  assert.doesNotMatch(className, /\bbg-beaming-orange\b/);
+  assert.doesNotMatch(className, /\bp-3\b/);
+  // Source column must stretch full width and left-align (not items-center).
+  assert.match(
+    eventDetailsSrc,
+    /w-full flex flex-col[^"]*items-stretch/
+  );
+  assert.match(eventDetailsSrc, /self-start text-\[0\.7rem\]/);
+});

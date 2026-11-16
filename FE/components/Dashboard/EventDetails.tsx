@@ -1307,7 +1307,11 @@ function EventDetails({ isEdit, locationName }: EventDetailsProps) {
                     </button>
                   </div>
                 </div>
-                <div className="w-100 flex flex-col justify-between gap-4 items-center mt-8 md:mt-0">
+                {/* 2026-11-16: w-full + items-stretch (was invalid w-100 +
+                    items-center) so the muted source lines actually left-align
+                    instead of sitting in a centered auto-width cluster next to
+                    the full-width Copy Event Link / Ticket Details bars. */}
+                <div className="w-full flex flex-col justify-between gap-4 items-stretch mt-8 md:mt-0">
                   <div
                     className="w-full flex  lg:hidden flex-row items-center gap-2 px-2 py-2 rounded-lg bg-midnight"
                     style={{ overflowWrap: 'anywhere' }}
@@ -1334,30 +1338,33 @@ function EventDetails({ isEdit, locationName }: EventDetailsProps) {
                     </button>
                   </div>
 
-                  <div className="text-[0.7rem] pt-2 pr-1 text-mist-white text-left font-light mt-4 mb-2 md:mb-0">
+                  {/* Source block: plain muted text. poster.user is a compact
+                      inline orange underline <a> only — not a padded CTA, not
+                      flex-1, not a full-width hit target (owner 2026-11-16). */}
+                  <div className="w-full self-start text-[0.7rem] pt-2 pr-1 text-mist-white text-left font-light mt-4 mb-2 md:mb-0">
                     <p className="opacity-70 mb-3">
                       {eventDetailDisclaimer(
                         eventDetailsDialog.event.viewing_language
                       )}
                     </p>
-                    {eventDetailsDialog.event.viewing_language === 'es'
-                      ? 'Este evento se ha recuperado de la cuenta'
-                      : 'This event was retrieved from account'}
-                    : &nbsp;
-                    {posterProfileUrl ? (
-                      <a
-                        href={posterProfileUrl}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-beaming-orange underline"
-                      >
-                        {eventDetailsDialog.event.poster.user}
-                      </a>
-                    ) : (
-                      eventDetailsDialog.event.poster.user
-                    )}
-                    <br />
-                    <br />
+                    <p>
+                      {eventDetailsDialog.event.viewing_language === 'es'
+                        ? 'Este evento se ha recuperado de la cuenta'
+                        : 'This event was retrieved from account'}
+                      :{' '}
+                      {posterProfileUrl ? (
+                        <a
+                          href={posterProfileUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline text-beaming-orange underline"
+                        >
+                          {eventDetailsDialog.event.poster.user}
+                        </a>
+                      ) : (
+                        eventDetailsDialog.event.poster.user
+                      )}
+                    </p>
                     {/* The original link is the Instagram post the event was
                         found in (orig_link). This block used to render
                         ticket_link, which only LOOKED right because the old
@@ -1365,13 +1372,13 @@ function EventDetails({ isEdit, locationName }: EventDetailsProps) {
                         2026-08-30 ticket_link holds a real ticket/bio URL, so
                         the "original" link pointed at linktr.ee pages. */}
                     {eventDetailsDialog.event.orig_link && (
-                      <div className="flex items-center gap-1 justify-start">
+                      <p className="mt-3">
                         Original event link:{' '}
                         <a
                           href={eventDetailsDialog.event.orig_link}
                           target="_blank"
                           rel="noopener noreferrer"
-                          className="text-beaming-orange underline  max-w-full truncate"
+                          className="inline text-beaming-orange underline max-w-full break-all"
                         >
                           {eventDetailsDialog.event.orig_link.length > 30
                             ? `${eventDetailsDialog.event.orig_link.substring(
@@ -1380,7 +1387,7 @@ function EventDetails({ isEdit, locationName }: EventDetailsProps) {
                               )}...`
                             : eventDetailsDialog.event.orig_link}
                         </a>
-                      </div>
+                      </p>
                     )}
                     {/* 2026-11-16: "found in bio" line removed from the detail
                         view; link_in_bio still drives ticket CTA fallback. */}
