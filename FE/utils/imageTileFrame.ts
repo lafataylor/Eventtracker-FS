@@ -1,8 +1,13 @@
 // Image tile frames for event cards.
 //
-// 2026-11-16: grid (board) and cards (flyer) use portrait 3:4 so flyers
-// read as flyers instead of cropped squares. Masonry keeps natural height.
-// List thumbs stay fixed-size elsewhere in EventCard.
+// Scope (owner, 2026-11-16): only grid (board) and cards (flyer) get the
+// portrait 3:4 tile. Masonry stays natural height; list thumbs stay fixed.
+// Do not put aspect classes on masonry/list.
+//
+// Tailwind `aspect-[3/4]` → CSS `aspect-ratio: 3 / 4` (width/height), so
+// three wide and four tall. The class string must stay a complete literal
+// here, and `./utils` must stay in tailwind.config.js content — otherwise
+// JIT omits the rule, the frame height is 0, and absolute images vanish.
 //
 // 2026-11-15: full `rounded-md` with `overflow-hidden` cut title lettering
 // printed near the bottom corners of the flyer (owner screenshot). Keep the
