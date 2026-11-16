@@ -40,8 +40,10 @@ export function desktopListThumbFrameClass(): string {
 /**
  * Mobile list row thumb: same width as before (5.75rem), portrait 3:4.
  * Height comes from aspect-ratio so the flyer reads tall on the phone.
- * Owner 2026-11-16 / LAF-17.
+ * self-start is required: the list row uses items-stretch, and a stretched
+ * definite height overrides aspect-ratio (thumbs went square/landscape in
+ * the phone emulator). Owner 2026-11-16 / LAF-17.
  */
 export function mobileListThumbFrameClass(): string {
-  return `relative w-[5.75rem] ${PORTRAIT_FLYER_ASPECT_CLASS} rounded-lg overflow-hidden bg-stone-gray shrink-0`;
+  return `relative w-[5.75rem] ${PORTRAIT_FLYER_ASPECT_CLASS} self-start rounded-lg overflow-hidden bg-stone-gray shrink-0`;
 }

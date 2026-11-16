@@ -77,6 +77,9 @@ test('mobile list thumb is portrait 3:4 (same width, aspect not fixed height)', 
   assert.doesNotMatch(cls, /h-\[4\.5rem\]/);
   assert.doesNotMatch(cls, /h-\[86px\]/);
   assert.match(cls, /\bshrink-0\b/);
+  // Without self-start, the row's items-stretch sets a definite height and
+  // aspect-ratio is ignored (phone thumbs looked square/landscape).
+  assert.match(cls, /\bself-start\b/);
 });
 
 test('EventCard wires desktop and mobile list thumb helpers', () => {
