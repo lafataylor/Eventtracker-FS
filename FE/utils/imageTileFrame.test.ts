@@ -2,8 +2,9 @@
 //
 // Grid (board), cards (flyer), and mobile list thumbs are portrait 3:4.
 // Masonry stays natural height; desktop list stays fixed 130×86. 2026-11-16.
-// Masonry/grid frames must not round the bottom corners: that radius
-// plus overflow-hidden clipped flyer title text (2026-11-15).
+// Masonry/grid: rounded frame + overflow-hidden must inset the flyer (p-2 /
+// inset-2) so corner lettering clears the radius — #20's squared bottoms
+// alone still clipped Winter Solstice on live (2026-11-16).
 // Blank grid images (2026-11-16): aspect class lived only in utils/, which
 // Tailwind did not scan — frame height collapsed under absolute imgs.
 import test from 'node:test';
@@ -12,10 +13,14 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
+  IMAGE_TILE_ABS_INSET_CLASS,
+  IMAGE_TILE_PAD_CLASS,
+  IMAGE_TILE_RADIUS_CLASS,
   PORTRAIT_FLYER_ASPECT_CLASS,
   desktopListThumbFrameClass,
   flyerCardImageFrameClass,
   imageTileFrameClass,
+  imageTileImgClass,
   mobileListThumbFrameClass,
 } from './imageTileFrame.ts';
 
@@ -25,25 +30,41 @@ test('portrait flyer aspect is 3:4 width/height, not landscape 4:3 or square', (
   assert.doesNotMatch(PORTRAIT_FLYER_ASPECT_CLASS, /aspect-\[4\/3\]/);
 });
 
-test('masonry frame keeps natural height (no aspect) and squared bottom', () => {
+test('tile pad clears md radius (p-2 = 8px > rounded-md = 6px)', () => {
+  assert.equal(IMAGE_TILE_RADIUS_CLASS, 'rounded-md');
+  assert.equal(IMAGE_TILE_PAD_CLASS, 'p-2');
+  assert.equal(IMAGE_TILE_ABS_INSET_CLASS, 'inset-2');
+});
+
+test('masonry frame keeps natural height, rounded chrome, and pad inset', () => {
   const cls = imageTileFrameClass(true);
-  assert.match(cls, /\brounded-t-md\b/);
-  assert.doesNotMatch(cls, /\brounded-md\b/);
-  assert.doesNotMatch(cls, /\brounded-b-/);
+  assert.match(cls, /\brounded-md\b/);
+  assert.doesNotMatch(cls, /\brounded-t-md\b/);
+  assert.match(cls, /\bp-2\b/);
   assert.match(cls, /\boverflow-hidden\b/);
   assert.doesNotMatch(cls, /\baspect-/);
   assert.doesNotMatch(cls, /\bpb-/);
 });
 
-test('grid (board) frame uses portrait 3:4 with squared bottom', () => {
+test('grid (board) frame uses portrait 3:4 with rounded chrome and pad inset', () => {
   const cls = imageTileFrameClass(false);
   assert.match(cls, /aspect-\[3\/4]/);
   assert.doesNotMatch(cls, /\baspect-square\b/);
   assert.doesNotMatch(cls, /aspect-\[4\/3\]/);
-  assert.match(cls, /\brounded-t-md\b/);
-  assert.doesNotMatch(cls, /\brounded-md\b/);
-  assert.doesNotMatch(cls, /\brounded-b-/);
+  assert.match(cls, /\brounded-md\b/);
+  assert.doesNotMatch(cls, /\brounded-t-md\b/);
+  assert.match(cls, /\bp-2\b/);
   assert.match(cls, /\boverflow-hidden\b/);
+});
+
+test('board img uses inset-2 so parent pad actually insets the flyer', () => {
+  const masonry = imageTileImgClass(true);
+  const board = imageTileImgClass(false);
+  assert.match(masonry, /\bblock\b/);
+  assert.doesNotMatch(masonry, /\binset-/);
+  assert.match(board, /\binset-2\b/);
+  assert.doesNotMatch(board, /\binset-0\b/);
+  assert.match(board, /\bobject-cover\b/);
 });
 
 test('cards (flyer) frame uses portrait 3:4', () => {
@@ -88,6 +109,7 @@ test('EventCard wires desktop and mobile list thumb helpers', () => {
   const source = readFileSync(cardPath, 'utf8');
   assert.match(source, /desktopListThumbFrameClass/);
   assert.match(source, /mobileListThumbFrameClass/);
+  assert.match(source, /imageTileImgClass/);
   assert.doesNotMatch(
     source,
     /w-\[5\.75rem\] h-\[4\.5rem\]/,
@@ -97,6 +119,12 @@ test('EventCard wires desktop and mobile list thumb helpers', () => {
     source,
     /relative w-\[130px\] h-\[86px\]/,
     'desktop list size lives in desktopListThumbFrameClass, not inline'
+  );
+  // Board tile img classes come from imageTileImgClass (inset-2), not a
+  // hard-coded inset-0 fill next to imageTileFrameClass.
+  assert.match(
+    source,
+    /imageTileFrameClass\(\!\!isInMasonryView\)[\s\S]*?imageTileImgClass\(\!\!isInMasonryView\)/
   );
 });
 

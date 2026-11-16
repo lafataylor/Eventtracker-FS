@@ -9,19 +9,43 @@
 // here, and `./utils` must stay in tailwind.config.js content — otherwise
 // JIT omits the rule, the frame height is 0, and absolute images vanish.
 //
-// 2026-11-15: full `rounded-md` with `overflow-hidden` cut title lettering
-// printed near the bottom corners of the flyer (owner screenshot). Keep the
-// same top radius; square the bottom so that text stays intact. Same class
-// on desktop and mobile — phone grid/masonry use this frame too.
+// 2026-11-15: full `rounded-md` + `overflow-hidden` cut flyer title
+// lettering near the bottom corners (#20). Squaring bottoms (`rounded-t-md`)
+// was not enough — Winter Solstice still lost its corner “W” on live
+// (2026-11-16). Any radius on the overflow clip eats pixels in that curve.
+// Keep the rounded flyer chrome; inset the image with padding so lettering
+// clears the curve (md radius = 6px, p-2 = 8px). Board absolute imgs must
+// use matching `inset-2` — `inset-0` ignores parent padding.
 
 export const PORTRAIT_FLYER_ASPECT_CLASS = 'aspect-[3/4]';
 
+/** Radius on the masonry/grid flyer frame (clip curve). */
+export const IMAGE_TILE_RADIUS_CLASS = 'rounded-md';
+
+/** Inset so flyer pixels clear IMAGE_TILE_RADIUS_CLASS. */
+export const IMAGE_TILE_PAD_CLASS = 'p-2';
+
+/**
+ * Absolute board img inset matching IMAGE_TILE_PAD_CLASS.
+ * Parent padding does not offset `inset-0` children.
+ */
+export const IMAGE_TILE_ABS_INSET_CLASS = 'inset-2';
+
 export function imageTileFrameClass(isMasonry: boolean): string {
-  const radius = 'rounded-t-md';
+  const base =
+    `relative w-full overflow-hidden ${IMAGE_TILE_RADIUS_CLASS} ${IMAGE_TILE_PAD_CLASS} bg-stone-gray`;
   if (isMasonry) {
-    return `relative w-full overflow-hidden ${radius} bg-stone-gray`;
+    return base;
   }
-  return `relative w-full ${PORTRAIT_FLYER_ASPECT_CLASS} overflow-hidden ${radius} bg-stone-gray`;
+  return `${base} ${PORTRAIT_FLYER_ASPECT_CLASS}`;
+}
+
+/** Masonry: in-flow (parent pad insets). Board: absolute with matching inset. */
+export function imageTileImgClass(isMasonry: boolean): string {
+  if (isMasonry) {
+    return 'block w-full h-auto';
+  }
+  return `absolute ${IMAGE_TILE_ABS_INSET_CLASS} object-cover`;
 }
 
 /** Cards (flyer) view image shell. Compact list thumbs keep a fixed size. */
