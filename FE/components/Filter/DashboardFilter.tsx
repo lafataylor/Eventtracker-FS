@@ -16,6 +16,7 @@ import SortOverlay from '../SortOverlay';
 import { Constants } from '../../utils/constants';
 import { Option } from '../../interface/filterInterface';
 import { isMexicoCity } from '../../utils/utils';
+import { mobileSafeInputTextClass } from '../../utils/mobileSafeInputText';
 
 interface DashboardFilterProps {
   onFilterChange: (filters: any) => void;
@@ -674,7 +675,7 @@ const DashboardFilter: React.FC<DashboardFilterProps> = ({
                       type="text"
                       value={priceDisplay(0)}
                       onChange={(e) => handlePriceInputChange(e, 0)}
-                      className="bg-midnight text-mist-white text-sm px-2 text-center py-1 rounded-full w-16 mr-2"
+                      className={`bg-midnight text-mist-white ${mobileSafeInputTextClass()} px-2 text-center py-1 rounded-full w-16 mr-2`}
                       pattern="\d*"
                     />
                   </div>
@@ -687,7 +688,7 @@ const DashboardFilter: React.FC<DashboardFilterProps> = ({
                       type="text"
                       value={priceDisplay(1)}
                       onChange={(e) => handlePriceInputChange(e, 1)}
-                      className="bg-midnight text-mist-white text-sm px-2 text-center py-1 rounded-full w-16 ml-2"
+                      className={`bg-midnight text-mist-white ${mobileSafeInputTextClass()} px-2 text-center py-1 rounded-full w-16 ml-2`}
                       pattern="\d*"
                     />
                   </div>
@@ -1082,7 +1083,7 @@ const DashboardFilter: React.FC<DashboardFilterProps> = ({
                   type="text"
                   value={priceDisplay(0)}
                   onChange={(e) => handlePriceInputChange(e, 0)}
-                  className="bg-midnight text-mist-white text-sm px-2 text-center py-1 rounded-full w-16 mr-2"
+                  className={`bg-midnight text-mist-white ${mobileSafeInputTextClass()} px-2 text-center py-1 rounded-full w-16 mr-2`}
                   pattern="\d*"
                 />
               </div>
@@ -1095,7 +1096,7 @@ const DashboardFilter: React.FC<DashboardFilterProps> = ({
                   type="text"
                   value={priceDisplay(1)}
                   onChange={(e) => handlePriceInputChange(e, 1)}
-                  className="bg-midnight text-mist-white text-sm px-2 text-center py-1 rounded-full w-16 ml-2"
+                  className={`bg-midnight text-mist-white ${mobileSafeInputTextClass()} px-2 text-center py-1 rounded-full w-16 ml-2`}
                   pattern="\d*"
                 />
               </div>
