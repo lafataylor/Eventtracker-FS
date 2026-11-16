@@ -50,6 +50,11 @@ import Spinner from '../Spinner';
 import EventService from '../../services/lib/event';
 import { favoriteEvent } from '../../store/actions/event';
 import { HEART_POP_MS, useHeartPop } from '../../utils/heartPop';
+import {
+  eventDetailDisclaimer,
+  instagramProfileUrl,
+  shouldShowTicketDetailsButton,
+} from '../../utils/eventDetailCopy';
 
 interface EventDetailsProps {
   isEdit: boolean;
@@ -440,6 +445,9 @@ function EventDetails({ isEdit, locationName }: EventDetailsProps) {
     return null;
   };
   const displayName = getDisplayName(eventDetailsDialog.event, isEdit);
+  const posterProfileUrl = instagramProfileUrl(
+    eventDetailsDialog.event.poster?.user
+  );
 
   const handleCopyLink = () => {
     const link = `https://lafaslist.com/event/share/${
@@ -1326,12 +1334,28 @@ function EventDetails({ isEdit, locationName }: EventDetailsProps) {
                     </button>
                   </div>
 
-                  <div className="text-[0.7rem] pt-2 pr-1 text-mist-white text-right font-light mt-4 mb-2 md:mb-0">
+                  <div className="text-[0.7rem] pt-2 pr-1 text-mist-white text-left font-light mt-4 mb-2 md:mb-0">
+                    <p className="opacity-70 mb-3">
+                      {eventDetailDisclaimer(
+                        eventDetailsDialog.event.viewing_language
+                      )}
+                    </p>
                     {eventDetailsDialog.event.viewing_language === 'es'
                       ? 'Este evento se ha recuperado de la cuenta'
                       : 'This event was retrieved from account'}
                     : &nbsp;
-                    {eventDetailsDialog.event.poster.user}
+                    {posterProfileUrl ? (
+                      <a
+                        href={posterProfileUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-beaming-orange underline"
+                      >
+                        {eventDetailsDialog.event.poster.user}
+                      </a>
+                    ) : (
+                      eventDetailsDialog.event.poster.user
+                    )}
                     <br />
                     <br />
                     {/* The original link is the Instagram post the event was
@@ -1341,7 +1365,7 @@ function EventDetails({ isEdit, locationName }: EventDetailsProps) {
                         2026-08-30 ticket_link holds a real ticket/bio URL, so
                         the "original" link pointed at linktr.ee pages. */}
                     {eventDetailsDialog.event.orig_link && (
-                      <div className="flex items-center gap-1 justify-end">
+                      <div className="flex items-center gap-1 justify-start">
                         Original event link:{' '}
                         <a
                           href={eventDetailsDialog.event.orig_link}
@@ -1358,25 +1382,8 @@ function EventDetails({ isEdit, locationName }: EventDetailsProps) {
                         </a>
                       </div>
                     )}
-                    {eventDetailsDialog.event.link_in_bio &&
-                      eventDetailsDialog.event.ticket_link && (
-                        <div>
-                          {eventDetailsDialog.event.viewing_language === 'es'
-                            ? '(Link encontrado en la bio del '
-                            : '(Link was found in user '}
-                          {eventDetailsDialog.event.viewing_language !==
-                            'es' && (
-                            <span>
-                              {eventDetailsDialog.event.poster.user}'s bio.)
-                            </span>
-                          )}
-                          {eventDetailsDialog.event.viewing_language ===
-                            'es' && (
-                            <span>{eventDetailsDialog.event.poster.user})</span>
-                          )}
-                          {eventDetailsDialog.event.link_in_bio}
-                        </div>
-                      )}
+                    {/* 2026-11-16: "found in bio" line removed from the detail
+                        view; link_in_bio still drives ticket CTA fallback. */}
                   </div>
 
                   {isEdit ? (
@@ -1387,13 +1394,16 @@ function EventDetails({ isEdit, locationName }: EventDetailsProps) {
                       <span className="font-semibold">Save Event</span>
                     </button>
                   ) : (
+                    shouldShowTicketDetailsButton(
+                      eventDetailsDialog.event.rsvp_required
+                    ) && (
                     <a
                       href={
                         eventDetailsDialog.event.ticket_link
                           ? eventDetailsDialog.event.ticket_link
                           : eventDetailsDialog.event.link_in_bio
-                          ? 'https://instagram.com/' +
-                            (eventDetailsDialog.event.poster?.user ?? '').substring(1)
+                          ? posterProfileUrl ??
+                            eventDetailsDialog.event.orig_link
                           : // No ticket link known: send people to the post
                             // itself rather than rendering a dead button (the
                             // old extractor's post-URL fallback did the same).
@@ -1409,15 +1419,12 @@ function EventDetails({ isEdit, locationName }: EventDetailsProps) {
                     >
                       <GrShare className="w-5 h-5 font-bold text-slate-black" />
                       <span className="font-semibold">
-                        {eventDetailsDialog.event.rsvp_required
-                          ? eventDetailsDialog.event.viewing_language === 'es'
-                            ? 'Detalles de RSVP'
-                            : 'RSVP Details'
-                          : eventDetailsDialog.event.viewing_language === 'es'
+                        {eventDetailsDialog.event.viewing_language === 'es'
                           ? 'Detalles del boleto'
                           : 'Ticket Details'}
                       </span>
                     </a>
+                    )
                   )}
                 </div>
               </div>
