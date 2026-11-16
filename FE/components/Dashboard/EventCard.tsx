@@ -22,8 +22,10 @@ import { useRouter } from 'next/router';
 import { isMexicoCity } from '../../utils/utils';
 import { HEART_POP_MS, useHeartPop } from '../../utils/heartPop';
 import {
+  desktopListThumbFrameClass,
   flyerCardImageFrameClass,
   imageTileFrameClass,
+  mobileListThumbFrameClass,
 } from '../../utils/imageTileFrame';
 
 interface EventCardsProp {
@@ -646,7 +648,7 @@ function EventCard({
             wrapper has pointer-events-auto and its own handler so a
             heart click does not open the event. Owner 2026-11-14 / 15:
             list view, the whole row opens the event, not just the flyer. */}
-        <div className="relative w-[130px] h-[86px] rounded-lg overflow-hidden bg-stone-gray pointer-events-none">
+        <div className={`${desktopListThumbFrameClass()} pointer-events-none`}>
           <img
             src={event.orig_thumb ? event.orig_thumb : ''}
             alt="Event Thumbnail"
@@ -754,7 +756,9 @@ function EventCard({
           (almostOver ? 'opacity-70 ' : '')
         }
       >
-        <div className="relative w-[5.75rem] h-[4.5rem] rounded-lg overflow-hidden bg-stone-gray shrink-0 pointer-events-none">
+        {/* Mobile list only: portrait 3:4. Desktop list stays 130×86.
+            Owner 2026-11-16 / LAF-17. */}
+        <div className={`${mobileListThumbFrameClass()} pointer-events-none`}>
           <img
             src={event.orig_thumb ? event.orig_thumb : ''}
             alt=""
