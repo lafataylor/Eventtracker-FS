@@ -4,6 +4,10 @@ module.exports = {
   content: [
     './pages/**/*.{js,ts,jsx,tsx}',
     './components/**/*.{js,ts,jsx,tsx}',
+    // 2026-11-16: class strings for tile frames live in utils/imageTileFrame.ts
+    // (aspect-[3/4]). Without this path, JIT never emits that rule, the frame
+    // height collapses to 0, and grid/cards images disappear (absolute fill).
+    './utils/**/*.{js,ts,jsx,tsx}',
   ],
   theme: {
     colors: {
