@@ -21,6 +21,10 @@ import { favoriteEvent } from '../../store/actions/event';
 import { useRouter } from 'next/router';
 import { isMexicoCity } from '../../utils/utils';
 import { HEART_POP_MS, useHeartPop } from '../../utils/heartPop';
+import {
+  flyerCardImageFrameClass,
+  imageTileFrameClass,
+} from '../../utils/imageTileFrame';
 
 interface EventCardsProp {
   event: Event;
@@ -547,13 +551,7 @@ function EventCard({
           (almostOver ? 'opacity-70 ' : '')
         }
       >
-        <div
-          className={
-            isInMasonryView
-              ? 'relative w-full overflow-hidden rounded-md bg-stone-gray'
-              : 'relative w-full aspect-square overflow-hidden rounded-md bg-stone-gray'
-          }
-        >
+        <div className={imageTileFrameClass(!!isInMasonryView)}>
           <img
             src={event.orig_thumb ? event.orig_thumb : ''}
             alt=""
@@ -908,7 +906,7 @@ function EventCard({
     >
       <div className={`flex  ${isInListView ? 'flex-row w-full ' : 'flex-col'}`}>
         <div className={`flex  ${isInListView ? 'flex-row justify-start gap-3 w-full ' : 'flex-col gap-1'}`}>
-          <div className={`relative rounded-xl overflow-hidden ${isInListView ? ' h-[100px] min-w-[100px] max-w-[100px] ' : ' w-full pb-[100%] '}`}>
+          <div className={flyerCardImageFrameClass(!!isInListView)}>
             <img
               className={`absolute top-0 left-0 object-cover rounded-xl object-cover bg-midnight ${isInListView ? ' min-w-[100px] h-[100px] '  : ' w-full h-full  '}`}
               src={event.orig_thumb ? event.orig_thumb : ''}
