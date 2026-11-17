@@ -44,16 +44,15 @@ import FeedbackDialog from './FeedbackDialog';
 import getFilterString, { colorFromClass } from '../../utils/color_convertor';
 import { IoIosInformationCircle } from 'react-icons/io';
 import copy from 'copy-to-clipboard'; // Import copy-to-clipboard
-import NextImage from 'next/image';
 import InfoOverlay from '../Admin/InfoOverlay';
 import Spinner from '../Spinner';
 import EventService from '../../services/lib/event';
 import { favoriteEvent } from '../../store/actions/event';
 import { HEART_POP_MS, useHeartPop } from '../../utils/heartPop';
 import {
+  copyEventLinkLabel,
   eventDetailDisclaimer,
   instagramProfileUrl,
-  shouldShowTicketDetailsButton,
 } from '../../utils/eventDetailCopy';
 
 interface EventDetailsProps {
@@ -1281,62 +1280,38 @@ function EventDetails({ isEdit, locationName }: EventDetailsProps) {
                       </div>
                     )}
                   </div>
-                  <div
-                    className="w-full hidden lg:flex flex-row items-center gap-2 px-2 py-2 rounded-lg bg-midnight"
-                    style={{ overflowWrap: 'anywhere' }}
+                  {/* 2026-11-17: Copy Event Link is the filled orange CTA
+                      (same look as the old ticket CTA), not a midnight
+                      underline bar. Ticket and RSVP CTAs stay hidden. */}
+                  <button
+                    type="button"
+                    onClick={handleCopyLink}
+                    className="bg-beaming-orange text-midnight hover:bg-gradient-to-r from-beaming-orange-dark to-beaming-orange-light border-beaming-orange-dark hidden lg:flex w-[90%] justify-center items-center rounded-lg border-2 gap-4 p-3 font-medium self-end hover:cursor-pointer mt-4 mb-2"
                   >
-                    <div
-                      onClick={handleCopyLink}
-                      className="w-8 h-8 rounded-lg cursor-pointer p-1 bg-beaming-orange flex items-center justify-center "
-                    >
-                      <NextImage
-                        src="/images/share_icon.svg"
-                        alt="Share Icon"
-                        width={24}
-                        height={24}
-                        className="text-midnight"
-                      />
-                    </div>
-                    <button
-                      onClick={handleCopyLink}
-                      className="text-xs underline px-2 text-right text-beaming-orange flex-1"
-                    >
-                      {eventDetailsDialog.event.viewing_language === 'es'
-                        ? 'Copiar Link del Evento'
-                        : 'Copy Event Link'}
-                    </button>
-                  </div>
+                    <GrShare className="w-5 h-5 font-bold text-slate-black" />
+                    <span className="font-semibold">
+                      {copyEventLinkLabel(
+                        eventDetailsDialog.event.viewing_language
+                      )}
+                    </span>
+                  </button>
                 </div>
                 {/* 2026-11-16: w-full + items-stretch (was invalid w-100 +
-                    items-center) so the muted source lines actually left-align
-                    instead of sitting in a centered auto-width cluster next to
-                    the full-width Copy Event Link / Ticket Details bars. */}
+                    items-center) so the muted source lines left-align cleanly
+                    under the Copy Event Link CTA. */}
                 <div className="w-full flex flex-col justify-between gap-4 items-stretch mt-8 md:mt-0">
-                  <div
-                    className="w-full flex  lg:hidden flex-row items-center gap-2 px-2 py-2 rounded-lg bg-midnight"
-                    style={{ overflowWrap: 'anywhere' }}
+                  <button
+                    type="button"
+                    onClick={handleCopyLink}
+                    className="bg-beaming-orange text-midnight hover:bg-gradient-to-r from-beaming-orange-dark to-beaming-orange-light border-beaming-orange-dark flex lg:hidden w-[90%] justify-center items-center rounded-lg border-2 gap-4 p-3 font-medium self-end hover:cursor-pointer mt-4 mb-2"
                   >
-                    <div
-                      onClick={handleCopyLink}
-                      className="w-8 h-8 rounded-lg cursor-pointer p-1 bg-beaming-orange flex items-center justify-center "
-                    >
-                      <NextImage
-                        src="/images/share_icon.svg"
-                        alt="Share Icon"
-                        width={24}
-                        height={24}
-                        className="text-midnight"
-                      />
-                    </div>
-                    <button
-                      onClick={handleCopyLink}
-                      className="text-xs underline px-2 text-right text-beaming-orange flex-1"
-                    >
-                      {eventDetailsDialog.event.viewing_language === 'es'
-                        ? 'Copiar Link del Evento'
-                        : 'Copy Event Link'}
-                    </button>
-                  </div>
+                    <GrShare className="w-5 h-5 font-bold text-slate-black" />
+                    <span className="font-semibold">
+                      {copyEventLinkLabel(
+                        eventDetailsDialog.event.viewing_language
+                      )}
+                    </span>
+                  </button>
 
                   {/* Source block: plain muted text. poster.user is a compact
                       inline orange underline <a> only — not a padded CTA, not
@@ -1390,48 +1365,16 @@ function EventDetails({ isEdit, locationName }: EventDetailsProps) {
                       </p>
                     )}
                     {/* 2026-11-16: "found in bio" line removed from the detail
-                        view; link_in_bio still drives ticket CTA fallback. */}
+                        view; ticket/RSVP CTAs hidden for now (2026-11-17). */}
                   </div>
 
-                  {isEdit ? (
+                  {isEdit && (
                     <button
                       className="flex w-[90%] justify-center items-center text-midnight rounded-lg border-beaming-orange-dark border-2 gap-4 p-3 self-end hover:cursor-pointer bg-beaming-orange"
                       onClick={() => onSaveEventHandler()}
                     >
                       <span className="font-semibold">Save Event</span>
                     </button>
-                  ) : (
-                    shouldShowTicketDetailsButton(
-                      eventDetailsDialog.event.rsvp_required
-                    ) && (
-                    <a
-                      href={
-                        eventDetailsDialog.event.ticket_link
-                          ? eventDetailsDialog.event.ticket_link
-                          : eventDetailsDialog.event.link_in_bio
-                          ? posterProfileUrl ??
-                            eventDetailsDialog.event.orig_link
-                          : // No ticket link known: send people to the post
-                            // itself rather than rendering a dead button (the
-                            // old extractor's post-URL fallback did the same).
-                            eventDetailsDialog.event.orig_link
-                      }
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="bg-beaming-orange text-midnight hover:bg-gradient-to-r from-beaming-orange-dark to-beaming-orange-light border-beaming-orange-dark   flex w-[90%] justify-center items-center rounded-lg border-2 gap-4 p-3 font-medium self-end hover:cursor-pointer mt-4 mb-2"
-                      title={
-                        eventDetailsDialog.event.ticket_link ||
-                        eventDetailsDialog.event.orig_link
-                      }
-                    >
-                      <GrShare className="w-5 h-5 font-bold text-slate-black" />
-                      <span className="font-semibold">
-                        {eventDetailsDialog.event.viewing_language === 'es'
-                          ? 'Detalles del boleto'
-                          : 'Ticket Details'}
-                      </span>
-                    </a>
-                    )
                   )}
                 </div>
               </div>
