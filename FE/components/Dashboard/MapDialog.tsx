@@ -1,19 +1,28 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
   APIProvider,
   Map,
   AdvancedMarker,
-  useMapsLibrary,
+  useMap,
 } from '@vis.gl/react-google-maps';
 import { useStore } from '../../store/store';
 import { hideMap } from '../../store/actions/mapDialog';
 import { FiX } from 'react-icons/fi';
 import Spinner from '../Spinner';
 import BottomDrawer from './BottomDrawer';
+import { resolveGoogleMapsMapId } from '../../utils/googleMapsMapId';
 
 interface MapDialogProps {
   setIsMapDialogOpen: (open: boolean) => void;
 }
+
+// AdvancedMarker must wait for the map instance; attaching early throws
+// getRootNode inside maps-api-v3 (same crash as city-page map view).
+const DialogMarker = ({ position }: { position: google.maps.LatLngLiteral }) => {
+  const map = useMap();
+  if (!map) return null;
+  return <AdvancedMarker position={position} />;
+};
 
 const MapDialog: React.FC<MapDialogProps> = ({ setIsMapDialogOpen }) => {
   const [state, dispatch] = useStore();
@@ -23,7 +32,6 @@ const MapDialog: React.FC<MapDialogProps> = ({ setIsMapDialogOpen }) => {
     () => mapDialog.coordinates,
     [mapDialog.coordinates]
   );
-  const placesLibrary = useMapsLibrary('places');
   const mapQuery = encodeURIComponent(mapDialog.location);
 
   // URLs for opening maps:
@@ -39,8 +47,6 @@ const MapDialog: React.FC<MapDialogProps> = ({ setIsMapDialogOpen }) => {
 
   // State for controlling the mobile drawer
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
-
-  
 
   // Helper to detect device type
   const getDeviceType = () => {
@@ -91,7 +97,6 @@ const MapDialog: React.FC<MapDialogProps> = ({ setIsMapDialogOpen }) => {
       >
         <APIProvider
           apiKey={process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY as string}
-          libraries={placesLibrary ? ['places'] : undefined}
         >
           <div
             className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 lg:w-[70vw] h-[90%] w-full flex flex-col p-5 gap-5 lg:rounded-lg rounded-3xl bg-slate-black shadow-[8px_8px_32px_rgba(0,0,0,0.25)] shadow-transparent-black overflow-auto"
@@ -120,10 +125,10 @@ const MapDialog: React.FC<MapDialogProps> = ({ setIsMapDialogOpen }) => {
                   zoomControl={true}
                   clickableIcons={true}
                   gestureHandling="greedy"
-                  mapId="roadmap"
+                  mapId={resolveGoogleMapsMapId()}
                   className="map-container"
                 >
-                  <AdvancedMarker position={mapDialog.coordinates} />
+                  <DialogMarker position={mapDialog.coordinates} />
                 </Map>
               )}
             </div>

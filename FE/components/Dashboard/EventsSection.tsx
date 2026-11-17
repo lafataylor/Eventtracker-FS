@@ -9,6 +9,7 @@ import { useStore } from '../../store/store';
 import NextImage from 'next/image';
 import { APIProvider, Map, AdvancedMarker, useMap } from '@vis.gl/react-google-maps';
 import { geocodeLocation } from '../../utils/geocode';
+import { resolveGoogleMapsMapId } from '../../utils/googleMapsMapId';
 import { ViewMode } from '../../utils/viewMode';
 
 interface EventsSectionProps {
@@ -76,6 +77,63 @@ const MapController = ({ eventCoordinates }: { eventCoordinates: EventCoordinate
   }, [map, eventCoordinates]);
   
   return null;
+};
+
+// Wait for the map instance before attaching AdvancedMarkers. Attaching while
+// the Maps DOM node is still undefined is what throws getRootNode (2026-11-17).
+const EventMapMarkers = ({
+  events,
+  eventCoordinates,
+  favoritedEvents,
+  language,
+  dispatch,
+}: {
+  events: Event[];
+  eventCoordinates: EventCoordinates;
+  favoritedEvents: number[];
+  language?: string;
+  dispatch: any;
+}) => {
+  const map = useMap();
+  if (!map) return null;
+
+  return (
+    <>
+      {events.map((event, index) => {
+        const coordinates = eventCoordinates[event.id];
+        if (!coordinates) return null;
+
+        return (
+          <AdvancedMarker
+            key={`event_marker_${event.id}_${index}`}
+            position={coordinates}
+            onClick={() => {
+              import('../../store/actions/eventDetailsDialog').then(({ showEvent }) => {
+                showEvent({
+                  ...event,
+                  is_favorite: favoritedEvents.includes(event.id) ?? false,
+                  viewing_language: language,
+                })(dispatch);
+              });
+
+              const body = document.querySelector('body');
+              if (body != null) {
+                body.style.overflow = 'hidden';
+              }
+            }}
+          >
+            <div className="w-12 h-12 rounded-full overflow-hidden border-2 border-beaming-orange bg-midnight">
+              <img
+                src={event.orig_thumb ? event.orig_thumb : ''}
+                alt="Event Thumbnail"
+                className="w-full h-full object-cover"
+              />
+            </div>
+          </AdvancedMarker>
+        );
+      })}
+    </>
+  );
 };
 
 // Location button component to center map on user's location
@@ -397,7 +455,7 @@ const EventsSection = ({
                   <Map
                     defaultZoom={12}
                     defaultCenter={mapCenter}
-                    mapId="roadmap"
+                    mapId={resolveGoogleMapsMapId()}
                     className="w-full h-full rounded-xl"
                     streetViewControl={false}
                     mapTypeControl={false}
@@ -405,45 +463,15 @@ const EventsSection = ({
                   >
                     <MapController eventCoordinates={eventCoordinates} />
                     <LocationButton />
-                    {!isLoading && events && events.map((event, index) => {
-                      const coordinates = eventCoordinates[event.id];
-                      
-                      // Debug logging to see what coordinates we have
-                      if (!coordinates) {
-                        console.log(`Event ${event.id} (${event.name}) has no coordinates`);
-                        return null;
-                      }
-                      
-                      return (
-                        <AdvancedMarker
-                          key={`event_marker_${index}`}
-                          position={coordinates}
-                          onClick={() => {
-                            // Show event details when marker is clicked
-                            import('../../store/actions/eventDetailsDialog').then(({ showEvent }) => {
-                              showEvent({
-                                ...event,
-                                is_favorite: favoritedEvents.includes(event.id) ?? false,
-                                viewing_language: language,
-                              })(dispatch);
-                            });
-                            
-                            const body = document.querySelector('body');
-                            if (body != null) {
-                              body.style.overflow = 'hidden';
-                            }
-                          }}
-                        >
-                          <div className="w-12 h-12 rounded-full overflow-hidden border-2 border-beaming-orange bg-midnight">
-                            <img
-                              src={event.orig_thumb ? event.orig_thumb : ''}
-                              alt="Event Thumbnail"
-                              className="w-full h-full object-cover"
-                            />
-                          </div>
-                        </AdvancedMarker>
-                      );
-                    })}
+                    {!isLoading && events ? (
+                      <EventMapMarkers
+                        events={events}
+                        eventCoordinates={eventCoordinates}
+                        favoritedEvents={favoritedEvents}
+                        language={language}
+                        dispatch={dispatch}
+                      />
+                    ) : null}
                   </Map>
                 </APIProvider>
                 {isLoading && (
