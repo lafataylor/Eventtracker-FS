@@ -1,8 +1,8 @@
 // Run: npm test
 //
-// Event detail polish: quiet disclaimer, no RSVP Details button, no bio line,
-// Instagram handle is a real profile link, source lines left-aligned.
-// 2026-11-16.
+// Event detail polish: quiet disclaimer, no RSVP/Ticket Details buttons, no
+// bio line, Instagram handle is a compact profile link, Copy Event Link is
+// the filled orange CTA. 2026-11-16 / 2026-11-17.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -10,6 +10,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   EVENT_DETAIL_DISCLAIMER_EN,
+  copyEventLinkLabel,
   eventDetailDisclaimer,
   instagramProfileUrl,
   shouldShowTicketDetailsButton,
@@ -48,25 +49,89 @@ test('instagramProfileUrl strips leading @ and builds a profile URL', () => {
   assert.equal(instagramProfileUrl('@'), null);
 });
 
-test('RSVP Details button stays hidden; Ticket Details still allowed', () => {
+// 2026-11-17: owner — hide Ticket Details entirely (same as RSVP Details).
+test('Ticket Details and RSVP Details stay hidden', () => {
   assert.equal(shouldShowTicketDetailsButton(true), false);
-  assert.equal(shouldShowTicketDetailsButton(false), true);
-  assert.equal(shouldShowTicketDetailsButton(null), true);
+  assert.equal(shouldShowTicketDetailsButton(false), false);
+  assert.equal(shouldShowTicketDetailsButton(null), false);
+  assert.equal(shouldShowTicketDetailsButton(undefined), false);
 });
 
-test('EventDetails wires disclaimer, IG link, left-align, no bio, no RSVP CTA', () => {
+test('copyEventLinkLabel is bilingual', () => {
+  assert.equal(copyEventLinkLabel('en'), 'Copy Event Link');
+  assert.equal(copyEventLinkLabel('es'), 'Copiar Link del Evento');
+  assert.equal(copyEventLinkLabel(null), 'Copy Event Link');
+});
+
+test('EventDetails wires disclaimer, IG link, left-align, no bio, no ticket/RSVP CTA', () => {
   assert.match(eventDetailsSrc, /eventDetailDisclaimer/);
   assert.match(eventDetailsSrc, /instagramProfileUrl/);
-  assert.match(eventDetailsSrc, /shouldShowTicketDetailsButton/);
-  assert.match(eventDetailsSrc, /EVENT_DETAIL_DISCLAIMER_EN|eventDetailDisclaimer/);
+  assert.match(eventDetailsSrc, /copyEventLinkLabel/);
+  assert.doesNotMatch(eventDetailsSrc, /shouldShowTicketDetailsButton/);
   assert.doesNotMatch(
     eventDetailsSrc,
     /Link was found in user|Link encontrado en la bio/
   );
-  assert.doesNotMatch(eventDetailsSrc, /RSVP Details|Detalles de RSVP/);
+  // No user-facing ticket/RSVP CTA labels (comments may mention the history).
+  assert.doesNotMatch(
+    eventDetailsSrc,
+    /['"`](RSVP Details|Detalles de RSVP|Ticket Details|Detalles del boleto)['"`]/
+  );
   // Source block left-aligned (was text-right / justify-end).
   assert.match(
     eventDetailsSrc,
     /text-\[0\.7rem\][^"]*text-left/
+  );
+});
+
+// 2026-11-16: owner — "Instagram text should not be full width button."
+// poster.user must be a compact inline orange underline <a>, not a padded CTA.
+test('IG handle is a compact inline link, not a full-width button', () => {
+  const handleAnchor = eventDetailsSrc.match(
+    /href=\{posterProfileUrl\}[\s\S]*?className="([^"]*)"[\s\S]*?\{eventDetailsDialog\.event\.poster\.user\}/
+  );
+  assert.ok(handleAnchor, 'expected poster.user <a href={posterProfileUrl}>');
+  const className = handleAnchor[1];
+  assert.match(className, /\binline\b/);
+  assert.match(className, /text-beaming-orange/);
+  assert.match(className, /\bunderline\b/);
+  assert.doesNotMatch(className, /\bflex-1\b/);
+  assert.doesNotMatch(className, /\bw-full\b/);
+  assert.doesNotMatch(className, /\bw-\[90%\]\b/);
+  assert.doesNotMatch(className, /\bbg-beaming-orange\b/);
+  assert.doesNotMatch(className, /\bp-3\b/);
+  // Source column must stretch full width and left-align (not items-center).
+  assert.match(
+    eventDetailsSrc,
+    /w-full flex flex-col[^"]*items-stretch/
+  );
+  assert.match(eventDetailsSrc, /self-start text-\[0\.7rem\]/);
+});
+
+// 2026-11-17: Copy Event Link is the filled orange CTA, not a midnight
+// underline / flex-1 text link bar. Owner: center the button (not left/end).
+test('Copy Event Link is a centered filled orange CTA, not a midnight underline bar', () => {
+  assert.match(eventDetailsSrc, /copyEventLinkLabel/);
+  assert.match(
+    eventDetailsSrc,
+    /bg-beaming-orange[\s\S]*?self-center[\s\S]*?copyEventLinkLabel/
+  );
+  assert.match(eventDetailsSrc, /self-center/);
+  // Copy CTAs must not use self-end (right) alignment.
+  const copyButtons = [
+    ...eventDetailsSrc.matchAll(
+      /onClick=\{handleCopyLink\}[\s\S]*?className="([^"]*)"/g
+    ),
+  ];
+  assert.ok(copyButtons.length >= 2, 'expected desktop + mobile copy CTAs');
+  for (const [, className] of copyButtons) {
+    assert.match(className, /\bself-center\b/);
+    assert.doesNotMatch(className, /\bself-end\b/);
+    assert.doesNotMatch(className, /\bself-start\b/);
+  }
+  // Old midnight bar + underline flex-1 pattern must be gone from the copy CTA.
+  assert.doesNotMatch(
+    eventDetailsSrc,
+    /rounded-lg bg-midnight[\s\S]{0,400}?Copy Event Link|text-xs underline px-2 text-right text-beaming-orange flex-1/
   );
 });

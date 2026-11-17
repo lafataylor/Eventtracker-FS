@@ -1,6 +1,7 @@
 // Event detail view copy and small helpers. 2026-11-16: owner asked for a
-// quiet accuracy disclaimer, no RSVP Details button, no "found in bio" line,
-// and a real Instagram profile link for the source handle.
+// quiet accuracy disclaimer, no RSVP/Ticket Details buttons, no "found in bio"
+// line, a real Instagram profile link for the source handle, and Copy Event
+// Link as the filled orange CTA (not a midnight underline bar).
 
 export const EVENT_DETAIL_DISCLAIMER_EN =
   'Some details may be incorrect, always confirm before you pull up.';
@@ -26,9 +27,18 @@ export function instagramProfileUrl(
   return `https://instagram.com/${username}`;
 }
 
-// 2026-11-16: hide the RSVP Details CTA for now; Ticket Details still shows.
+// 2026-11-17: hide Ticket Details and RSVP Details for now (owner). Keep the
+// helper so a later restore is one flip; rsvpRequired is unused on purpose.
 export function shouldShowTicketDetailsButton(
-  rsvpRequired: boolean | null | undefined
+  _rsvpRequired?: boolean | null
 ): boolean {
-  return !rsvpRequired;
+  return false;
+}
+
+export function copyEventLinkLabel(
+  viewingLanguage: string | null | undefined
+): string {
+  return viewingLanguage === 'es'
+    ? 'Copiar Link del Evento'
+    : 'Copy Event Link';
 }
