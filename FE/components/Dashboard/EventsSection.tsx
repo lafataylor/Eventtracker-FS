@@ -11,6 +11,11 @@ import { APIProvider, Map, AdvancedMarker, useMap } from '@vis.gl/react-google-m
 import { geocodeLocation } from '../../utils/geocode';
 import { resolveGoogleMapsMapId } from '../../utils/googleMapsMapId';
 import { ViewMode } from '../../utils/viewMode';
+import {
+  coordsFromVenue,
+  eventIsOutsideRegion,
+  sortInRegionFirst,
+} from '../../utils/cityRegion';
 
 interface EventsSectionProps {
   title: string;
@@ -41,40 +46,37 @@ interface EventCoordinates {
 }
 
 // MapController component to handle map centering
-const MapController = ({ eventCoordinates }: { eventCoordinates: EventCoordinates }) => {
+const MapController = ({
+  eventCoordinates,
+  preferCoords,
+}: {
+  eventCoordinates: EventCoordinates;
+  preferCoords?: google.maps.LatLngLiteral[];
+}) => {
   const map = useMap();
   const hasInitialized = useRef(false);
   
   useEffect(() => {
     if (map && Object.keys(eventCoordinates).length > 0 && !hasInitialized.current) {
-      // Only center map once when first loaded
+      // Prefer in-region pins when fitting; fall back to all pins.
+      const preferred =
+        preferCoords && preferCoords.length > 0
+          ? preferCoords
+          : (Object.values(eventCoordinates).filter(Boolean) as google.maps.LatLngLiteral[]);
+      if (preferred.length === 0) return;
+
       const bounds = new google.maps.LatLngBounds();
-      let hasValidBounds = false;
-      
-      // Add all event coordinates to bounds
-      Object.values(eventCoordinates).forEach(coords => {
-        if (coords) {
-          bounds.extend(coords);
-          hasValidBounds = true;
-        }
-      });
-      
-      if (hasValidBounds) {
-        // Use bounds if we have multiple points
-        if (Object.values(eventCoordinates).length > 1) {
-          map.fitBounds(bounds, 50); // 50px padding
-        } else {
-          // If only one point, center on it with a reasonable zoom level
-          const singleCoord = Object.values(eventCoordinates)[0];
-          if (singleCoord) {
-            map.setCenter(singleCoord);
-            map.setZoom(14);
-          }
-        }
-        hasInitialized.current = true;
+      preferred.forEach((coords) => bounds.extend(coords));
+
+      if (preferred.length > 1) {
+        map.fitBounds(bounds, 50); // 50px padding
+      } else {
+        map.setCenter(preferred[0]);
+        map.setZoom(14);
       }
+      hasInitialized.current = true;
     }
-  }, [map, eventCoordinates]);
+  }, [map, eventCoordinates, preferCoords]);
   
   return null;
 };
@@ -86,12 +88,14 @@ const EventMapMarkers = ({
   eventCoordinates,
   favoritedEvents,
   language,
+  locationName,
   dispatch,
 }: {
   events: Event[];
   eventCoordinates: EventCoordinates;
   favoritedEvents: number[];
   language?: string;
+  locationName?: string;
   dispatch: any;
 }) => {
   const map = useMap();
@@ -102,11 +106,24 @@ const EventMapMarkers = ({
       {events.map((event, index) => {
         const coordinates = eventCoordinates[event.id];
         if (!coordinates) return null;
+        const outside = eventIsOutsideRegion(
+          event,
+          locationName,
+          coordinates
+        );
 
         return (
           <AdvancedMarker
             key={`event_marker_${event.id}_${index}`}
             position={coordinates}
+            zIndex={outside ? 1 : 10}
+            title={
+              outside
+                ? language === 'es'
+                  ? 'Fuera de la zona'
+                  : 'Outside area'
+                : undefined
+            }
             onClick={() => {
               import('../../store/actions/eventDetailsDialog').then(({ showEvent }) => {
                 showEvent({
@@ -122,7 +139,14 @@ const EventMapMarkers = ({
               }
             }}
           >
-            <div className="w-12 h-12 rounded-full overflow-hidden border-2 border-beaming-orange bg-midnight">
+            <div
+              className={
+                'w-12 h-12 rounded-full overflow-hidden bg-midnight ' +
+                (outside
+                  ? 'border-2 border-mist-white/40 opacity-55'
+                  : 'border-2 border-beaming-orange')
+              }
+            >
               <img
                 src={event.orig_thumb ? event.orig_thumb : ''}
                 alt="Event Thumbnail"
@@ -272,6 +296,25 @@ const EventsSection = ({
     setUserFirstName(userFirstNameFromSession || '');
   }, []);
 
+  // Seed map pins from GeocodingCache coords already on the venue payload
+  // so out-of-region styling works before any live geocode round-trip.
+  useEffect(() => {
+    if (!events?.length) return;
+    setEventCoordinates((prev) => {
+      let changed = false;
+      const next = { ...prev };
+      for (const event of events) {
+        if (next[event.id]) continue;
+        const cached = coordsFromVenue(event.venue);
+        if (cached) {
+          next[event.id] = cached;
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, [events]);
+
   // Geocode event addresses when map view is activated
   useEffect(() => {
     // Only geocode if map view is active, there are events, and we haven't geocoded yet
@@ -291,10 +334,15 @@ const EventsSection = ({
           
           await Promise.all(
             batchEvents.map(async (event) => {
-              // Skip if we already have coordinates for this event
-              if (eventCoordinates[event.id]) {
-                console.log(`Event ${event.id} already has coordinates:`, eventCoordinates[event.id]);
-                validCoordinates.push(eventCoordinates[event.id] as google.maps.LatLngLiteral);
+              // Prefer coords already on the venue or from an earlier pass
+              const existing =
+                eventCoordinates[event.id] || coordsFromVenue(event.venue);
+              if (existing) {
+                console.log(`Event ${event.id} already has coordinates:`, existing);
+                setEventCoordinates((prev) =>
+                  prev[event.id] ? prev : { ...prev, [event.id]: existing }
+                );
+                validCoordinates.push(existing);
                 processedCount++;
                 return;
               }
@@ -352,10 +400,15 @@ const EventsSection = ({
         
         console.log(`Geocoding complete. Found coordinates for ${validCoordinates.length} events`);
         
-        // Calculate center of the map from all valid coordinates
-        if (validCoordinates.length > 0) {
-          const centerLat = validCoordinates.reduce((sum, coord) => sum + coord.lat, 0) / validCoordinates.length;
-          const centerLng = validCoordinates.reduce((sum, coord) => sum + coord.lng, 0) / validCoordinates.length;
+        // Prefer in-region pins when fitting the map (out-of-region still drawn).
+        const inRegionCoords = validCoordinates.filter(
+          (coords) => !eventIsOutsideRegion({ venue: null }, locationName, coords)
+        );
+        const fitCoords =
+          inRegionCoords.length > 0 ? inRegionCoords : validCoordinates;
+        if (fitCoords.length > 0) {
+          const centerLat = fitCoords.reduce((sum, coord) => sum + coord.lat, 0) / fitCoords.length;
+          const centerLng = fitCoords.reduce((sum, coord) => sum + coord.lng, 0) / fitCoords.length;
           setMapCenter({ lat: centerLat, lng: centerLng });
         }
         
@@ -366,7 +419,50 @@ const EventsSection = ({
       
       geocodeEvents();
     }
-  }, [isMapView, events]);
+  }, [isMapView, events, locationName]);
+
+  const resolveOutside = (event: Event) =>
+    eventIsOutsideRegion(
+      event,
+      locationName,
+      eventCoordinates[event.id] ?? coordsFromVenue(event.venue)
+    );
+
+  const orderedEvents = (() => {
+    if (!events) return [] as Event[];
+    const isToday = title === 'Today' || title === 'Hoy';
+    let list = events;
+    if (isToday) {
+      const todayMidnight = new Date().setHours(0, 0, 0, 0);
+      const isAlmostOverFn = (e: Event) => {
+        const endStr = e.end_date != null ? String(e.end_date).trim() : '';
+        const parsedEnd = endStr ? new Date(endStr) : null;
+        const effectiveEnd =
+          parsedEnd && !isNaN(parsedEnd.getTime())
+            ? parsedEnd
+            : new Date(e.start_date);
+        return effectiveEnd < new Date(todayMidnight);
+      };
+      // Keep existing today ordering, then push known out-of-region to bottom.
+      list = [...events].sort((a, b) => {
+        const aOver = isAlmostOverFn(a) ? 0 : 1;
+        const bOver = isAlmostOverFn(b) ? 0 : 1;
+        return aOver - bOver;
+      });
+    }
+    return sortInRegionFirst(list, resolveOutside);
+  })();
+
+  // Draw out-of-region markers first so in-region pins sit on top.
+  const mapMarkerEvents = (() => {
+    const outside: Event[] = [];
+    const inside: Event[] = [];
+    for (const event of orderedEvents) {
+      if (resolveOutside(event)) outside.push(event);
+      else inside.push(event);
+    }
+    return outside.concat(inside);
+  })();
 
   return (
     <div className={`flex flex-col ${spaceAfter ? 'pb-10' : ''} ${isList || isImageTile ? isMapView ? 'mb-0' : 'mb-4' : ''}`}>
@@ -461,14 +557,24 @@ const EventsSection = ({
                     mapTypeControl={false}
                     fullscreenControl={true}
                   >
-                    <MapController eventCoordinates={eventCoordinates} />
+                    <MapController
+                      eventCoordinates={eventCoordinates}
+                      preferCoords={orderedEvents
+                        .filter((event) => !resolveOutside(event))
+                        .map((event) => eventCoordinates[event.id])
+                        .filter(
+                          (coords): coords is google.maps.LatLngLiteral =>
+                            !!coords
+                        )}
+                    />
                     <LocationButton />
-                    {!isLoading && events ? (
+                    {!isLoading && mapMarkerEvents.length ? (
                       <EventMapMarkers
-                        events={events}
+                        events={mapMarkerEvents}
                         eventCoordinates={eventCoordinates}
                         favoritedEvents={favoritedEvents}
                         language={language}
+                        locationName={locationName}
                         dispatch={dispatch}
                       />
                     ) : null}
@@ -538,25 +644,7 @@ const EventsSection = ({
                 ? 'w-full grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8 gap-2 z-[1]'
                 : `w-full flex flex-wrap justify-center md:justify-start z-[1] ${isList ? 'gap-2' : 'gap-6'}`
             }>
-                  {((() => {
-                    const isToday = title === 'Today' || title === 'Hoy';
-                    if (!isToday || !events) return events;
-                    const todayMidnight = new Date().setHours(0, 0, 0, 0);
-                    const isAlmostOverFn = (e: typeof events[0]) => {
-                      const endStr = e.end_date != null ? String(e.end_date).trim() : '';
-                      const parsedEnd = endStr ? new Date(endStr) : null;
-                      const effectiveEnd =
-                        parsedEnd && !isNaN(parsedEnd.getTime())
-                          ? parsedEnd
-                          : new Date(e.start_date);
-                      return effectiveEnd < new Date(todayMidnight);
-                    };
-                    return [...events].sort((a, b) => {
-                      const aOver = isAlmostOverFn(a) ? 0 : 1;
-                      const bOver = isAlmostOverFn(b) ? 0 : 1;
-                      return aOver - bOver;
-                    });
-                  })() ?? []).map((event, index) => {
+                  {orderedEvents.map((event, index) => {
             const isAlmostOver = (() => {
               const endStr = event.end_date != null ? String(event.end_date).trim() : '';
               const parsedEnd = endStr ? new Date(endStr) : null;
@@ -566,12 +654,14 @@ const EventsSection = ({
                   : new Date(event.start_date);
               return effectiveEnd < new Date(new Date().setHours(0, 0, 0, 0));
             })();
+            const outsideRegion = resolveOutside(event);
             return (
                 <EventCard
                   highlightedFields={highlightedFields}
                   searchQuery={searchQuery}
                   almostOver={(title === 'Today' || title === 'Hoy') && isAlmostOver}
-                  key={`event_${index}`}
+                  outsideRegion={outsideRegion}
+                  key={`event_${event.id}_${index}`}
                   event={event}
                   isFavorite={favoritedEvents.includes(event.id)}
                   language={language}

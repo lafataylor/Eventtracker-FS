@@ -48,10 +48,27 @@ interface EventCardsProp {
   language?: string;
   locationName?: string;
   almostOver?: boolean;
+  // Venue >20 miles from the city-page center. Quiet cue only.
+  outsideRegion?: boolean;
   isInListView?: boolean;
   isInBoardView?: boolean;
   isInMasonryView?: boolean;
   sectionDayStartMs?: number;
+}
+
+function OutsideRegionLabel({ language }: { language?: string }) {
+  return (
+    <span
+      className="text-[10px] font-medium uppercase tracking-wide text-mist-white/45"
+      title={
+        language === 'es'
+          ? 'A más de 20 millas del centro'
+          : 'More than 20 miles from city center'
+      }
+    >
+      {language === 'es' ? 'Fuera de la zona' : 'Outside area'}
+    </span>
+  );
 }
 
 const DESKTOP_LIST_CHIP_CLASS =
@@ -135,11 +152,13 @@ function EventCard({
   language,
   locationName,
   almostOver,
+  outsideRegion,
   isInListView,
   isInBoardView,
   isInMasonryView,
   sectionDayStartMs,
 }: EventCardsProp) {
+  const outsideCueClass = outsideRegion ? 'opacity-80 ' : '';
   const isImageTileView = isInBoardView || isInMasonryView;
   const { pop, heartPopClass, heartPopKey } = useHeartPop();
   const [state, dispatch] = useStore();
@@ -562,7 +581,8 @@ function EventCard({
         className={
           'relative z-[1] flex flex-col gap-1 min-w-0 cursor-pointer ' +
           (isInMasonryView ? 'mb-2 break-inside-avoid ' : '') +
-          (almostOver ? 'opacity-70 ' : '')
+          (almostOver ? 'opacity-70 ' : '') +
+          outsideCueClass
         }
       >
         <div className={imageTileFrameClass(!!isInMasonryView)}>
@@ -642,6 +662,11 @@ function EventCard({
             {imageTileMeta}
           </p>
         ) : null}
+        {outsideRegion ? (
+          <div className="px-2">
+            <OutsideRegionLabel language={language} />
+          </div>
+        ) : null}
       </div>
     )}
     {isInListView && !isImageTileView && (
@@ -658,7 +683,11 @@ function EventCard({
             showDetails();
           }
         }}
-        className="hidden md:grid w-full items-center gap-x-4 lg:gap-x-5 cursor-pointer rounded-xl bg-slate-black px-3 py-2.5 hover:bg-stone-gray/50 transition-colors grid-cols-[130px_minmax(0,3fr)_1px_minmax(0,1fr)_1px_6.75rem_1px_minmax(0,1fr)_2.5rem]"
+        className={
+          'hidden md:grid w-full items-center gap-x-4 lg:gap-x-5 cursor-pointer rounded-xl bg-slate-black px-3 py-2.5 hover:bg-stone-gray/50 transition-colors grid-cols-[130px_minmax(0,3fr)_1px_minmax(0,1fr)_1px_6.75rem_1px_minmax(0,1fr)_2.5rem] ' +
+          (almostOver ? 'opacity-70 ' : '') +
+          outsideCueClass
+        }
       >
         {/* pointer-events-none so a click on title/date/venue/chips
             hits the row, not a child that can swallow it. The heart
@@ -710,8 +739,16 @@ function EventCard({
                   {listCityLine}
                 </p>
               )}
+              {outsideRegion ? (
+                <div className="mt-0.5 pl-7">
+                  <OutsideRegionLabel language={language} />
+                </div>
+              ) : null}
             </>
           )}
+          {!hasVenueDisplay && outsideRegion ? (
+            <OutsideRegionLabel language={language} />
+          ) : null}
         </div>
         <div className="w-px self-stretch my-1.5 bg-[#403E3C]" aria-hidden="true" />
         <div className="text-left leading-tight pointer-events-none">
@@ -770,7 +807,8 @@ function EventCard({
         }}
         className={
           'md:hidden w-full flex items-stretch gap-2.5 cursor-pointer rounded-xl bg-slate-black px-2.5 py-2 ' +
-          (almostOver ? 'opacity-70 ' : '')
+          (almostOver ? 'opacity-70 ' : '') +
+          outsideCueClass
         }
       >
         {/* Mobile list only: portrait 3:4. Desktop list stays 130×86.
@@ -812,6 +850,7 @@ function EventCard({
               <span className="truncate">{venueDisplayLine}</span>
             </p>
           ) : null}
+          {outsideRegion ? <OutsideRegionLabel language={language} /> : null}
           {listOfferingChips.length > 0 ? (
             <div
               ref={mobileListChipContainerRef}
@@ -922,6 +961,7 @@ function EventCard({
         'w-full flex flex-col gap-[2px] hover:cursor-pointer ' +
         (event.is_event ? ' bg-slate-black border border-2 border-[#403E3C80] ' : 'bg-slate-black border border-2 border-[#403E3C80] ') +
         (almostOver ? ' opacity-70 bg-opacity-50 border-dotted border-2 border-midnight ' : '') +
+        outsideCueClass +
         (isInListView ? ' md:hidden rounded-xl p-2 z-[1]' : ' p-[0.65rem] rounded-2xl shadow-[8px_8px_24px_rgba(0,0,0,0.15)] z-[1] md:w-[250px] justify-between ')
       }
     >
@@ -1110,6 +1150,11 @@ function EventCard({
             </span>
           </div>
         )}
+        {outsideRegion && !isInListView ? (
+          <div className="mb-1">
+            <OutsideRegionLabel language={language} />
+          </div>
+        ) : null}
         {!hasVenueDisplay && <div className="h-[5px]" />}
         {getGenreOrOffering(event) && (
           <div className={`flex gap-2 items-start justify-start w-[80%] mb-2 ${isInListView ? 'hidden' : ''}`}>
