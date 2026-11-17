@@ -24,6 +24,10 @@ import UserDropdown from '../../../components/Dashboard/UserDropdown';
 import LocationDropdown from '../../../components/Dashboard/LocationDropdown';
 import ViewModeToggle from '../../../components/Dashboard/ViewModeToggle';
 import { useViewMode } from '../../../utils/viewMode';
+import {
+  getSiteCalendarParts,
+  siteCalendarDate,
+} from '../../../utils/siteTime';
 import Head from 'next/head';
 import { GetServerSideProps, NextPage } from 'next';
 
@@ -172,7 +176,7 @@ const LocationPage: NextPage<LocationPageProps> = ({ locationName, locations: in
   useEffect(() => {
     const userEmail = localStorage.getItem('userEmail');
 
-    const currentTimeHour = new Date().getHours();
+    const currentTimeHour = getSiteCalendarParts().hour;
 
     const fetchEvents = async () => {
       if (!locationName) return;
@@ -184,7 +188,9 @@ const LocationPage: NextPage<LocationPageProps> = ({ locationName, locations: in
       setIsYearLoading(true);
       setIsLastYearLoading(true);
 
-      const today = new Date();
+      // Pacific calendar day — same as Django TIME_ZONE / EventsSection labels.
+      const today = siteCalendarDate();
+      const todayDayOfWeek = getSiteCalendarParts().dayOfWeek;
       const yesterdaysDate = new Date(today);
       yesterdaysDate.setDate(today.getDate() - 1);
       const tomorrow = new Date(today);
@@ -195,13 +201,13 @@ const LocationPage: NextPage<LocationPageProps> = ({ locationName, locations: in
       weekEnd.setDate(today.getDate() + 6);
       const weekendStart = new Date(today);
       weekendStart.setDate(
-        today.getDay() === 0
+        todayDayOfWeek === 0
           ? today.getDate()
-          : today.getDate() + (6 - today.getDay())
+          : today.getDate() + (6 - todayDayOfWeek)
       );
       const weekendEnd = new Date(weekendStart);
       weekendEnd.setDate(
-        today.getDay() === 0 ? today.getDate() : weekendStart.getDate() + 1
+        todayDayOfWeek === 0 ? today.getDate() : weekendStart.getDate() + 1
       );
       const yearEnd = new Date(today);
       yearEnd.setDate(today.getDate() + 365);
@@ -605,8 +611,10 @@ const LocationPage: NextPage<LocationPageProps> = ({ locationName, locations: in
 
     let filteredEvents = events;
 
-    const yesterday = new Date();
-    yesterday.setDate(yesterday.getDate() - 1);
+    const siteNow = getSiteCalendarParts();
+    const today = siteCalendarDate();
+    const yesterday = new Date(today);
+    yesterday.setDate(today.getDate() - 1);
     const yesterdayMidnight = new Date(
       yesterday.getFullYear(),
       yesterday.getMonth(),
@@ -617,16 +625,7 @@ const LocationPage: NextPage<LocationPageProps> = ({ locationName, locations: in
       0
     ).getTime();
 
-    const today = new Date();
-    const todayMidnight = new Date(
-      today.getFullYear(),
-      today.getMonth(),
-      today.getDate(),
-      0,
-      0,
-      0,
-      0
-    ).getTime();
+    const todayMidnight = today.getTime();
 
     const endOfToday = new Date(
       today.getFullYear(),
@@ -638,7 +637,7 @@ const LocationPage: NextPage<LocationPageProps> = ({ locationName, locations: in
       999
     ).getTime();
 
-    const currentTimeHour = new Date().getHours();
+    const currentTimeHour = siteNow.hour;
 
     switch (sectionType) {
       case 'todayEvents': {
@@ -662,7 +661,7 @@ const LocationPage: NextPage<LocationPageProps> = ({ locationName, locations: in
 
       case 'specificDayEvents':
         if (specificDay !== undefined) {
-          const currentDayOfWeek = today.getDay();
+          const currentDayOfWeek = siteNow.dayOfWeek;
           let daysToAdd = specificDay - currentDayOfWeek;
           if (daysToAdd <= 0) daysToAdd += 7;
 
@@ -677,7 +676,7 @@ const LocationPage: NextPage<LocationPageProps> = ({ locationName, locations: in
         break;
 
       case 'nextWeekEvents': {
-        const currentDayOfWeek = today.getDay();
+        const currentDayOfWeek = siteNow.dayOfWeek;
         const daysUntilNextMonday =
           currentDayOfWeek === 0 ? 1 : 8 - currentDayOfWeek;
         const nextMondayStart =
@@ -692,7 +691,7 @@ const LocationPage: NextPage<LocationPageProps> = ({ locationName, locations: in
       }
 
       case 'afterNextWeekEvents': {
-        const currentDayOfWeek = today.getDay();
+        const currentDayOfWeek = siteNow.dayOfWeek;
         const daysUntilNextMonday =
           currentDayOfWeek === 0 ? 1 : 8 - currentDayOfWeek;
         const nextMondayStart =
@@ -1068,18 +1067,11 @@ const LocationPage: NextPage<LocationPageProps> = ({ locationName, locations: in
         ) : (
           <>
             {(() => {
-              const today = new Date();
-              const currentTimeHour = today.getHours();
-              const todayMidnight = new Date(
-                today.getFullYear(),
-                today.getMonth(),
-                today.getDate(),
-                0,
-                0,
-                0,
-                0
-              ).getTime();
-              const dayOfWeek = today.getDay(); // 0 = Sunday, 1 = Monday, etc.
+              // America/Los_Angeles so SSR (often UTC) and the browser agree
+              // on weekday labels and which day sections exist.
+              const today = siteCalendarDate();
+              const todayMidnight = today.getTime();
+              const dayOfWeek = getSiteCalendarParts().dayOfWeek;
               const days = [
                 'Domingo',
                 'Lunes',

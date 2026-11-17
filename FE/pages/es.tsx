@@ -23,6 +23,10 @@ import Image from 'next/image';
 import UserDropdown from '../components/Dashboard/UserDropdown';
 import ViewModeToggle from '../components/Dashboard/ViewModeToggle';
 import { useViewMode } from '../utils/viewMode';
+import {
+  getSiteCalendarParts,
+  siteCalendarDate,
+} from '../utils/siteTime';
 
 const Home: NextPage = () => {
   const [state, dispatch] = useStore();
@@ -77,7 +81,7 @@ const Home: NextPage = () => {
   useEffect(() => {
     const userEmail = localStorage.getItem('userEmail');
 
-    const currentTimeHour = new Date().getHours();
+    const currentTimeHour = getSiteCalendarParts().hour;
 
     const fetchEvents = async () => {
       setIsFetchingEvents(true);
@@ -88,7 +92,9 @@ const Home: NextPage = () => {
       setIsYearLoading(true);
       setIsLastYearLoading(true);
 
-      const today = new Date();
+      // Pacific calendar day — same as Django TIME_ZONE / EventsSection labels.
+      const today = siteCalendarDate();
+      const todayDayOfWeek = getSiteCalendarParts().dayOfWeek;
       const yesterdaysDate = new Date(today);
       yesterdaysDate.setDate(today.getDate() - 1);
       const tomorrow = new Date(today);
@@ -99,13 +105,13 @@ const Home: NextPage = () => {
       weekEnd.setDate(today.getDate() + 6);
       const weekendStart = new Date(today);
       weekendStart.setDate(
-        today.getDay() === 0
+        todayDayOfWeek === 0
           ? today.getDate()
-          : today.getDate() + (6 - today.getDay())
+          : today.getDate() + (6 - todayDayOfWeek)
       );
       const weekendEnd = new Date(weekendStart);
       weekendEnd.setDate(
-        today.getDay() === 0 ? today.getDate() : weekendStart.getDate() + 1
+        todayDayOfWeek === 0 ? today.getDate() : weekendStart.getDate() + 1
       );
       const yearEnd = new Date(today);
       yearEnd.setDate(today.getDate() + 365);
@@ -497,8 +503,10 @@ const Home: NextPage = () => {
 
     let filteredEvents = events;
 
-    const yesterday = new Date();
-    yesterday.setDate(yesterday.getDate() - 1);
+    const siteNow = getSiteCalendarParts();
+    const today = siteCalendarDate();
+    const yesterday = new Date(today);
+    yesterday.setDate(today.getDate() - 1);
     const yesterdayMidnight = new Date(
       yesterday.getFullYear(),
       yesterday.getMonth(),
@@ -509,16 +517,7 @@ const Home: NextPage = () => {
       0
     ).getTime();
 
-    const today = new Date();
-    const todayMidnight = new Date(
-      today.getFullYear(),
-      today.getMonth(),
-      today.getDate(),
-      0,
-      0,
-      0,
-      0
-    ).getTime();
+    const todayMidnight = today.getTime();
 
     const endOfToday = new Date(
       today.getFullYear(),
@@ -530,7 +529,7 @@ const Home: NextPage = () => {
       999
     ).getTime();
 
-    const currentTimeHour = new Date().getHours();
+    const currentTimeHour = siteNow.hour;
 
     switch (sectionType) {
       case 'todayEvents': {
@@ -554,7 +553,7 @@ const Home: NextPage = () => {
 
       case 'specificDayEvents':
         if (specificDay !== undefined) {
-          const currentDayOfWeek = today.getDay();
+          const currentDayOfWeek = siteNow.dayOfWeek;
           let daysToAdd = specificDay - currentDayOfWeek;
           if (daysToAdd <= 0) daysToAdd += 7;
 
@@ -569,7 +568,7 @@ const Home: NextPage = () => {
         break;
 
       case 'nextWeekEvents': {
-        const currentDayOfWeek = today.getDay();
+        const currentDayOfWeek = siteNow.dayOfWeek;
         const daysUntilNextMonday =
           currentDayOfWeek === 0 ? 1 : 8 - currentDayOfWeek;
         const nextMondayStart =
@@ -584,7 +583,7 @@ const Home: NextPage = () => {
       }
 
       case 'afterNextWeekEvents': {
-        const currentDayOfWeek = today.getDay();
+        const currentDayOfWeek = siteNow.dayOfWeek;
         const daysUntilNextMonday =
           currentDayOfWeek === 0 ? 1 : 8 - currentDayOfWeek;
         const nextMondayStart =
@@ -860,18 +859,11 @@ const Home: NextPage = () => {
         ) : (
           <>
             {(() => {
-              const today = new Date();
-              const currentTimeHour = today.getHours();
-              const todayMidnight = new Date(
-                today.getFullYear(),
-                today.getMonth(),
-                today.getDate(),
-                0,
-                0,
-                0,
-                0
-              ).getTime();
-              const dayOfWeek = today.getDay(); // 0 = Sunday, 1 = Monday, etc.
+              // America/Los_Angeles so SSR (often UTC) and the browser agree
+              // on weekday labels and which day sections exist.
+              const today = siteCalendarDate();
+              const todayMidnight = today.getTime();
+              const dayOfWeek = getSiteCalendarParts().dayOfWeek;
               const days = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
               const tomorrowDate = new Date(today);
               tomorrowDate.setDate(today.getDate() + 1);
