@@ -6,6 +6,13 @@ import { Event } from '../../interface/objects/simpleObject';
 import React, { useState, useEffect } from 'react';
 import Spinner from '../../components/Spinner';
 import { experimentalScrape } from '../../services/lib/admin';
+import Cookies from 'js-cookie';
+
+// 2026-11-17: /api/getImage requires admin Token JWT (Publish SSRF finding).
+const getImageAuthHeaders = (): HeadersInit => {
+  const token = Cookies.get('adminToken');
+  return token ? { Authorization: 'Token ' + token } : {};
+};
 
 const ExperimentalResultsPage = () => {
   const [state, dispatch] = useStore();
@@ -103,7 +110,11 @@ const ExperimentalResultsPage = () => {
                       fetch(
                         `/api/getImage/${encodeURIComponent(
                           JSON.stringify(overallComponent)
-                        )}`
+                        )}`,
+                        {
+                          headers: getImageAuthHeaders(),
+                          credentials: 'same-origin',
+                        }
                       )
                         .then((response) => {
                           return response.json();
@@ -268,7 +279,11 @@ const ExperimentalResultsPage = () => {
               await fetch(
                 `/api/getImage/${encodeURIComponent(
                   JSON.stringify(overallComponent)
-                )}`
+                )}`,
+                {
+                  headers: getImageAuthHeaders(),
+                  credentials: 'same-origin',
+                }
               )
                 .then((response) => {
                   //console.log('success response: ', response);

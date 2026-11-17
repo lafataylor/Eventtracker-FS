@@ -1,40 +1,43 @@
-export const maxDuration = 10; 
+export const maxDuration = 10;
 export const dynamic = 'force-dynamic';
 
-import type { NextApiRequest, NextApiResponse } from 'next'
-import { writeFileSync } from 'fs';
-//import firebase from '../../../firebase';
-import { app , storage, getStorage, ref, uploadBytes, getDownloadURL } from '../../../firebase';
-//import { getStorage, ref, uploadBytes, getDownloadURL } from 'firebase/storage';
-
+import type { NextApiRequest, NextApiResponse } from 'next';
+import { getStorage, ref, uploadBytes, getDownloadURL } from '../../../firebase';
 import NextCors from 'nextjs-cors';
-
-//const { Configuration, OpenAIApi } = require("openai");
-
-import OpenAI from "openai";
+import OpenAI from 'openai';
+import { requestHasValidAdminAuth } from '../../../utils/adminJwtAuth';
+import { isAllowedImageFetchUrl } from '../../../utils/allowedImageFetchUrl';
+import { getImageCorsOrigins } from '../../../utils/getImageCorsOrigins';
 
 export const config = {
   maxDuration: 10,
 };
 
-
 export default async (req: NextApiRequest, res: NextApiResponse) => {
+  // 2026-11-17: was origin:'*' with every method — Publish critical. Admin /
+  // experimental callers are same-origin; listed hosts cover Firebase Hosting
+  // and local FE. credentials so adminToken cookie can authenticate.
   await NextCors(req, res, {
-      // Options
-      methods: ['GET', 'HEAD', 'PUT', 'PATCH', 'POST', 'DELETE'],
-      origin: '*',
-      //origin: ['https://eventtracker-1c82b.web.app', 'http://localhost:3000'],
-      optionsSuccessStatus: 200, 
-   });
+    methods: ['GET', 'HEAD', 'OPTIONS'],
+    origin: getImageCorsOrigins(),
+    credentials: true,
+    optionsSuccessStatus: 200,
+  });
+
+  if (req.method === 'OPTIONS') {
+    return res.status(200).end();
+  }
+
+  if (req.method && req.method !== 'GET' && req.method !== 'HEAD') {
+    return res.status(405).json({ error: 'Method not allowed' });
+  }
+
+  // Same Token JWT pattern as Django CustomAuthenticationMiddleware / FE admin.
+  if (!requestHasValidAdminAuth(req.headers.authorization, req.headers.cookie)) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
 
   try {
-
-    /*const configuration = new Configuration({
-      apiKey: "",
-    });
-
-    const openai = new OpenAIApi(configuration);*/
-
     const openai = new OpenAI();
 
     const { baseImageUrl } = req.query;
@@ -57,8 +60,20 @@ export default async (req: NextApiRequest, res: NextApiResponse) => {
       return res.status(400).send('error: faulty url');
     }
 
-    // Fetch the image data from the Instagram URL
-    const response = await fetch(baseImageURL);
+    const allowed = isAllowedImageFetchUrl(baseImageURL);
+    if (!allowed.ok) {
+      return res.status(400).json({ error: 'URL host not allowed' });
+    }
+
+    // redirect:'error' so a 30x cannot bounce us onto a non-allowlisted host.
+    const response = await fetch(allowed.url.toString(), {
+      redirect: 'error',
+      credentials: 'omit',
+    });
+
+    if (!response.ok) {
+      return res.status(502).json({ error: 'Failed to fetch image' });
+    }
 
     const imageData = await response.blob();
 
@@ -75,17 +90,19 @@ export default async (req: NextApiRequest, res: NextApiResponse) => {
     const storageRef = ref(storage, filePath);
 
     uploadBytes(storageRef, buffer)
-    .then((snapshot) => {
-      getDownloadURL(storageRef)
-      .then((downloadURL) => {
-        openai.chat.completions.create({
-          model: "gpt-4-vision-preview",
-          messages: [
-            {
-              role: "user",
-              content: [
-                { type: "text", 
-                  text: `I want you look at the Instagram image and the caption and Insta biography data below and return a json object (as a string) containing the following info (please make sure the key names and datatypes are exactly what I specify, and that the result contains nothing but the stringified json, so that I can run .json() on it):
+      .then((snapshot) => {
+        getDownloadURL(storageRef)
+          .then((downloadURL) => {
+            openai.chat.completions
+              .create({
+                model: 'gpt-4-vision-preview',
+                messages: [
+                  {
+                    role: 'user',
+                    content: [
+                      {
+                        type: 'text',
+                        text: `I want you look at the Instagram image and the caption and Insta biography data below and return a json object (as a string) containing the following info (please make sure the key names and datatypes are exactly what I specify, and that the result contains nothing but the stringified json, so that I can run .json() on it):
                     Caption: ${caption}
                     Biography: ${biography} + " " + ${externalLink} + " ..."
                     Please remember that it is now 2024 and not 2023!
@@ -115,56 +132,39 @@ export default async (req: NextApiRequest, res: NextApiResponse) => {
                     23) rsvp_required (boolean): True if the ticketLink url points to a link where the user can RSVP. False if there is no explicit mention of RSVP in the image or caption. 
                     24) num_events (number): number of events referenced in the image (will most probably be 1, but can be more).
                     25) subEvents (list of dictionaries): If num_events is 1, return null. In case num_events > 1, this list contains separate dictionaries for each sub-event containing the keys (1-23) above. The values for each sub-event could differ. Make sure to give me each detail for every single event and I will give you $500. I don't want the brief answer, I need the exact details for every single event or I will die.
-                  ` 
-                },
-                {
-                  type: "image_url",
-                  image_url: {
-                    "url": downloadURL,
+                  `,
+                      },
+                      {
+                        type: 'image_url',
+                        image_url: {
+                          url: downloadURL,
+                        },
+                      },
+                    ],
                   },
-                },
-              ],
-            },
-          ],
-          max_tokens: 4000,
-        })
-        .then((response) => {
-          res.status(200).json({"imageData": downloadURL, "extractedData": response});
-        })
-        .catch((error) => {
-          res.status(500).json({ error: 'Failed to extract data: ' + error });
-        });
+                ],
+                max_tokens: 4000,
+              })
+              .then((response) => {
+                res
+                  .status(200)
+                  .json({ imageData: downloadURL, extractedData: response });
+              })
+              .catch((error) => {
+                res
+                  .status(500)
+                  .json({ error: 'Failed to extract data: ' + error });
+              });
+          })
+          .catch((error) => {
+            console.error('Error uploading image:', error);
+            res.status(500).json({ error: 'Failed to upload image (1): ' + error });
+          });
       })
       .catch((error) => {
         console.error('Error uploading image:', error);
-        res.status(500).json({ error: 'Failed to upload image (1): ' + error });
+        res.status(500).json({ error: 'Failed to upload image (2): ' + error });
       });
-    })
-    .catch((error) => {
-      console.error('Error uploading image:', error);
-      res.status(500).json({ error: 'Failed to upload image (2): ' + error });
-    });
-
-    /*
-    25) addresses (list of strings):
-    26) startDates (list of strings in format MM-DD-YYYY):
-    27) startTimes (list of strings in format HH:MM AM/PM):
-    28) endDates (list of strings in format MM-DD-YYYY):
-    29) endTimes (list of strings in format HH:MM AM/PM):
-    30) artists (list of strings):
-    31) eventNames (list of strings):
-    */
-
-    //writeFileSync(filePath, buffer);
-
-    // Set the appropriate response headers
-    //res.setHeader('Content-Type', response.headers.get('Content-Type'));
-    //res.setHeader('Cache-Control', 'public, max-age=86400'); // Cache the image for 1 day
-
-    //const imageURL = URL.createObjectURL(imageData);
-
-    ////console.log("success prior: ",imageData,imageURL)
-
   } catch (error) {
     console.error('Error fetching image on server :', error);
     res.status(500).json({ error: 'Failed to upload image (3): ' + error });
