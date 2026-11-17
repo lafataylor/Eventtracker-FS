@@ -21,7 +21,6 @@ import { logout } from '../../store/actions/auth';
 import AuthService from './auth';
 import Cookies from 'js-cookie';
 import { SHOW_INFO_OVERLAY } from '../../store/actions/type';
-import { ApifyClient } from 'apify-client';
 import { CreateEventFromDashboardRequest, CreateEventFromInstagramRequest } from '../../interface/eventInterface';
 import base64 from 'base-64';
 import { AuthRequest } from '../../interface/authInterface';
@@ -300,27 +299,44 @@ export function addDuplicate(event_id: string) {
 }
 
 export async function getFollowingList(account: string) {
+  // Apify runs on Django with server-only APIFY_API_KEY. Do not put the
+  // token in NEXT_PUBLIC_* — Publish embeds those in the browser bundle.
   try {
-      // Initialize the ApifyClient with your Apify API token
-      const client = new ApifyClient({
-          token: process.env.NEXT_PUBLIC_APIFY_API_KEY
-      });
-
-      // Prepare Actor input
-      const input = {
-          "instaId": account
-      };
-
-      // Run the Actor and wait for it to finish
-      const run = await client.actor("sejinius/instagram-following-scraper").call(input);
-
-      const { items } = await client.dataset(run.defaultDatasetId).listItems();
-      const uniqueIds = Array.from(new Set(items.filter(item => item.introduction !== "Suggested for you").map(item => item.id)));
-      return uniqueIds;
-
+    const response = await axiosClient.post(
+      'admin/followingList/',
+      { account },
+      {
+        headers: getHeader(),
+        // Following scrape can take several minutes, same class of wait as
+        // createEventFromInstagram.
+        timeout: 1000000,
+      }
+    );
+    return response.data.following as string[];
   } catch (error) {
-      console.error('Error fetching followers:', error);
+    console.error('Error fetching followers:', error);
   }
+}
+
+export async function experimentalScrape(username: string) {
+  const response = await axiosClient.post(
+    'admin/experimentalScrape/',
+    { username },
+    {
+      headers: getHeader(),
+      timeout: 1000000,
+    }
+  );
+  return response.data as {
+    biography: string;
+    externalUrl: string;
+    posts: Array<{
+      type?: string;
+      displayUrl?: string;
+      caption?: string;
+      images?: string[];
+    }>;
+  };
 }
 
 export async function uploadImage(image: File) {
