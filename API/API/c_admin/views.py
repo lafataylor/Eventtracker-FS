@@ -42,6 +42,7 @@ import logging
 logger = logging.getLogger('django')
 
 from dotenv import load_dotenv
+from apify_client import ApifyClient
 
 # Load environment variables from .env.local
 load_dotenv(dotenv_path=os.path.join(settings.BASE_DIR, '.env.local'))
@@ -1027,4 +1028,104 @@ def list_detail_fields(request):
     """Returns the list of supported field names and their labels."""
     fields = [{'value': k, 'label': v} for k, v in DETAIL_FIELD_CHOICES]
     return Success(data=fields)
+
+
+def _require_apify_client():
+    """Server-only Apify token. Never exposed to the FE / Publish bundle."""
+    apify_api_key = os.getenv("APIFY_API_KEY")
+    if not apify_api_key:
+        return None, ServerProcessingError(message="Apify API key not configured")
+    return ApifyClient(apify_api_key), None
+
+
+@api_view(["POST"])
+def following_list(request):
+    """Import Following: scrape an account's following list via Apify.
+
+    Replaces the browser-side ApifyClient call that used
+    NEXT_PUBLIC_APIFY_API_KEY (Publish finding, 2026-11). Auth is the same
+    admin JWT gate as other admin endpoints.
+    """
+    account = request.data.get("account")
+    if validator.is_missing([account]):
+        return MissingInformation()
+    if not isinstance(account, str) or not account.strip():
+        return InvalidParameters()
+
+    client, err = _require_apify_client()
+    if err:
+        return err
+
+    try:
+        run = client.actor("sejinius/instagram-following-scraper").call(
+            run_input={"instaId": account.strip()}
+        )
+        unique_ids = []
+        seen = set()
+        for item in client.dataset(run["defaultDatasetId"]).iterate_items():
+            if item.get("introduction") == "Suggested for you":
+                continue
+            item_id = item.get("id")
+            if item_id is None or item_id in seen:
+                continue
+            seen.add(item_id)
+            unique_ids.append(item_id)
+        return Success({"following": unique_ids})
+    except Exception as e:
+        logger.error("following_list Apify call failed: %s", e)
+        return ServerProcessingError(message="Unable to fetch following list")
+
+
+@api_view(["POST"])
+def experimental_scrape(request):
+    """Experimental page: profile + recent posts via server Apify.
+
+    Same actors the FE used to call from the browser with
+    NEXT_PUBLIC_APIFY_API_KEY. getImage SSRF/auth is a separate Publish
+    finding and is intentionally not addressed here.
+    """
+    username = request.data.get("username")
+    if validator.is_missing([username]):
+        return MissingInformation()
+    if not isinstance(username, str) or not username.strip():
+        return InvalidParameters()
+
+    username = username.strip().lstrip("@")
+
+    client, err = _require_apify_client()
+    if err:
+        return err
+
+    try:
+        profile_run = client.actor("apify/instagram-profile-scraper").call(
+            run_input={"usernames": [username]}
+        )
+        biography = ""
+        external_url = ""
+        for item in client.dataset(profile_run["defaultDatasetId"]).iterate_items():
+            biography = item.get("biography") or ""
+            if item.get("externalUrl") is not None:
+                external_url = item.get("externalUrl") or ""
+            break
+
+        posts_run = client.actor("apify/instagram-post-scraper").call(
+            run_input={"username": [username], "resultsLimit": 5}
+        )
+        posts = []
+        for item in client.dataset(posts_run["defaultDatasetId"]).iterate_items():
+            posts.append({
+                "type": item.get("type"),
+                "displayUrl": item.get("displayUrl"),
+                "caption": item.get("caption"),
+                "images": item.get("images") or [],
+            })
+
+        return Success({
+            "biography": biography,
+            "externalUrl": external_url,
+            "posts": posts,
+        })
+    except Exception as e:
+        logger.error("experimental_scrape Apify call failed: %s", e)
+        return ServerProcessingError(message="Unable to scrape Instagram profile")
 

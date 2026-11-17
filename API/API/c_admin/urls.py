@@ -22,4 +22,6 @@ urlpatterns = [
     path("admin/geocode/clear/", clear_geocoding_cache),
     path("admin/details/", AdminAccountDetails.as_view()),
     path("admin/details/fields/", list_detail_fields),
+    path("admin/followingList/", following_list),
+    path("admin/experimentalScrape/", experimental_scrape),
 ]
