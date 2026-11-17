@@ -266,8 +266,9 @@ class WideNetTests(TestCase):
         self.assertTrue(self._pending(a, b))
 
     def test_distinct_flyer_hashes_are_left_alone(self):
-        # 13 bits: past the 6-bit same-image bar; different flyers measure
-        # 24-33 (2026-09-19). Titles and rooms also disagree.
+        # 13 bits: past the 6-bit same-image bar, inside the 34-bit near
+        # band — but titles and rooms disagree, so no second signal and no
+        # match (2026-11-17: do not raise the bit bar alone).
         a = self._ev('Alpha Night', 'FAR1', venue='Club Uno',
                      image_dhash='0000000000000000')
         b = self._ev('Beta Party', 'FAR2', venue='Club Dos',
@@ -283,3 +284,72 @@ class WideNetTests(TestCase):
                      day=self.day + timedelta(days=7), image_dhash=h)
         self._run()
         self.assertFalse(self._pending(a, b))
+
+    @staticmethod
+    def _flip_bits(hex_hash, n):
+        """Flip the lowest n bits so tests can seed a known Hamming distance."""
+        value = int(hex_hash, 16)
+        for i in range(n):
+            value ^= (1 << i)
+        return f'{value:016x}'
+
+    def test_jazz_night_near_frames_at_one_room_are_queued(self):
+        # Owner fixture similar-jazz-night-pair.png: story frames of one Monday
+        # jazz night, measured Hamming ~34. Same room, caption titles disagree
+        # — must reach EventMatch; must NOT auto-merge on place alone (WeGood
+        # template cousins sit in the same Hamming band).
+        base = '0000000000000000'
+        a = self._ev('Jazz Nights', 'JAZZ1', venue='Zulua',
+                     address='Calle 10', city='CDMX',
+                     image_dhash=base)
+        b = self._ev('Zulua Group, David Cultura', 'JAZZ2', venue='Zulua',
+                     address='Calle 10', city='CDMX',
+                     image_dhash=self._flip_bits(base, 34))
+        self._assert_the_old_rule_misses(a, b)
+        self._run()
+        self.assertTrue(self._pending(a, b))
+        self.assertEqual(Event.objects.filter(suppressed=True).count(), 0)
+
+    def test_jazz_night_near_frames_with_similar_slogans_can_merge(self):
+        # Same fixture, but titles keep the long similar overlays — safe to
+        # merge when place + times agree (same_room path over FUZZY_THRESHOLD).
+        base = '0000000000000000'
+        a = self._ev('Live jazz every monday btw at Zulua', 'JAZZ1',
+                     venue='Zulua', address='Calle 10', city='CDMX',
+                     image_dhash=base)
+        b = self._ev('Live jazz every monday night at Zulua', 'JAZZ2',
+                     venue='Zulua', address='Calle 10', city='CDMX',
+                     image_dhash=self._flip_bits(base, 34))
+        self._run()
+        self.assertEqual(len(self._visible(a, b)), 1)
+
+    def test_wegood_template_cousins_queue_but_do_not_auto_merge(self):
+        # Owner fixture similar-wegood-pair.png: same brand layout, different
+        # photo/slogan, measured Hamming ~28. Owner wants them caught for
+        # review, not silently kept separate — and not auto-merged when the
+        # slogans clearly name different creatives.
+        base = 'ffffffffffffffff'
+        a = self._ev('Care without a cover charge', 'WG1',
+                     venue='The Walkgood Yard', address='Yard 12', city='LA',
+                     image_dhash=base)
+        b = self._ev('Room to breathe at the yard', 'WG2',
+                     venue='The Walkgood Yard', address='Yard 12', city='LA',
+                     image_dhash=self._flip_bits(base, 28))
+        self._assert_the_old_rule_misses(a, b)
+        self._run()
+        self.assertTrue(self._pending(a, b))
+        self.assertEqual(Event.objects.filter(suppressed=True).count(), 0)
+
+    def test_near_hash_without_title_or_place_is_not_a_match(self):
+        # Random 64-bit dhashes centre near 32 bits. Raising the bit bar
+        # alone would flag unrelated dark club photos — require a second
+        # signal (title overlap or same place).
+        base = '0123456789abcdef'
+        a = self._ev('Alpha Night', 'RND1', venue='Club Uno',
+                     address='One 1', city='Berlin',
+                     image_dhash=base)
+        b = self._ev('Beta Party', 'RND2', venue='Club Dos',
+                     address='Two 2', city='Berlin',
+                     image_dhash=self._flip_bits(base, 32))
+        self._run()
+        self.assertEqual(EventMatch.objects.count(), 0)
