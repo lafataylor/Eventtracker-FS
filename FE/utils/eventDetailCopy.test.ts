@@ -109,13 +109,26 @@ test('IG handle is a compact inline link, not a full-width button', () => {
 });
 
 // 2026-11-17: Copy Event Link is the filled orange CTA, not a midnight
-// underline / flex-1 text link bar.
-test('Copy Event Link is a filled orange CTA, not a midnight underline bar', () => {
+// underline / flex-1 text link bar. Owner: center the button (not left/end).
+test('Copy Event Link is a centered filled orange CTA, not a midnight underline bar', () => {
   assert.match(eventDetailsSrc, /copyEventLinkLabel/);
   assert.match(
     eventDetailsSrc,
-    /bg-beaming-orange[\s\S]*?copyEventLinkLabel/
+    /bg-beaming-orange[\s\S]*?self-center[\s\S]*?copyEventLinkLabel/
   );
+  assert.match(eventDetailsSrc, /self-center/);
+  // Copy CTAs must not use self-end (right) alignment.
+  const copyButtons = [
+    ...eventDetailsSrc.matchAll(
+      /onClick=\{handleCopyLink\}[\s\S]*?className="([^"]*)"/g
+    ),
+  ];
+  assert.ok(copyButtons.length >= 2, 'expected desktop + mobile copy CTAs');
+  for (const [, className] of copyButtons) {
+    assert.match(className, /\bself-center\b/);
+    assert.doesNotMatch(className, /\bself-end\b/);
+    assert.doesNotMatch(className, /\bself-start\b/);
+  }
   // Old midnight bar + underline flex-1 pattern must be gone from the copy CTA.
   assert.doesNotMatch(
     eventDetailsSrc,

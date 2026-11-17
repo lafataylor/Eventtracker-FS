@@ -1286,7 +1286,7 @@ function EventDetails({ isEdit, locationName }: EventDetailsProps) {
                   <button
                     type="button"
                     onClick={handleCopyLink}
-                    className="bg-beaming-orange text-midnight hover:bg-gradient-to-r from-beaming-orange-dark to-beaming-orange-light border-beaming-orange-dark hidden lg:flex w-[90%] justify-center items-center rounded-lg border-2 gap-4 p-3 font-medium self-end hover:cursor-pointer mt-4 mb-2"
+                    className="bg-beaming-orange text-midnight hover:bg-gradient-to-r from-beaming-orange-dark to-beaming-orange-light border-beaming-orange-dark hidden lg:flex w-[90%] justify-center items-center rounded-lg border-2 gap-4 p-3 font-medium self-center hover:cursor-pointer mt-4 mb-2"
                   >
                     <GrShare className="w-5 h-5 font-bold text-slate-black" />
                     <span className="font-semibold">
@@ -1303,7 +1303,7 @@ function EventDetails({ isEdit, locationName }: EventDetailsProps) {
                   <button
                     type="button"
                     onClick={handleCopyLink}
-                    className="bg-beaming-orange text-midnight hover:bg-gradient-to-r from-beaming-orange-dark to-beaming-orange-light border-beaming-orange-dark flex lg:hidden w-[90%] justify-center items-center rounded-lg border-2 gap-4 p-3 font-medium self-end hover:cursor-pointer mt-4 mb-2"
+                    className="bg-beaming-orange text-midnight hover:bg-gradient-to-r from-beaming-orange-dark to-beaming-orange-light border-beaming-orange-dark flex lg:hidden w-[90%] justify-center items-center rounded-lg border-2 gap-4 p-3 font-medium self-center hover:cursor-pointer mt-4 mb-2"
                   >
                     <GrShare className="w-5 h-5 font-bold text-slate-black" />
                     <span className="font-semibold">
