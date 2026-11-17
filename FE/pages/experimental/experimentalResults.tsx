@@ -4,8 +4,8 @@ import Link from 'next/link';
 import { useStore } from '../../store/store';
 import { Event } from '../../interface/objects/simpleObject';
 import React, { useState, useEffect } from 'react';
-import { ApifyClient } from 'apify-client';
 import Spinner from '../../components/Spinner';
+import { experimentalScrape } from '../../services/lib/admin';
 
 const ExperimentalResultsPage = () => {
   const [state, dispatch] = useStore();
@@ -20,10 +20,6 @@ const ExperimentalResultsPage = () => {
   const addEvent = (event: Event) => {
     setEvents([...events, event]);
   };
-
-  const client = new ApifyClient({
-    token: process.env.NEXT_PUBLIC_APIFY_API_KEY,
-  });
 
   const daysOfWeek = [
     'Sunday',
@@ -66,56 +62,18 @@ const ExperimentalResultsPage = () => {
     return formattedDate;
   };
 
-  const fetchEvents = async (client: ApifyClient, username: string) => {
-    const input = {
-      username: [username],
-      resultsLimit: 5,
-    };
-
-    const inputDos = {
-      usernames: [username],
-    };
-
+  const fetchEvents = async (username: string) => {
     let biography = '';
     let externalUrl = '';
 
     try {
-      // Run the Actor and wait for it to finish
-
-      //console.log('Launching bio fetcher....');
-
-      const runDos = await client
-        .actor('apify/instagram-profile-scraper')
-        .call(inputDos);
-
-      let { items } = await client.dataset(runDos.defaultDatasetId).listItems();
-
-      items.forEach((item) => {
-        console.dir('Bio results: ', item);
-        //console.log(item);
-        biography = item.biography as string;
-
-        if (item.externalUrl != null) {
-          externalUrl = item.externalUrl as string;
-        }
-
-        //console.log('Bio is now: ', biography);
-        //console.log('Ext url: ', externalUrl);
-      });
-
-      items = [];
-
-      //console.log('Launching post fetcher....');
-
-      const run = await client
-        .actor('apify/instagram-post-scraper')
-        .call(input);
-
-      // Fetch and print Actor results from the run's dataset (if any)
-      //console.log('Results from dataset');
-      let { items: newItems } = await client
-        .dataset(run.defaultDatasetId)
-        .listItems();
+      // Apify profile + posts run on Django (server APIFY_API_KEY). The
+      // subsequent /api/getImage calls are a separate Publish finding and
+      // stay as-is for this change.
+      const scrape = await experimentalScrape(username);
+      biography = scrape.biography || '';
+      externalUrl = scrape.externalUrl || '';
+      const newItems = scrape.posts || [];
 
       const promises = newItems.flatMap(async (item: any, index: number) => {
         if (item.type == 'Sidecar') {
@@ -469,28 +427,18 @@ const ExperimentalResultsPage = () => {
       //console.log("api response error: ",error)
     });*/
 
-    //console.log('Results fetchment... ', experimental.accounts);
-    /*for(const username in experimental.accounts){
-      setTimeout(() => {
-        //console.log("UN: ",experimental.accounts[username].replace('@', ''))
-        fetchEvents(client,experimental.accounts[username].replace('@', ''))
-      },20000);
-    }*/
-
     const accounts = experimental.accounts; // Your list of accounts
 
     if (accounts.length > 0) {
       const username = accounts[0].replace('@', '');
-      //console.log('UN: ', username);
-      fetchEvents(client, username);
+      fetchEvents(username);
     }
 
     let index = 1;
     const intervalId = setInterval(() => {
       if (index < accounts.length) {
         const username = accounts[index].replace('@', '');
-        //console.log('UN: ', username);
-        fetchEvents(client, username);
+        fetchEvents(username);
         index++;
       } else {
         clearInterval(intervalId); // Stop the interval when all requests are sent
