@@ -298,6 +298,31 @@ WIDE_MERGE_SCORE = 96.0
 # 24-33). Sits in the wide net as FLAG only: a shared template at two
 # venues is a human decision, and the same image a week later is a series.
 DHASH_MATCH_BITS = 6
+# Near-flyer band for owner story-frame / brand-template cousins
+# (2026-11-17: Jazz Night pair ~34 bits, WeGood template ~28). Random
+# 64-bit dhashes centre near 32, so anything above MATCH_BITS ALSO needs
+# a second signal (title overlap or same place) — see similar_flyer().
+DHASH_NEAR_BITS = 34
+# token_set floor for that second signal when titles exist. Soft on
+# purpose: brand words / shared slogans ("jazz"/"monday", "yard") should
+# count; unrelated Alpha Night / Beta Party at two rooms must not.
+NEAR_FLYER_TITLE_SIM = 40.0
+# Place-only near-hash pairs sit UNDER FUZZY_THRESHOLD so the nightly
+# same_room auto-merge (score >= 82 at one place) does not hide two
+# different yoga sessions that reuse one brand template. Similar titles
+# still get WIDE_NET_SCORE and may merge when place + times agree.
+SIMILAR_FLYER_REVIEW_SCORE = 80.0
+
+
+def _flyer_hamming(a, b):
+    """Hamming distance between two signatures' dhashes, or None if unusable."""
+    ha, hb = a.get('image_dhash') or '', b.get('image_dhash') or ''
+    if len(ha) != 16 or len(hb) != 16:
+        return None
+    try:
+        return hamming(ha, hb)
+    except ValueError:
+        return None
 
 
 def same_flyer(a, b):
@@ -306,13 +331,25 @@ def same_flyer(a, b):
     Checked last in the wide net so same-place-same-time auto-merge still
     wins when the artwork agrees too. A blank hash is not a match.
     """
-    ha, hb = a.get('image_dhash') or '', b.get('image_dhash') or ''
-    if len(ha) != 16 or len(hb) != 16:
+    d = _flyer_hamming(a, b)
+    return d is not None and d <= DHASH_MATCH_BITS
+
+
+def similar_flyer(a, b):
+    """Near artwork (≤ DHASH_NEAR_BITS) with a corroborating title or place.
+
+    Owner 2026-11-17: loosen enough to catch Jazz Night story frames and
+    WeGood brand-template cousins, without treating every ~32-bit dark
+    club photo pair as a duplicate. Exact same_flyer (≤6) is handled
+    separately and does not need the second signal.
+    """
+    d = _flyer_hamming(a, b)
+    if d is None or d <= DHASH_MATCH_BITS or d > DHASH_NEAR_BITS:
         return False
-    try:
-        return hamming(ha, hb) <= DHASH_MATCH_BITS
-    except ValueError:
-        return False
+    if a.get('name') and b.get('name'):
+        if fuzz.token_set_ratio(a['name'], b['name']) >= NEAR_FLYER_TITLE_SIM:
+            return True
+    return same_place(a, b)
 
 
 def same_place(a, b):
@@ -378,6 +415,8 @@ def wide_net_reason(a, b):
                 return 'same_place_similar_title'
     if same_flyer(a, b):
         return 'same_flyer'
+    if similar_flyer(a, b):
+        return 'similar_flyer'
     return None
 
 
@@ -387,7 +426,8 @@ def wide_net_merge_score(reason, a, b):
     same_place_similar_title only merges when times are not in conflict
     (Dekmantel 4pm vs 5pm at Potato Head must stay on the review page).
     Untitled same-place pairs stay review-only: an untitled row is the
-    one we know least about.
+    one we know least about. similar_flyer never clears the merge bar by
+    score alone — place-only near-hashes use a review score under 82.
     """
     if reason in ('same_place_same_time', 'same_place_near_title',
                   'same_title_same_place'):
@@ -395,6 +435,16 @@ def wide_net_merge_score(reason, a, b):
     if reason == 'same_place_similar_title' and _times_aligned(a, b):
         return WIDE_MERGE_SCORE
     return None
+
+
+def wide_net_flag_score(reason, a, b):
+    """Review-queue score when wide_net_merge_score does not apply."""
+    if reason == 'similar_flyer':
+        if (a.get('name') and b.get('name')
+                and fuzz.token_set_ratio(a['name'], b['name']) >= MIN_TITLE_SIM):
+            return WIDE_NET_SCORE
+        return SIMILAR_FLYER_REVIEW_SCORE
+    return WIDE_NET_SCORE
 
 
 _TITLE_FILLER = {'at', 'en', 'im', 'in', 'the', 'el', 'la', 'de', 'del', 'x', 'w', 'with'}
@@ -442,4 +492,4 @@ def find_fuzzy_pairs(signatures):
                         continue
                     lo, hi = sorted((a['id'], b['id']))
                     yield lo, hi, (wide_net_merge_score(reason, a, b)
-                                   or WIDE_NET_SCORE)
+                                   or wide_net_flag_score(reason, a, b))

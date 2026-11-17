@@ -75,10 +75,39 @@ class CollapseSeriesTests(SeriesFixtureMixin, TestCase):
         self.assertEqual(collapse_series([solo])[0].series_ids, [solo.id])
 
     def test_roundup_events_of_one_post_are_all_kept(self):
-        # Same post, different titles: several events, by design (Ticket 2).
+        # Same post, different titles, different (or no) artwork: several
+        # events, by design (Ticket 2). Lodge Room-style identical thumbs
+        # are a different rule — see test below.
         a = self._ev('Sound Bath', self.day)
         b = self._ev('Breathwork', self.week_later)
         self.assertEqual({e.id for e in collapse_series([a, b])}, {a.id, b.id})
+
+    def test_roundup_rows_sharing_one_thumb_collapse_despite_titles(self):
+        # Owner 2026-11-17 ("laundry room" = Lodge Room November calendar):
+        # the images are exactly the same calendar thumb under Emma Ruth
+        # Rundle / Train Breaks Down / Malibu… Differing titles must no
+        # longer win over identical artwork — one card for the shared flyer.
+        thumb = 'https://img.example/lodge-room-november.jpg'
+        a = self._ev('Emma Ruth Rundle', self.day, orig_thumb=thumb)
+        b = self._ev('Train Breaks Down', self.day + timedelta(days=2),
+                     orig_thumb=thumb)
+        c = self._ev('Malibu With Two Abyss', self.week_later, orig_thumb=thumb)
+        kept = collapse_series([a, b, c])
+        self.assertEqual([e.id for e in kept], [a.id])
+        self.assertEqual(kept[0].series_ids, [a.id, b.id, c.id])
+
+    def test_roundup_rows_sharing_one_dhash_collapse_despite_titles(self):
+        # Same post, identical fingerprint, different Firebase URL spellings
+        # (or a re-upload): Hamming 0 still overrides the title split.
+        a = self._ev('Emma Ruth Rundle', self.day,
+                     orig_thumb='https://img.example/a.jpg',
+                     image_dhash='a1b2c3d4e5f60718')
+        b = self._ev('Train Breaks Down', self.week_later,
+                     orig_thumb='https://img.example/b.jpg',
+                     image_dhash='a1b2c3d4e5f60718')
+        kept = collapse_series([a, b])
+        self.assertEqual([e.id for e in kept], [a.id])
+        self.assertEqual(kept[0].series_ids, [a.id, b.id])
 
     def test_nameless_rows_from_one_flyer_are_one_card_whatever_the_lineup(self):
         # Owner 2026-09-18 ("Familiar Feelings", five nameless rows of one
