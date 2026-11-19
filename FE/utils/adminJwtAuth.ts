@@ -1,18 +1,20 @@
 /**
  * Admin JWT check for Next.js API routes (same signing as Django).
  *
- * Matches API/API/c_auth/authentication.py: HS256 with secret "secret",
  * Authorization "Token <jwt>" (Bearer also accepted). Cookie adminToken is
  * accepted for same-origin browser calls. We verify signature + exp + id;
  * Django also loads the User row — FE has no DB, so existence is not checked.
  *
- * 2026-11-17: getImage was unauthenticated; Publish treated that as critical.
+ * 2026-11-19: do not embed a default signing key in shipped FE source —
+ * Publish treated a hardcoded fallback as credential exposure. Callers must
+ * pass a secret or set EVENT_JWT_SECRET. Django's own signer lives in the API.
  */
 import { createHmac, timingSafeEqual } from 'node:crypto';
 
-// Keep in lockstep with c_auth.authentication.create_jwt_token unless Django
-// moves the secret to an env var first.
-const JWT_SECRET = process.env.EVENT_JWT_SECRET || 'secret';
+function configuredJwtSecret(): string | null {
+  const fromEnv = process.env.EVENT_JWT_SECRET;
+  return fromEnv && fromEnv.length > 0 ? fromEnv : null;
+}
 
 function base64UrlToBuffer(input: string): Buffer {
   const padded = input + '='.repeat((4 - (input.length % 4)) % 4);
@@ -57,8 +59,10 @@ export function extractAdminAccessToken(
 export function verifyAdminAccessToken(
   token: string,
   nowSec: number = Math.floor(Date.now() / 1000),
-  secret: string = JWT_SECRET
+  secret: string | null | undefined = configuredJwtSecret()
 ): boolean {
+  if (!secret) return false;
+
   const parts = token.split('.');
   if (parts.length !== 3) return false;
 

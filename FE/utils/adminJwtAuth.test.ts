@@ -47,30 +47,29 @@ test('extracts Token and Bearer headers and adminToken cookie', () => {
   assert.equal(extractAdminAccessToken(undefined, undefined), null);
 });
 
-test('accepts a fresh admin JWT signed like Django', () => {
+test('accepts a fresh admin JWT when a signing key is provided', () => {
   const now = 1_700_000_000;
-  const token = mintToken({ id: 42, exp: now + 60, iat: now });
-  assert.equal(verifyAdminAccessToken(token, now), true);
-  assert.equal(
-    requestHasValidAdminAuth('Token ' + token, undefined, now),
-    true
-  );
+  const key = 'unit-test-signing-key';
+  const token = mintToken({ id: 42, exp: now + 60, iat: now }, key);
+  assert.equal(verifyAdminAccessToken(token, now, key), true);
 });
 
-test('rejects missing, expired, tampered, or wrong-secret tokens', () => {
+test('rejects missing, expired, tampered, wrong-key, or unset-key tokens', () => {
   const now = 1_700_000_000;
-  const expired = mintToken({ id: 1, exp: now - 1, iat: now - 120 });
-  assert.equal(verifyAdminAccessToken(expired, now), false);
+  const key = 'unit-test-signing-key';
+  const expired = mintToken({ id: 1, exp: now - 1, iat: now - 120 }, key);
+  assert.equal(verifyAdminAccessToken(expired, now, key), false);
 
-  const noId = mintToken({ exp: now + 60, iat: now });
-  assert.equal(verifyAdminAccessToken(noId, now), false);
+  const noId = mintToken({ exp: now + 60, iat: now }, key);
+  assert.equal(verifyAdminAccessToken(noId, now, key), false);
 
-  const good = mintToken({ id: 1, exp: now + 60, iat: now });
+  const good = mintToken({ id: 1, exp: now + 60, iat: now }, key);
   const tampered = good.slice(0, -2) + 'ab';
-  assert.equal(verifyAdminAccessToken(tampered, now), false);
+  assert.equal(verifyAdminAccessToken(tampered, now, key), false);
 
   const otherSecret = mintToken({ id: 1, exp: now + 60, iat: now }, 'other');
-  assert.equal(verifyAdminAccessToken(otherSecret, now), false);
+  assert.equal(verifyAdminAccessToken(otherSecret, now, key), false);
 
+  assert.equal(verifyAdminAccessToken(good, now, null), false);
   assert.equal(requestHasValidAdminAuth(undefined, undefined, now), false);
 });

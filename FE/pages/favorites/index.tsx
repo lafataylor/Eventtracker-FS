@@ -727,24 +727,14 @@ const Home: NextPage<{ firstFavoriteEventThumb: string; name: string }> = ({
 };
 
 export const getServerSideProps: GetServerSideProps = async (context) => {
-  const { email, name } = context.query; // Get email from query parameters
-  let firstFavoriteEventThumb = '';
+  const { name } = context.query;
 
-  // Fetch the favorite events based on the email
-  if (email) {
-    const yearData = await EventService.getFavoritedEvents({
-      email: email as string,
-    });
-    const favorites = yearData.data.favorites;
-
-    if (favorites && favorites.length > 0) {
-      firstFavoriteEventThumb = favorites[0].orig_thumb; // Get the orig_thumb of the first favorite event
-    }
-  }
-
+  // 2026-11-19: was server-fetching favorites for any ?email= without auth —
+  // Publish flagged data_exposure. Thumb for meta can stay empty; the client
+  // still loads favorites (own email from localStorage, or share query).
   return {
     props: {
-      firstFavoriteEventThumb, // Pass only firstFavoriteEventThumb
+      firstFavoriteEventThumb: '',
       name: typeof name === 'string' ? name : null,
     },
   };
