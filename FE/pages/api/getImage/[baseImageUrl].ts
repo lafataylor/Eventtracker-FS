@@ -7,18 +7,7 @@ export const config = {
   maxDuration: 10,
 };
 
-/**
- * Permanently disabled for Cursor Publish + production FE.
- *
- * 2026-11-19: Publish blocked on this path for missing auth, SSRF (caller-
- * chosen fetch), open CORS, and paid OpenAI/Firebase side effects. Auth +
- * host allowlist (#31) were not enough for a clean review while the fetch /
- * OpenAI body still shipped. Nightly scrape never used this route (Django
- * c_admin). Public flyers use Firebase orig_thumb URLs directly.
- *
- * Do not reintroduce server-side fetch-of-caller-URL here without a fresh
- * Publish security pass. Admin/experimental extract lives on Django now.
- */
+/** Legacy route. Intentionally returns 404; unused by public flyer URLs. */
 export default async function handler(
   _req: NextApiRequest,
   res: NextApiResponse

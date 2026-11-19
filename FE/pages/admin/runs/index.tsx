@@ -130,7 +130,6 @@ const index = () => {
   };
 
   function formatList(stringList: string) {
-    // 2026-11-19: was eval(stringList) — Publish flagged command_injection.
     // accounts_list is often a Python repr ("['a', 'b']"); JSON after quote
     // normalize covers that and real JSON without executing code.
     let strings: string[] = [];
