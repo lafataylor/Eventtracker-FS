@@ -9,43 +9,37 @@
 // here, and `./utils` must stay in tailwind.config.js content — otherwise
 // JIT omits the rule, the frame height is 0, and absolute images vanish.
 //
-// 2026-11-15: full `rounded-md` + `overflow-hidden` cut flyer title
-// lettering near the bottom corners (#20). Squaring bottoms (`rounded-t-md`)
-// was not enough — Winter Solstice still lost its corner “W” on live
-// (2026-11-16). Any radius on the overflow clip eats pixels in that curve.
-// Keep the rounded flyer chrome; inset the image with padding so lettering
-// clears the curve (md radius = 6px, p-2 = 8px). Board absolute imgs must
-// use matching `inset-2` — `inset-0` ignores parent padding.
+// 2026-11-15 / 2026-11-16: rounded-md + overflow-hidden can clip flyer
+// corner lettering. A grey pad mat (p-2 / inset-2 / bg-stone-gray) was added
+// so pixels cleared the curve (76f7ef4). Owner undid that mat (LAF-48) —
+// flyers are edge-to-edge again; corner clip tradeoff accepted.
 
 export const PORTRAIT_FLYER_ASPECT_CLASS = 'aspect-[3/4]';
 
 /** Radius on the masonry/grid flyer frame (clip curve). */
 export const IMAGE_TILE_RADIUS_CLASS = 'rounded-md';
 
-/** Inset so flyer pixels clear IMAGE_TILE_RADIUS_CLASS. */
-export const IMAGE_TILE_PAD_CLASS = 'p-2';
+/** No pad mat — owner undid the grey inset (LAF-48); corner clip accepted. */
+export const IMAGE_TILE_PAD_CLASS = 'p-0';
 
-/**
- * Absolute board img inset matching IMAGE_TILE_PAD_CLASS.
- * Parent padding does not offset `inset-0` children.
- */
-export const IMAGE_TILE_ABS_INSET_CLASS = 'inset-2';
+/** Absolute board img fill; matches IMAGE_TILE_PAD_CLASS (no inset mat). */
+export const IMAGE_TILE_ABS_INSET_CLASS = 'inset-0';
 
 export function imageTileFrameClass(isMasonry: boolean): string {
   const base =
-    `relative w-full overflow-hidden ${IMAGE_TILE_RADIUS_CLASS} ${IMAGE_TILE_PAD_CLASS} bg-stone-gray`;
+    `relative w-full overflow-hidden ${IMAGE_TILE_RADIUS_CLASS} ${IMAGE_TILE_PAD_CLASS}`;
   if (isMasonry) {
     return base;
   }
   return `${base} ${PORTRAIT_FLYER_ASPECT_CLASS}`;
 }
 
-/** Masonry: in-flow (parent pad insets). Board: absolute with matching inset. */
+/** Masonry: in-flow. Board: absolute edge-to-edge fill. */
 export function imageTileImgClass(isMasonry: boolean): string {
   if (isMasonry) {
     return 'block w-full h-auto';
   }
-  return `absolute ${IMAGE_TILE_ABS_INSET_CLASS} object-cover`;
+  return `absolute ${IMAGE_TILE_ABS_INSET_CLASS} w-full h-full object-cover`;
 }
 
 /** Cards (flyer) view image shell. Compact list thumbs keep a fixed size. */
