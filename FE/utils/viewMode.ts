@@ -25,8 +25,10 @@ export const VIEW_MODE_MENU_LABELS: Record<ViewMode, string> = {
 
 export const VIEW_MODE_STORAGE_KEY = 'lafaslist.viewMode';
 
+// 2026-11-19: owner asked for list as the phone default (was grid/board).
+// Desktop stays masonry. Stored preference in localStorage still wins.
 export const defaultViewMode = (width: number): ViewMode =>
-  width < VIEW_MODE_MD_PX ? 'board' : 'masonry';
+  width < VIEW_MODE_MD_PX ? 'list' : 'masonry';
 
 export function isViewMode(value: unknown): value is ViewMode {
   return (

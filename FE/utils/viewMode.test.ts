@@ -1,9 +1,10 @@
 // Run: npm test
 //
-// Desktop opens in masonry; phone opens in grid (board). Icon order is
-// different on each. 2026-11-15: owner asked for masonry / list / grid /
-// cards on desktop, and grid / list / masonry / cards on mobile.
+// Desktop opens in masonry; phone opens in list. Icon order is different
+// on each. 2026-11-15: owner asked for masonry / list / grid / cards on
+// desktop, and grid / list / masonry / cards on mobile.
 // 2026-11-15: phone uses a dropdown; chosen view sticks in localStorage.
+// 2026-11-19: phone default changed from grid (board) to list.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
@@ -17,11 +18,11 @@ import {
   writeStoredViewMode,
 } from './viewMode.ts';
 
-test('desktop default is masonry; phone default is grid', () => {
+test('desktop default is masonry; phone default is list', () => {
   assert.equal(defaultViewMode(1280), 'masonry');
   assert.equal(defaultViewMode(768), 'masonry');
-  assert.equal(defaultViewMode(767), 'board');
-  assert.equal(defaultViewMode(375), 'board');
+  assert.equal(defaultViewMode(767), 'list');
+  assert.equal(defaultViewMode(375), 'list');
 });
 
 test('desktop icon order is masonry, list, grid, cards', () => {
@@ -87,7 +88,7 @@ test('stored view mode is read and written through localStorage', () => {
     store.set(VIEW_MODE_STORAGE_KEY, 'not-a-mode');
     assert.equal(readStoredViewMode(), null);
 
-    assert.equal(resolveInitialViewMode(375), 'board');
+    assert.equal(resolveInitialViewMode(375), 'list');
     writeStoredViewMode('flyer');
     assert.equal(resolveInitialViewMode(375), 'flyer');
     assert.equal(resolveInitialViewMode(1280), 'flyer');
