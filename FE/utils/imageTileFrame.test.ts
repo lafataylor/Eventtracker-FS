@@ -2,9 +2,8 @@
 //
 // Grid (board), cards (flyer), and mobile list thumbs are portrait 3:4.
 // Masonry stays natural height; desktop list stays fixed 130×86. 2026-11-16.
-// Masonry/grid: rounded frame + overflow-hidden must inset the flyer (p-2 /
-// inset-2) so corner lettering clears the radius — #20's squared bottoms
-// alone still clipped Winter Solstice on live (2026-11-16).
+// Masonry/grid: no grey pad mat (LAF-48) — flyers are edge-to-edge; corner
+// clip from rounded-md + overflow-hidden is an accepted tradeoff.
 // Blank grid images (2026-11-16): aspect class lived only in utils/, which
 // Tailwind did not scan — frame height collapsed under absolute imgs.
 import test from 'node:test';
@@ -30,40 +29,44 @@ test('portrait flyer aspect is 3:4 width/height, not landscape 4:3 or square', (
   assert.doesNotMatch(PORTRAIT_FLYER_ASPECT_CLASS, /aspect-\[4\/3\]/);
 });
 
-test('tile pad clears md radius (p-2 = 8px > rounded-md = 6px)', () => {
+test('tile pad/inset are zero — no grey mat (LAF-48)', () => {
   assert.equal(IMAGE_TILE_RADIUS_CLASS, 'rounded-md');
-  assert.equal(IMAGE_TILE_PAD_CLASS, 'p-2');
-  assert.equal(IMAGE_TILE_ABS_INSET_CLASS, 'inset-2');
+  assert.equal(IMAGE_TILE_PAD_CLASS, 'p-0');
+  assert.equal(IMAGE_TILE_ABS_INSET_CLASS, 'inset-0');
 });
 
-test('masonry frame keeps natural height, rounded chrome, and pad inset', () => {
+test('masonry frame keeps natural height and rounded chrome without mat', () => {
   const cls = imageTileFrameClass(true);
   assert.match(cls, /\brounded-md\b/);
   assert.doesNotMatch(cls, /\brounded-t-md\b/);
-  assert.match(cls, /\bp-2\b/);
+  assert.match(cls, /\bp-0\b/);
+  assert.doesNotMatch(cls, /\bp-2\b/);
+  assert.doesNotMatch(cls, /\bbg-stone-gray\b/);
   assert.match(cls, /\boverflow-hidden\b/);
   assert.doesNotMatch(cls, /\baspect-/);
   assert.doesNotMatch(cls, /\bpb-/);
 });
 
-test('grid (board) frame uses portrait 3:4 with rounded chrome and pad inset', () => {
+test('grid (board) frame uses portrait 3:4 with rounded chrome and no mat', () => {
   const cls = imageTileFrameClass(false);
   assert.match(cls, /aspect-\[3\/4]/);
   assert.doesNotMatch(cls, /\baspect-square\b/);
   assert.doesNotMatch(cls, /aspect-\[4\/3\]/);
   assert.match(cls, /\brounded-md\b/);
   assert.doesNotMatch(cls, /\brounded-t-md\b/);
-  assert.match(cls, /\bp-2\b/);
+  assert.match(cls, /\bp-0\b/);
+  assert.doesNotMatch(cls, /\bp-2\b/);
+  assert.doesNotMatch(cls, /\bbg-stone-gray\b/);
   assert.match(cls, /\boverflow-hidden\b/);
 });
 
-test('board img uses inset-2 so parent pad actually insets the flyer', () => {
+test('board img uses inset-0 for edge-to-edge fill (no mat)', () => {
   const masonry = imageTileImgClass(true);
   const board = imageTileImgClass(false);
   assert.match(masonry, /\bblock\b/);
   assert.doesNotMatch(masonry, /\binset-/);
-  assert.match(board, /\binset-2\b/);
-  assert.doesNotMatch(board, /\binset-0\b/);
+  assert.match(board, /\binset-0\b/);
+  assert.doesNotMatch(board, /\binset-2\b/);
   assert.match(board, /\bobject-cover\b/);
 });
 
@@ -120,8 +123,8 @@ test('EventCard wires desktop and mobile list thumb helpers', () => {
     /relative w-\[130px\] h-\[86px\]/,
     'desktop list size lives in desktopListThumbFrameClass, not inline'
   );
-  // Board tile img classes come from imageTileImgClass (inset-2), not a
-  // hard-coded inset-0 fill next to imageTileFrameClass.
+  // Board tile img classes come from imageTileImgClass (inset-0), not a
+  // hard-coded inset next to imageTileFrameClass.
   assert.match(
     source,
     /imageTileFrameClass\(\!\!isInMasonryView\)[\s\S]*?imageTileImgClass\(\!\!isInMasonryView\)/
