@@ -59,6 +59,10 @@ export interface Venue {
   city: string | null;
   state: string | null;
   country: string | null;
+  // Optional: filled from GeocodingCache when that address was already
+  // geocoded (map view). Used for out-of-region sort; not a Venue column.
+  latitude?: number | null;
+  longitude?: number | null;
 }
 
 export interface Poster {

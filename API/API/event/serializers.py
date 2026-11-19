@@ -1,6 +1,18 @@
-from rest_framework.serializers import ModelSerializer, SerializerMethodField
+from rest_framework.serializers import ListSerializer, ModelSerializer, SerializerMethodField
 
 from .models import Event, Venue, Account, Execution, Feedback
+from .venue_coords import build_venue_coords_map
+
+
+class EventListSerializer(ListSerializer):
+    """Bulk-attach GeocodingCache coords once per page of events."""
+
+    def to_representation(self, data):
+        iterable = data.all() if hasattr(data, 'all') else data
+        events = list(iterable)
+        venues = [getattr(event, 'venue', None) for event in events]
+        self.child.context['venue_coords'] = build_venue_coords_map(venues)
+        return super().to_representation(events)
 
 
 class EventSerializer(ModelSerializer):
@@ -14,9 +26,21 @@ class EventSerializer(ModelSerializer):
     class Meta:
         model = Event
         exclude = ['exec']
+        list_serializer_class = EventListSerializer
 
     def get_venue(self, obj):
+        if obj.venue is None:
+            return None
         _venue = VenueSerializer(obj.venue, many=False).data
+        coords_map = self.context.get('venue_coords')
+        if coords_map is None:
+            # Single-event serialize (detail / favorites item): one lookup.
+            coords_map = build_venue_coords_map([obj.venue])
+            self.context['venue_coords'] = coords_map
+        coords = coords_map.get(obj.venue_id)
+        if coords is not None:
+            _venue['latitude'] = coords[0]
+            _venue['longitude'] = coords[1]
         return _venue
 
     def get_poster(self, obj):
