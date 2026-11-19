@@ -1,8 +1,15 @@
 import React, { useEffect, useState } from 'react';
+import Cookies from 'js-cookie';
 
 interface ImageProps {
   baseImageUrl: any;
 }
+
+const getImageAuthHeaders = (): HeadersInit => {
+  // 2026-11-17: /api/getImage requires the same admin Token JWT as Django admin APIs.
+  const token = Cookies.get('adminToken');
+  return token ? { Authorization: 'Token ' + token } : {};
+};
 
 const Image = ({baseImageUrl}: ImageProps) => {
   const [imageUrl, setImageUrl] = useState('');
@@ -18,7 +25,10 @@ const Image = ({baseImageUrl}: ImageProps) => {
       //console.log("api response error: ",error)
     }); 
 
-    fetch(`/api/getImage/${encodeURIComponent(baseImageUrl)}`) 
+    fetch(`/api/getImage/${encodeURIComponent(baseImageUrl)}`, {
+      headers: getImageAuthHeaders(),
+      credentials: 'same-origin',
+    }) 
         .then((response) => {
           //console.log("success response: ",response)
           return response.json()
