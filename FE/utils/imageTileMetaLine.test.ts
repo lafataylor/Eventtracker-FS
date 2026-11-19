@@ -1,14 +1,12 @@
 // Run: npm test
 //
-// Masonry/grid subtitle under the title: Location · First offering.
-// Owner 2026-11-19 (LAF-39).
+// Masonry/grid subtitle under the title: location only (LAF-50).
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
-  imageTileFirstOffering,
   imageTileLocation,
   imageTileMetaLine,
 } from './imageTileMetaLine.ts';
@@ -18,6 +16,7 @@ const eventCardSrc = readFileSync(
   join(here, '../components/Dashboard/EventCard.tsx'),
   'utf8'
 );
+const metaLineSrc = readFileSync(join(here, 'imageTileMetaLine.ts'), 'utf8');
 
 test('imageTileLocation prefers venue name, else address', () => {
   assert.equal(imageTileLocation('Lodge Room', '123 Main'), 'Lodge Room');
@@ -30,28 +29,20 @@ test('imageTileLocation prefers venue name, else address', () => {
   );
 });
 
-test('imageTileFirstOffering takes the first delimiter/comma token', () => {
-  assert.equal(imageTileFirstOffering('DJ set'), 'DJ set');
-  assert.equal(imageTileFirstOffering('DJ set, Live band'), 'DJ set');
-  assert.equal(
-    imageTileFirstOffering('DJ set|==|Live band'),
-    'DJ set'
-  );
-  assert.equal(imageTileFirstOffering(null), '');
-  assert.equal(imageTileFirstOffering('  ,  '), '');
+test('imageTileMetaLine is location only — no offering, no interpunct', () => {
+  assert.equal(imageTileMetaLine('Lodge Room'), 'Lodge Room');
+  assert.equal(imageTileMetaLine(''), '');
+  assert.doesNotMatch(imageTileMetaLine('Lodge Room'), /·/);
 });
 
-test('imageTileMetaLine joins with interpunct and omits empties', () => {
-  assert.equal(
-    imageTileMetaLine('Lodge Room', 'DJ set'),
-    'Lodge Room · DJ set'
+test('helpers no longer expose or compose offering for image tiles', () => {
+  assert.doesNotMatch(metaLineSrc, /export function imageTileFirstOffering/);
+  assert.doesNotMatch(eventCardSrc, /imageTileFirstOffering/);
+  // Meta line call takes location only — no second arg / offering helper.
+  assert.match(
+    eventCardSrc,
+    /imageTileMetaLine\(\s*imageTileLocation\([^)]+\)\s*\)/
   );
-  assert.equal(imageTileMetaLine('Lodge Room', ''), 'Lodge Room');
-  assert.equal(imageTileMetaLine('', 'DJ set'), 'DJ set');
-  assert.equal(imageTileMetaLine('', ''), '');
-  assert.doesNotMatch(imageTileMetaLine('Lodge Room', ''), /·/);
-  assert.doesNotMatch(imageTileMetaLine('A', 'B'), /[-/]/);
-  assert.match(imageTileMetaLine('A', 'B'), / · /);
 });
 
 test('EventCard image tiles render title then meta line helper', () => {

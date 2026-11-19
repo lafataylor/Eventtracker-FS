@@ -8,7 +8,6 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
-  imageTileFirstOffering,
   imageTileLocation,
   imageTileMetaLine,
 } from './imageTileMetaLine.ts';
@@ -59,17 +58,11 @@ test('safeVenue passes through present fields', () => {
 test('null venue does not throw when building masonry meta line', () => {
   assert.doesNotThrow(() => {
     const venue = safeVenue(null);
-    imageTileMetaLine(
-      imageTileLocation(venue.name, venue.address),
-      imageTileFirstOffering(null)
-    );
+    imageTileMetaLine(imageTileLocation(venue.name, venue.address));
   });
   const venue = safeVenue(null);
   assert.equal(
-    imageTileMetaLine(
-      imageTileLocation(venue.name, venue.address),
-      imageTileFirstOffering(null)
-    ),
+    imageTileMetaLine(imageTileLocation(venue.name, venue.address)),
     ''
   );
 });
