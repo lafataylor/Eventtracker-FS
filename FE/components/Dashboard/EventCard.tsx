@@ -28,6 +28,11 @@ import {
   imageTileImgClass,
   mobileListThumbFrameClass,
 } from '../../utils/imageTileFrame';
+import {
+  imageTileFirstOffering,
+  imageTileLocation,
+  imageTileMetaLine,
+} from '../../utils/imageTileMetaLine';
 
 interface EventCardsProp {
   event: Event;
@@ -312,6 +317,12 @@ function EventCard({
   const hasVenueDisplay =
     (event.venue.name && event.venue.name.trim() !== '') ||
     (event.venue.address && event.venue.address.trim() !== '');
+  // Masonry/grid: Location · First offering under the title (LAF-39).
+  // Same typography as the title; omit empty parts / dangling ·.
+  const imageTileMeta = imageTileMetaLine(
+    imageTileLocation(event.venue.name, event.venue.address),
+    imageTileFirstOffering(event.offering)
+  );
   const genreOrOfferingStyle = (searchQuery != null && searchQuery?.trim() !== '' && event.genres?.toLowerCase().includes(searchQuery?.toLowerCase().trim() ?? '')) || (searchQuery != null && searchQuery?.trim() !== '' && event.offering?.toLowerCase().includes(searchQuery?.toLowerCase().trim() ?? ''))
     ? 'font-bold underline'
     : '';
@@ -624,6 +635,13 @@ function EventCard({
         >
           {eventTitle}
         </p>
+        {imageTileMeta ? (
+          <p
+            className="px-2 text-[10px] md:text-[11px] font-normal uppercase tracking-wide leading-tight text-mist-white/90 overflow-hidden truncate"
+          >
+            {imageTileMeta}
+          </p>
+        ) : null}
       </div>
     )}
     {isInListView && !isImageTileView && (
