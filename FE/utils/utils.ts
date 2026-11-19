@@ -131,17 +131,17 @@ export const getValueFromColumnName = (event: Event, column: string) => {
     case 'Promoter':
       return event.promoter;
     case 'Venue name':
-      return event.venue.name;
+      return event.venue?.name ?? null;
     case 'Genre(s)':
       return event.genres;
     case 'Address':
-      return event.venue.address;
+      return event.venue?.address ?? null;
     case 'City':
-      return event.venue.city;
+      return event.venue?.city ?? null;
     case 'State':
-      return event.venue.state;
+      return event.venue?.state ?? null;
     case 'Country':
-      return event.venue.country;
+      return event.venue?.country ?? null;
     case 'Offerings':
       return event.offering;
     case 'Date':
@@ -188,17 +188,17 @@ export const getValueFromColumnNameForFeedback = (event: Event, column: string) 
     case 'Promoter':
       return event.promoter;
     case 'Venue name':
-      return event.venue.name;
+      return event.venue?.name ?? null;
     case 'Genre(s)':
       return event.genres;
     case 'Address':
-      return event.venue.address;
+      return event.venue?.address ?? null;
     case 'City':
-      return event.venue.city;
+      return event.venue?.city ?? null;
     case 'State':
-      return event.venue.state;
+      return event.venue?.state ?? null;
     case 'Country':
-      return event.venue.country;
+      return event.venue?.country ?? null;
     case 'Offerings':
       return event.offering;
     case 'Date':

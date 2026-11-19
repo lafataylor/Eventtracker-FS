@@ -720,15 +720,15 @@ function EventDetails({ isEdit, locationName }: EventDetailsProps) {
                         setIsMapDialogOpen(true);
                         // Use complete address for better geocoding accuracy
                         const fullAddress = formatAddress(
-                          eventDetailsDialog.event.venue.address,
-                          eventDetailsDialog.event.venue.city,
-                          eventDetailsDialog.event.venue.state,
-                          eventDetailsDialog.event.venue.country
+                          eventDetailsDialog.event.venue?.address,
+                          eventDetailsDialog.event.venue?.city,
+                          eventDetailsDialog.event.venue?.state,
+                          eventDetailsDialog.event.venue?.country
                         );
                         showMap(fullAddress)(dispatch);
                       }}
                     >
-                      {formatAddressAndVenue(eventDetailsDialog.event.venue.address, eventDetailsDialog.event.venue.name)}
+                      {formatAddressAndVenue(eventDetailsDialog.event.venue?.address, eventDetailsDialog.event.venue?.name)}
                     </span>
                   </div>
                   <div className="flex  items-center gap-3">
@@ -1121,7 +1121,7 @@ function EventDetails({ isEdit, locationName }: EventDetailsProps) {
                         );
                       }}
                     >
-                      {formatProperty(eventDetailsDialog.event.venue.state)}
+                      {formatProperty(eventDetailsDialog.event.venue?.state)}
                     </div>
                   )}
                 </div>
@@ -1236,15 +1236,15 @@ function EventDetails({ isEdit, locationName }: EventDetailsProps) {
                           setIsMapDialogOpen(true);
                           // Use complete address for better geocoding accuracy
                           const fullAddress = formatAddress(
-                            eventDetailsDialog.event.venue.address,
-                            eventDetailsDialog.event.venue.city,
-                            eventDetailsDialog.event.venue.state,
-                            eventDetailsDialog.event.venue.country
+                            eventDetailsDialog.event.venue?.address,
+                            eventDetailsDialog.event.venue?.city,
+                            eventDetailsDialog.event.venue?.state,
+                            eventDetailsDialog.event.venue?.country
                           );
                           showMap(fullAddress)(dispatch);
                         }}
                       >
-                        {formatAddressAndVenue(eventDetailsDialog.event.venue.address, eventDetailsDialog.event.venue.name)}
+                        {formatAddressAndVenue(eventDetailsDialog.event.venue?.address, eventDetailsDialog.event.venue?.name)}
                       </span>
                     </div>
                     <div className="text-midnight font-medium flex items-center gap-6">
