@@ -7,8 +7,7 @@ import React, { useState, useEffect } from 'react';
 import Spinner from '../../components/Spinner';
 import { experimentalScrape } from '../../services/lib/admin';
 
-// 2026-11-19: /api/getImage permanently disabled (Publish SSRF / OpenAI).
-// Vision extract for experimental goes through Django admin/experimentalScrape.
+// Local Next image-extract helper is retired; scrape uses Django instead.
 const skipDisabledGetImage = () => Promise.resolve(null);
 
 const ExperimentalResultsPage = () => {
@@ -71,9 +70,7 @@ const ExperimentalResultsPage = () => {
     let externalUrl = '';
 
     try {
-      // Apify profile + posts run on Django (server APIFY_API_KEY). The
-      // subsequent /api/getImage calls are a separate Publish finding and
-      // stay as-is for this change.
+      // Profile + posts scrape runs on Django with a server-side Apify key.
       const scrape = await experimentalScrape(username);
       biography = scrape.biography || '';
       externalUrl = scrape.externalUrl || '';
@@ -103,7 +100,6 @@ const ExperimentalResultsPage = () => {
                         externalLink: externalUrl,
                       };
 
-                      // Was /api/getImage — disabled for Publish security review.
                       skipDisabledGetImage()
                         .then(() => {
                           const extractedJSON: any = { num_events: 1 };
@@ -200,57 +196,6 @@ const ExperimentalResultsPage = () => {
               );
 
               await Promise.all(subPromises.flat());
-
-              /*for(const image in item.images){
-                  //console.log("An image: ",item.images[image])
-
-                  fetch(`/api/getImage/${encodeURIComponent(item.images[image])}`) 
-                  .then((response) => {
-                    //console.log("success response: ",response)
-                    return response.json()
-                  })
-                  .then((responseBody) => {
-                    //console.log("success data: ",responseBody)
-
-                    const extractedData = responseBody.extractedData.choices[0].message.content
-
-                    const extractedJSON = JSON.parse(extractedData.replace(/```json|```|\n/g, ''))
-
-                    //console.log("Extracted data: ", extractedJSON)
-
-                    newEvents = [...newEvents, {
-                      id: 2,
-                      venue: {
-                        id: 5,
-                        name: extractedJSON.venue,
-                        address: extractedJSON.address,
-                        city: extractedJSON.city,
-                        state: extractedJSON.state,
-                        country: extractedJSON.country,
-                      },
-                      name: extractedJSON.eventName,
-                      artist: extractedJSON.artist.join(", "),
-                      opener: extractedJSON.openers.join(", "),
-                      host: extractedJSON.hosts.join(", "),
-                      promoter: extractedJSON.promoters.join(", "),
-                      offering: extractedJSON.offerings.join(", "),
-                      timestamp: '2022-11-07T10:41:47.157839Z',
-                      date: formatDate(extractedJSON.startDate),
-                      time: extractedJSON.startTime,
-                      price: extractedJSON.ticketPrice,
-                      ticket_link: extractedJSON.ticketLink,
-                      is_age_restricted: false,
-                      orig_link: 'dummy_origlink1',
-                      orig_thumb: responseBody.imageData,
-                      poster: {user: "@"+username},
-                      is_event: extractedJSON.is_event
-                    } as Event];
-
-                    setEvents(newEvents);
-                  }).catch((error) => {
-                    //console.log("error datum: ",error)
-                  })
-                }*/
             } else if (item.type == 'Image') {
               const overallComponent = {
                 baseImageURL: item.displayUrl,

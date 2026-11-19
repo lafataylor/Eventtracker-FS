@@ -729,9 +729,7 @@ const Home: NextPage<{ firstFavoriteEventThumb: string; name: string }> = ({
 export const getServerSideProps: GetServerSideProps = async (context) => {
   const { name } = context.query;
 
-  // 2026-11-19: was server-fetching favorites for any ?email= without auth —
-  // Publish flagged data_exposure. Thumb for meta can stay empty; the client
-  // still loads favorites (own email from localStorage, or share query).
+  // Meta thumb left empty; client loads favorites after mount.
   return {
     props: {
       firstFavoriteEventThumb: '',
