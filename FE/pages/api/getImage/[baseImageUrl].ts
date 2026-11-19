@@ -8,21 +8,20 @@ export const config = {
 };
 
 /**
- * Default-off stub for Cursor Publish / phone preview.
+ * Permanently disabled for Cursor Publish + production FE.
  *
- * 2026-11-19: Prior Publish blocks named this file for missing auth (critical),
- * SSRF (critical), open CORS, and paid OpenAI/Firebase side effects. Auth +
- * host allowlist landed in #31; the live body now lives in
- * server/runGetImageRequest.ts and loads only when ENABLE_GETIMAGE=1.
- * Nightly production scrape does not use this route.
+ * 2026-11-19: Publish blocked on this path for missing auth, SSRF (caller-
+ * chosen fetch), open CORS, and paid OpenAI/Firebase side effects. Auth +
+ * host allowlist (#31) were not enough for a clean review while the fetch /
+ * OpenAI body still shipped. Nightly scrape never used this route (Django
+ * c_admin). Public flyers use Firebase orig_thumb URLs directly.
+ *
+ * Do not reintroduce server-side fetch-of-caller-URL here without a fresh
+ * Publish security pass. Admin/experimental extract lives on Django now.
  */
-export default async (req: NextApiRequest, res: NextApiResponse) => {
-  if (process.env.ENABLE_GETIMAGE !== '1') {
-    return res.status(404).json({ error: 'Not found' });
-  }
-
-  const { runGetImageRequest } = await import(
-    '../../../server/runGetImageRequest'
-  );
-  return runGetImageRequest(req, res);
-};
+export default async function handler(
+  _req: NextApiRequest,
+  res: NextApiResponse
+) {
+  return res.status(404).json({ error: 'Not found' });
+}

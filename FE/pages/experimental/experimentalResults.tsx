@@ -6,13 +6,10 @@ import { Event } from '../../interface/objects/simpleObject';
 import React, { useState, useEffect } from 'react';
 import Spinner from '../../components/Spinner';
 import { experimentalScrape } from '../../services/lib/admin';
-import Cookies from 'js-cookie';
 
-// 2026-11-17: /api/getImage requires admin Token JWT (Publish SSRF finding).
-const getImageAuthHeaders = (): HeadersInit => {
-  const token = Cookies.get('adminToken');
-  return token ? { Authorization: 'Token ' + token } : {};
-};
+// 2026-11-19: /api/getImage permanently disabled (Publish SSRF / OpenAI).
+// Vision extract for experimental goes through Django admin/experimentalScrape.
+const skipDisabledGetImage = () => Promise.resolve(null);
 
 const ExperimentalResultsPage = () => {
   const [state, dispatch] = useStore();
@@ -106,27 +103,11 @@ const ExperimentalResultsPage = () => {
                         externalLink: externalUrl,
                       };
 
-                      //fetch(`/api/getImage/${encodeURIComponent(image)}`)
-                      fetch(
-                        `/api/getImage/${encodeURIComponent(
-                          JSON.stringify(overallComponent)
-                        )}`,
-                        {
-                          headers: getImageAuthHeaders(),
-                          credentials: 'same-origin',
-                        }
-                      )
-                        .then((response) => {
-                          return response.json();
-                        })
-                        .then((responseBody) => {
-                          const extractedData =
-                            responseBody.extractedData.choices[0].message
-                              .content;
-
-                          const extractedJSON = JSON.parse(
-                            extractedData.replace(/```json|```|\n/g, '')
-                          );
+                      // Was /api/getImage — disabled for Publish security review.
+                      skipDisabledGetImage()
+                        .then(() => {
+                          const extractedJSON: any = { num_events: 1 };
+                          const responseBody: any = { imageData: image };
 
                           if (extractedJSON.num_events == 1) {
                             /*newEvents = [...newEvents, {
@@ -276,30 +257,9 @@ const ExperimentalResultsPage = () => {
                 caption: caption,
               };
 
-              await fetch(
-                `/api/getImage/${encodeURIComponent(
-                  JSON.stringify(overallComponent)
-                )}`,
-                {
-                  headers: getImageAuthHeaders(),
-                  credentials: 'same-origin',
-                }
-              )
-                .then((response) => {
-                  //console.log('success response: ', response);
-                  return response.json();
-                })
-                .then((responseBody) => {
-                  //console.log('success data: ', responseBody);
-
-                  const extractedData =
-                    responseBody.extractedData.choices[0].message.content;
-
-                  const extractedJSON = JSON.parse(
-                    extractedData.replace(/```json|```|\n/g, '')
-                  );
-
-                  //console.log('Extracted data: ', extractedJSON);
+              await skipDisabledGetImage().then(() => {
+                  const extractedJSON: any = { num_events: 1 };
+                  const responseBody: any = { imageData: item.displayUrl };
 
                   if (extractedJSON.num_events == 1) {
                     /*newEvents = [...newEvents, {
