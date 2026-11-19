@@ -29,7 +29,6 @@ import {
   mobileListThumbFrameClass,
 } from '../../utils/imageTileFrame';
 import {
-  imageTileFirstOffering,
   imageTileLocation,
   imageTileMetaLine,
 } from '../../utils/imageTileMetaLine';
@@ -340,11 +339,10 @@ function EventCard({
   const hasVenueDisplay =
     (venue.name && venue.name.trim() !== '') ||
     (venue.address && venue.address.trim() !== '');
-  // Masonry/grid: Location · First offering under the title (LAF-39).
-  // Same typography as the title; omit empty parts / dangling ·.
+  // Masonry/grid: location only under the title (LAF-50). List view still
+  // shows offerings; image tiles no longer append " · First offering".
   const imageTileMeta = imageTileMetaLine(
-    imageTileLocation(venue.name, venue.address),
-    imageTileFirstOffering(event.offering)
+    imageTileLocation(venue.name, venue.address)
   );
   const genreOrOfferingStyle = (searchQuery != null && searchQuery?.trim() !== '' && event.genres?.toLowerCase().includes(searchQuery?.toLowerCase().trim() ?? '')) || (searchQuery != null && searchQuery?.trim() !== '' && event.offering?.toLowerCase().includes(searchQuery?.toLowerCase().trim() ?? ''))
     ? 'font-bold underline'
