@@ -95,7 +95,8 @@ export interface Event {
   end_date: string;
   //endTime: string;
   end_time: string;
-  venue: Venue;
+  // Production date feed can send venue:null (LAF-45, 2026-11-19).
+  venue: Venue | null;
   price: string | null;
   ticket_link: string | null;
   is_age_restricted: boolean;

@@ -88,7 +88,7 @@ const EventsListItem = ({
       finalValue = { [fields[1]]: value };
 
       if (fields[0] === 'venue') {
-        finalValue = { ...finalValue, id: event.venue.id };
+        finalValue = { ...finalValue, id: event.venue?.id };
       }
     } else {
       if (fields[0] === 'price') {

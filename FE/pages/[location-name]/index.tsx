@@ -519,9 +519,9 @@ const LocationPage: NextPage<LocationPageProps> = ({ locationName, locations: in
       const location = filters.location.toLowerCase();
       filteredEvents = filteredEvents.filter((event) => {
         if (isStateCode(location)) {
-          return event.venue.state?.toLowerCase() === location; // Exact match for state code
+          return event.venue?.state?.toLowerCase() === location; // Exact match for state code
         } else {
-          return event.venue.city?.toLowerCase().includes(location); // Partial match for city
+          return event.venue?.city?.toLowerCase().includes(location); // Partial match for city
         }
       });
     }

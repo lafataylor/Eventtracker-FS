@@ -33,6 +33,7 @@ import {
   imageTileLocation,
   imageTileMetaLine,
 } from '../../utils/imageTileMetaLine';
+import { safeVenue } from '../../utils/eventVenue';
 
 interface EventCardsProp {
   event: Event;
@@ -322,24 +323,27 @@ function EventCard({
   const priceStyle = highlightedFields?.isPriceActive
     ? 'font-bold underline'
     : '';
+  // venue may be null from the API — never read event.venue.* bare (LAF-45).
+  const venue = safeVenue(event.venue);
+
   const searchLower = searchQuery?.toLowerCase().trim() ?? '';
   const locationTextMatchesSearch =
-    (!!event.venue.name && event.venue.name.toLowerCase().includes(searchLower)) ||
-    (!!event.venue.address && event.venue.address.toLowerCase().includes(searchLower));
+    (!!venue.name && venue.name.toLowerCase().includes(searchLower)) ||
+    (!!venue.address && venue.address.toLowerCase().includes(searchLower));
   const locationStyle =
     (highlightedFields?.isLocationActive && locationTextMatchesSearch) ||
     (searchQuery != null && searchQuery?.trim() !== '' && locationTextMatchesSearch)
       ? 'font-bold underline'
       : '';
 
-  const venueDisplayLine = getValue(event.venue.name, event.venue.address);
+  const venueDisplayLine = getValue(venue.name, venue.address);
   const hasVenueDisplay =
-    (event.venue.name && event.venue.name.trim() !== '') ||
-    (event.venue.address && event.venue.address.trim() !== '');
+    (venue.name && venue.name.trim() !== '') ||
+    (venue.address && venue.address.trim() !== '');
   // Masonry/grid: Location · First offering under the title (LAF-39).
   // Same typography as the title; omit empty parts / dangling ·.
   const imageTileMeta = imageTileMetaLine(
-    imageTileLocation(event.venue.name, event.venue.address),
+    imageTileLocation(venue.name, venue.address),
     imageTileFirstOffering(event.offering)
   );
   const genreOrOfferingStyle = (searchQuery != null && searchQuery?.trim() !== '' && event.genres?.toLowerCase().includes(searchQuery?.toLowerCase().trim() ?? '')) || (searchQuery != null && searchQuery?.trim() !== '' && event.offering?.toLowerCase().includes(searchQuery?.toLowerCase().trim() ?? ''))
@@ -347,7 +351,7 @@ function EventCard({
     : '';
 
   const getCityAndCountry = () => {
-    return `${getValue(event.venue.city)}, ${getValue(event.venue.country)}`;
+    return `${getValue(venue.city)}, ${getValue(venue.country)}`;
   };
 
   const firstToken = (value: string | null | undefined) => {
@@ -390,10 +394,10 @@ function EventCard({
   const listDateParts = listDateStack(event.start_date);
 
   const listCityLine = (() => {
-    const city = event.venue.city && event.venue.city.trim() !== '' ? event.venue.city.trim() : '';
+    const city = venue.city && venue.city.trim() !== '' ? venue.city.trim() : '';
     const region =
-      (event.venue.state && event.venue.state.trim() !== '' && event.venue.state) ||
-      (event.venue.country && event.venue.country.trim() !== '' && event.venue.country) ||
+      (venue.state && venue.state.trim() !== '' && venue.state) ||
+      (venue.country && venue.country.trim() !== '' && venue.country) ||
       '';
     if (city && region) return `${city}, ${region}`;
     return city || region;
@@ -1168,21 +1172,21 @@ function EventCard({
               className={`text-[0.8rem] font-semibold text-mist-white ${genreOrOfferingStyle} max-w-[82%]`}
             >
               {formatProperty(getGenreOrOffering(event))}
-              {/* getValue(event.venue.city)}, {getValue(event.venue.country)} */}
+              {/* getValue(venue.city)}, {getValue(venue.country)} */}
             </span>
           </div>
         )}
       </div>
       <div className={`flex justify-between items-end gap-2 pt-4 text-xs ${isInListView ? 'hidden' : ''}`}>
-        {/* getValue(event.venue.city)}, {getValue(event.venue.country)} */}
+        {/* getValue(venue.city)}, {getValue(venue.country)} */}
         <div className={`flex gap-2 items-center justify-start w-[80%]`}>
           {/*<div className="w-[10%]">
             <MdLocationOn className="w-5 h-5 text-beaming-orange-dark" />
           </div>*/}
           {getCityAndCountry() != '..., ...' && (
             <span className={`text-[0.6rem] text-mist-white ${locationStyle}`}>
-              {`${getValue(event.venue.city)}, ${getValue(
-                event.venue.country
+              {`${getValue(venue.city)}, ${getValue(
+                venue.country
               )}`.replace(/^..., |, ...$/g, '')}
             </span>
           )}
