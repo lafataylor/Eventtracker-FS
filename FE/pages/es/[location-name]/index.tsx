@@ -839,19 +839,6 @@ const LocationPage: NextPage<LocationPageProps> = ({ locationName, locations: in
         <meta name="twitter:image" content={isSanFrancisco(locationName) ? '/sf_social_share_preview.jpg' : '/social_share_preview.jpg'} />
         <meta name="twitter:card" content="summary_large_image" />
         
-        {/* Debug info - remove this after testing */}
-        <script
-          dangerouslySetInnerHTML={{
-            __html: `
-              console.log('Meta Tags Rendered:');
-              console.log('Location Name: ${locationName}');
-              console.log('Formatted Location Name: ${formattedLocationName}');
-              console.log('Page URL: ${locationName ? `https://lafaslist.com/es/${locationName}` : 'https://lafaslist.com/es'}');
-              console.log('Is San Francisco: ${isSanFrancisco(locationName)}');
-              console.log('Social Share Image: ${isSanFrancisco(locationName) ? '/sf_social_share_preview.jpg' : '/social_share_preview.jpg'}');
-            `,
-          }}
-        />
       </Head>
       <nav
         className={`fixed top-0 left-0 w-[100vw] flex md:flex-row flex-wrap flex-col gap-4 justify-between py-4 border-0 z-10 bg-midnight transition-transform duration-300 md:py-6 ex:gap-6 ex:mx-10 ex:ml-0 ex:pl-10 ex:px-0 ex:pr-[56px] ${

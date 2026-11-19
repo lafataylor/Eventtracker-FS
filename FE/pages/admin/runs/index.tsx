@@ -130,9 +130,21 @@ const index = () => {
   };
 
   function formatList(stringList: string) {
-    const strings = eval(stringList);
-    const length = strings?.length;
-    let elements = strings?.slice(0, 2).join(', ');
+    // 2026-11-19: was eval(stringList) — Publish flagged command_injection.
+    // accounts_list is often a Python repr ("['a', 'b']"); JSON after quote
+    // normalize covers that and real JSON without executing code.
+    let strings: string[] = [];
+    try {
+      const normalized = stringList.trim().replace(/'/g, '"');
+      const parsed = JSON.parse(normalized);
+      if (Array.isArray(parsed)) {
+        strings = parsed.map(String);
+      }
+    } catch {
+      strings = [];
+    }
+    const length = strings.length;
+    let elements = strings.slice(0, 2).join(', ');
     if (length > 2) {
       elements += ', ...';
     }
