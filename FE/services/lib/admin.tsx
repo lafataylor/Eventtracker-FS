@@ -299,8 +299,7 @@ export function addDuplicate(event_id: string) {
 }
 
 export async function getFollowingList(account: string) {
-  // Apify runs on Django with server-only APIFY_API_KEY. Do not put the
-  // token in NEXT_PUBLIC_* — Publish embeds those in the browser bundle.
+  // Apify runs on Django with a server-only key (never NEXT_PUBLIC_*).
   try {
     const response = await axiosClient.post(
       'admin/followingList/',

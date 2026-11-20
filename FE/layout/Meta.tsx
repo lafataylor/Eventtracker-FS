@@ -35,17 +35,6 @@ const Meta = ({ title, keywords, description, locationName }: MetaProps) => {
       <meta name="twitter:description" content={description} />
       <meta name="twitter:image" content={socialShareImage} />
       <meta name="twitter:card" content="summary_large_image" />
-      
-      {/* Debug info for Meta component */}
-      <script
-        dangerouslySetInnerHTML={{
-          __html: `
-            console.log('Meta Component - Location Name: ${locationName}');
-            console.log('Meta Component - Social Share Image: ${socialShareImage}');
-            console.log('Meta Component - Page URL: ${pageUrl}');
-          `,
-        }}
-      />
     </Head>
   );
 };
