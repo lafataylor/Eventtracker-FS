@@ -1,5 +1,9 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import AdminSideBar from '../../../components/Admin/AdminSideBar';
+import {
+  adminMainPaneClass,
+  adminPageTitleClass,
+} from '../../../utils/adminMobileLayout';
 import { useStore } from '../../../store/store';
 import { Constants } from '../../../utils/constants';
 import Filter from '../../../components/Filter/Filter';
@@ -458,10 +462,10 @@ const Index = () => {
   };
 
   return (
-    <div className="w-full flex h-full font-montserrat">
+    <div className="w-full flex h-full font-montserrat overflow-hidden">
       <AdminSideBar currentPage="events" />
       <div
-        className="px-8 pt-8 h-full font-montserrat flex flex-col w-full text-off-white overflow-x-auto"
+        className={adminMainPaneClass("px-4 pt-4 md:px-8 md:pt-8 overflow-x-auto")}
         onClick={() => {
           setShowFilter(false);
           setShowHideDialog(false);
@@ -469,10 +473,10 @@ const Index = () => {
           closePopup()(dispatch);
         }}
       >
-        <nav className="border-b-4 border-beaming-orange flex justify-start items-center flex pb-3 gap-4">
-          <div className="text-5xl font-bold  px-3">Manage Events</div>
+        <nav className="border-b-4 border-beaming-orange flex flex-wrap justify-start items-center pb-3 gap-3 md:gap-4">
+          <div className={adminPageTitleClass()}>Manage Events</div>
           <button
-            className="bg-slate-black px-6 p-2 text-white font-semibold rounded-lg hover:bg-stone-gray hover:font-semibold transition-all duration-300"
+            className="bg-slate-black px-4 md:px-6 p-2 text-white font-semibold rounded-lg hover:bg-stone-gray hover:font-semibold transition-all duration-300"
             onClick={() => {
               setCreateEvent(true);
             }}
@@ -482,11 +486,11 @@ const Index = () => {
         </nav>
         <div className="flex justify-between mt-5 mb-8 relative">
           <div></div>
-          <div className="flex justify-evenly items-center gap-4 relative z-[3]">
+          <div className="flex flex-wrap justify-start md:justify-evenly items-center gap-2 md:gap-4 relative z-[3] min-w-0">
             {loader.isSpinnerVisible && (
               <Spinner colorClass={'text-beaming-orange mr-2 '} size={32} />
             )}
-            <SearchBar allEvents={filterEventsByLinkedAccounts([...thisMonthEvents, ...prevEvents])} />
+            <SearchBar allEvents={filterEventsByLinkedAccounts([...thisMonthEvents, ...prevEvents])} grow />
             <button
               onClick={(e) => {
                 e.stopPropagation();
@@ -494,7 +498,7 @@ const Index = () => {
                 setShowSortOverlay(false);
                 setShowHideDialog(false);
               }}
-              className="lg:flex hidden group items-center gap-2 border-solid border-[1px] px-3 py-1 rounded-lg relative overflow-clip text-mist-white border-slate-black bg-transparent-white "
+              className="flex group items-center gap-2 border-solid border-[1px] px-3 py-2 md:py-1 rounded-lg relative overflow-clip text-mist-white border-slate-black bg-slate-black md:bg-transparent-white "
             >
               <div
                 className={
@@ -524,7 +528,7 @@ const Index = () => {
                 setShowFilter(false);
                 setShowHideDialog(false);
               }}
-              className="lg:flex hidden group items-center gap-2 border-solid border-[1px] px-3 py-1 rounded-lg relative overflow-clip text-mist-white border-slate-black bg-transparent-white  "
+              className="flex group items-center gap-2 border-solid border-[1px] px-3 py-2 md:py-1 rounded-lg relative overflow-clip text-mist-white border-slate-black bg-slate-black md:bg-transparent-white  "
             >
               <div
                 className={
@@ -587,7 +591,7 @@ const Index = () => {
                 setShowFilter(false);
                 setShowSortOverlay(false);
               }}
-              className="lg:flex hidden group items-center gap-2 border-solid border-[1px] px-3 py-1 rounded-lg relative overflow-clip text-mist-white border-slate-black bg-transparent-white  "
+              className="flex group items-center gap-2 border-solid border-[1px] px-3 py-2 md:py-1 rounded-lg relative overflow-clip text-mist-white border-slate-black bg-slate-black md:bg-transparent-white  "
             >
               <div
                 className={

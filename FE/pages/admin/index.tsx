@@ -43,6 +43,10 @@ import DeletionConfirmationOverlay from '../../components/Admin/DeletionConfirma
 import InfoOverlay from '../../components/Admin/InfoOverlay';
 import { HIDE_INFO_OVERLAY, SHOW_INFO_OVERLAY } from '../../store/actions/type';
 import { isSuperAdminEmail } from '../../utils/superAdmin';
+import {
+  adminMainPaneClass,
+  adminPageTitleClass,
+} from '../../utils/adminMobileLayout';
 
 const { ValueContainer } = components;
 
@@ -78,6 +82,7 @@ const Index = () => {
   const [showSortOverlay, setShowSortOverlay] = useState(false);
 
   const [addAccount, setAddAccount] = useState(false);
+  const [selectionMode, setSelectionMode] = useState(false);
   const [showFilter, setShowFilter] = useState(false);
   const [filterType, setFilterType] = useState(
     Constants.accountsFilterOptions[0]
@@ -288,18 +293,64 @@ const Index = () => {
     ],
     [accounts]
   );
-  return (
-    <div className="w-full flex h-full font-montserrat">
-      <AdminSideBar currentPage="accounts" />
+  const sortButton = (
+    <button
+      onClick={(e) => {
+        e.stopPropagation();
+        setShowFilter(false);
+        setShowSortOverlay(!showSortOverlay);
+      }}
+      className={
+        'flex group items-center gap-2 border-solid border-[1px] px-3 py-2.5 md:py-1 rounded-lg relative overflow-clip text-mist-white border-slate-black bg-slate-black md:bg-transparent-white shrink-0'
+      }
+    >
       <div
-        className="p-8 pb-0 h-full  font-montserrat flex flex-col w-full text-off-white"
+        className={
+          'w-full h-full bg-pearl-white absolute top-0 left-0 z-0 opacity-0 group-hover:opacity-100' +
+          (sort ? (sort.value == '' ? ' ' : ' opacity-100 ') : '')
+        }
+      ></div>
+      <BiSortAlt2
+        className={
+          'w-5 h-5 z-[1] text-mist-white filter group-hover:!brightness-0' +
+          (sort ? (sort.value == '' ? ' ' : ' !brightness-0 ') : '')
+        }
+      />
+      <span
+        className={
+          'z-[1] text-mist-white filter group-hover:!brightness-0' +
+          (sort ? (sort.value == '' ? ' ' : ' !brightness-0 ') : '')
+        }
+      >
+        Sort
+      </span>
+    </button>
+  );
+
+  return (
+    <div className="w-full flex h-full font-montserrat overflow-hidden">
+      <AdminSideBar
+        currentPage="accounts"
+        mobileTitle="Accounts"
+        mobileTrailing={
+          <button
+            type="button"
+            onClick={() => setAddAccount(true)}
+            className="bg-beaming-orange text-midnight font-semibold text-sm px-3 py-2 rounded-lg whitespace-nowrap"
+          >
+            + Add
+          </button>
+        }
+      />
+      <div
+        className={adminMainPaneClass('p-4 pb-0 md:p-8 md:pb-0')}
         onClick={() => {
           setShowFilter(false);
           setShowSortOverlay(false);
         }}
       >
-        <nav className="border-b-4 border-beaming-orange">
-          <div className="text-5xl font-bold pb-3 px-3">Manage Accounts</div>
+        <nav className="hidden md:block border-b-4 border-beaming-orange">
+          <div className={adminPageTitleClass('pb-3')}>Manage Accounts</div>
         </nav>
         {addAccount ? (
           <AddAccount
@@ -310,7 +361,44 @@ const Index = () => {
             locations={locations}
           />
         ) : null}
-        <div className="flex justify-between mt-5 mb-8 relative">
+
+        {/* Mobile toolbar — search + sort, then Select (mockup 2026-11-20) */}
+        <div className="md:hidden flex flex-col gap-3 mt-4 mb-5 relative">
+          <div className="flex items-center gap-2 relative z-[3]">
+            <SearchBar
+              isAccounts={true}
+              allAccounts={accounts}
+              placeholder="Search accounts"
+              grow
+            />
+            {sortButton}
+            {showSortOverlay ? (
+              <SortOverlay
+                hide={() => setShowSortOverlay(false)}
+                value={sort}
+                onChange={(newValue: any) => setSort(newValue as Option)}
+                options={Constants.accountSortingOptions}
+              />
+            ) : null}
+          </div>
+          <div className="flex justify-end">
+            <button
+              type="button"
+              className="text-beaming-orange font-semibold text-sm py-1"
+              onClick={(e) => {
+                e.stopPropagation();
+                // Keep any checked rows so the existing bulk-delete overlay
+                // stays reachable after leaving Select mode.
+                setSelectionMode(!selectionMode);
+              }}
+            >
+              {selectionMode ? 'Done' : 'Select'}
+            </button>
+          </div>
+        </div>
+
+        {/* Desktop toolbar */}
+        <div className="hidden md:flex justify-between mt-5 mb-8 relative">
           <div>
             <button
               onClick={() => {
@@ -322,10 +410,7 @@ const Index = () => {
             </button>
           </div>
           <div className="flex justify-evenly gap-4 relative z-[3]">
-            <SearchBar
-              isAccounts={true}
-              allAccounts={accounts}
-            />
+            <SearchBar isAccounts={true} allAccounts={accounts} />
             {false && (
               <button
                 onClick={(e) => {
@@ -357,43 +442,17 @@ const Index = () => {
               </button>
             )}
 
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                setShowFilter(false);
-                setShowSortOverlay(!showSortOverlay);
-              }}
-              className="lg:flex hidden group items-center gap-2 border-solid border-[1px] px-3 py-1 rounded-lg relative overflow-clip text-mist-white border-slate-black bg-transparent-white  "
-            >
-              <div
-                className={
-                  'w-full h-full bg-pearl-white absolute top-0 left-0 z-0 opacity-0 group-hover:opacity-100' +
-                  (sort ? (sort.value == '' ? ' ' : ' opacity-100 ') : '')
-                }
-              ></div>
-              <BiSortAlt2
-                className={
-                  'w-5 h-5 z-[1] text-mist-white filter group-hover:!brightness-0' +
-                  (sort ? (sort.value == '' ? ' ' : ' !brightness-0 ') : '')
-                }
-              />
-              <span
-                className={
-                  'z-[1] text-mist-white filter group-hover:!brightness-0' +
-                  (sort ? (sort.value == '' ? ' ' : ' !brightness-0 ') : '')
-                }
-              >
-                Sort
-              </span>
-            </button>
-            {showSortOverlay ? (
-              <SortOverlay
-                hide={() => setShowSortOverlay(false)}
-                value={sort}
-                onChange={(newValue: any) => setSort(newValue as Option)}
-                options={Constants.accountSortingOptions}
-              />
-            ) : null}
+            <div className="hidden lg:flex relative">
+              {sortButton}
+              {showSortOverlay ? (
+                <SortOverlay
+                  hide={() => setShowSortOverlay(false)}
+                  value={sort}
+                  onChange={(newValue: any) => setSort(newValue as Option)}
+                  options={Constants.accountSortingOptions}
+                />
+              ) : null}
+            </div>
           </div>
           {showFilter ? (
             <AccountsFilter
@@ -404,18 +463,21 @@ const Index = () => {
           ) : null}
         </div>
 
-        <div className="flex-1 w-full overflow-x-auto overflow-y-auto pb-8">
-          <div className="w-[100%] flex flex-col gap-8  pr-4">
+        <div className="flex-1 w-full min-w-0 overflow-x-hidden md:overflow-x-auto overflow-y-auto pb-8">
+          <div className="w-full flex flex-col gap-3 md:gap-8 md:pr-4">
             {search.show ? (
               <AccountsSection
                 key="search"
                 title="Search Results"
+                cityLabel="Search"
+                count={searchFilteredAndSortedAccounts.length}
                 subTitle={`Showing ${
                   search.accountResults?.length ?? 0
                 } account(s)`}
                 accounts={searchFilteredAndSortedAccounts}
                 isAlt={false}
                 defaultIsExpanded={true}
+                selectionMode={selectionMode}
                 onClick={() => {}}
               />
             ) : (
@@ -429,9 +491,14 @@ const Index = () => {
                           ? `Accounts with no specified location (${locationAccounts.length})`
                           : `Accounts for ${location} (${locationAccounts.length})`
                       }
+                      cityLabel={
+                        location === 'general' ? 'No location' : location
+                      }
+                      count={locationAccounts.length}
                       accounts={locationAccounts}
-                      defaultIsExpanded={true}
+                      defaultIsExpanded={index === 0}
                       isAlt={index % 2 !== 0}
+                      selectionMode={selectionMode}
                       onClick={() => {}}
                     />
                   )

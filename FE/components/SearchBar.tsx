@@ -26,6 +26,10 @@ interface SearchBarProps {
    *  without this, a Berlin-page search whose local pass found nothing would
    *  render Mexico City events under the Berlin banner. */
   forLocation?: string;
+  /** Override the default Search / Buscar placeholder. */
+  placeholder?: string;
+  /** Stretch to fill remaining row width (admin Accounts mobile). */
+  grow?: boolean;
 }
 
 /** Casefold and strip accents so "Café" matches "cafe" and "MÉXICO" matches
@@ -96,6 +100,8 @@ const SearchBar = ({
   language = 'en',
   forceShrink = 0,
   forLocation,
+  placeholder,
+  grow = false,
 }: SearchBarProps) => {
   const [state, dispatch] = useStore();
   const [searchTerm, setSearchTerm] = useState('');
@@ -224,18 +230,27 @@ const SearchBar = ({
   }, [searchTerm]);
 
   const esExToExxMax ='ex:max-w-[9.75vw] exx:max-w-[45vw] min-w-0'
+  const defaultPlaceholder = language === 'es' ? 'Buscar' : 'Search';
 
   return (
     <div
-      className={`flex !h-12 min-h-12 max-h-12 box-border overflow-hidden min-w-0 items-center gap-2 px-3 rounded-lg bg-slate-black w-[200px] max-w-[45vw] ${esExToExxMax} ${
-        forceShrink > 4 ? 'md:w-[100px]' : forceShrink > 2 ? 'md:w-[140px]' : 'md:w-auto'
+      className={`flex !h-12 min-h-12 max-h-12 box-border overflow-hidden min-w-0 items-center gap-2 px-3 rounded-lg bg-slate-black ${
+        grow
+          ? 'flex-1 w-auto max-w-none'
+          : `w-[200px] max-w-[45vw] ${esExToExxMax} ${
+              forceShrink > 4
+                ? 'md:w-[100px]'
+                : forceShrink > 2
+                  ? 'md:w-[140px]'
+                  : 'md:w-auto'
+            }`
       }`}
     >
       <IoMdSearch className="w-5 h-5 shrink-0 text-mist-white" />
       <input
         ref={inputRef}
         className={`min-w-0 flex-1 h-full outline-none border-0 appearance-none bg-slate-black text-mist-white ${mobileSafeInputTextClass()} leading-none placeholder:text-mist-white/50 [&:-webkit-autofill]:shadow-[inset_0_0_0_1000px_#262523] [&:-webkit-autofill]:[-webkit-text-fill-color:#FFFCF0]`}
-        placeholder={language === 'es' ? 'Buscar' : 'Search'}
+        placeholder={placeholder ?? defaultPlaceholder}
         type="text"
         value={searchTerm}
         onChange={(e) => setSearchTerm(e.target.value)}
