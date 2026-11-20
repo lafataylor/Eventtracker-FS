@@ -32,7 +32,7 @@ import {
   addToDeletedStack,
   resetSelections,
 } from '../../../store/actions/selections';
-import { FiFilter, FiEyeOff } from 'react-icons/fi';
+import { FiFilter, FiEyeOff, FiMoreHorizontal } from 'react-icons/fi';
 import { BiSortAlt2 } from 'react-icons/bi';
 import DeletionConfirmationOverlay from '../../../components/Admin/DeletionConfirmationOverlay';
 import InfoOverlay from '../../../components/Admin/InfoOverlay';
@@ -67,6 +67,7 @@ const Index = () => {
 
   const [showFilter, setShowFilter] = useState(false);
   const [showHideDialog, setShowHideDialog] = useState(false);
+  const [selectionMode, setSelectionMode] = useState(false);
   const [lastClickedSection, setLastClickedSection] = useState('');
 
   const [thisMonthEvents, setThisMonthEvents] = useState([] as Event[]);
@@ -461,11 +462,40 @@ const Index = () => {
     }
   };
 
+  const onSortChange = (newValue: any) => {
+    setSortBy(newValue as Option);
+    if (newValue.value == '') {
+      setSelectedColumn('');
+    }
+    const valueOfSelectedColumn = columnNameToValue(selectedColumn);
+    if (!newValue.value.startsWith(valueOfSelectedColumn)) {
+      setSelectedColumn('');
+      setSortOrder('asc');
+    } else if (newValue.value.startsWith(valueOfSelectedColumn)) {
+      setSortOrder(sortOrder === 'desc' ? 'asc' : 'desc');
+    }
+  };
+
+  const controlBtnClass =
+    'flex group items-center gap-2 border-solid border-[1px] px-3 py-2 md:py-1 rounded-lg relative overflow-clip text-mist-white border-slate-black bg-slate-black md:bg-transparent-white shrink-0';
+
   return (
     <div className="w-full flex h-full font-montserrat overflow-hidden">
-      <AdminSideBar currentPage="events" />
+      <AdminSideBar
+        currentPage="events"
+        mobileTitle="Events"
+        mobileTrailing={
+          <button
+            type="button"
+            onClick={() => setCreateEvent(true)}
+            className="bg-beaming-orange text-midnight font-semibold text-sm px-3 py-2 rounded-lg whitespace-nowrap"
+          >
+            + New Event
+          </button>
+        }
+      />
       <div
-        className={adminMainPaneClass("px-4 pt-4 md:px-8 md:pt-8 overflow-x-auto")}
+        className={adminMainPaneClass("px-4 pt-4 md:px-8 md:pt-8 overflow-x-hidden md:overflow-x-auto")}
         onClick={() => {
           setShowFilter(false);
           setShowHideDialog(false);
@@ -473,7 +503,7 @@ const Index = () => {
           closePopup()(dispatch);
         }}
       >
-        <nav className="border-b-4 border-beaming-orange flex flex-wrap justify-start items-center pb-3 gap-3 md:gap-4">
+        <nav className="hidden md:flex border-b-4 border-beaming-orange flex-wrap justify-start items-center pb-3 gap-3 md:gap-4">
           <div className={adminPageTitleClass()}>Manage Events</div>
           <button
             className="bg-slate-black px-4 md:px-6 p-2 text-white font-semibold rounded-lg hover:bg-stone-gray hover:font-semibold transition-all duration-300"
@@ -484,13 +514,117 @@ const Index = () => {
             + New Event
           </button>
         </nav>
-        <div className="flex justify-between mt-5 mb-8 relative">
+
+        {/* Mobile toolbar — all controls stay reachable */}
+        <div className="md:hidden flex flex-col gap-3 mt-4 mb-5 relative z-[3]">
+          <div className="flex items-center gap-2">
+            {loader.isSpinnerVisible && (
+              <Spinner colorClass={'text-beaming-orange mr-2 '} size={28} />
+            )}
+            <SearchBar
+              allEvents={filterEventsByLinkedAccounts([
+                ...thisMonthEvents,
+                ...prevEvents,
+              ])}
+              placeholder="Search events"
+              grow
+            />
+          </div>
+          <div className="flex flex-wrap items-center gap-2 relative">
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                setShowFilter(!showFilter);
+                setShowSortOverlay(false);
+                setShowHideDialog(false);
+              }}
+              className={controlBtnClass}
+            >
+              <FiFilter className="w-4 h-4 z-[1]" />
+              <span className="z-[1] text-sm">Filter</span>
+            </button>
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                setShowSortOverlay(!showSortOverlay);
+                setShowFilter(false);
+                setShowHideDialog(false);
+              }}
+              className={controlBtnClass}
+            >
+              <BiSortAlt2 className="w-5 h-5 z-[1]" />
+              <span className="z-[1] text-sm flex items-center gap-1">
+                Sort
+                {sortBy?.value ? (
+                  <FaTimes
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setSortBy({ value: '', label: 'None' });
+                      setSelectedColumn('');
+                      setShowSortOverlay(false);
+                    }}
+                  />
+                ) : null}
+              </span>
+            </button>
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                setShowHideDialog(!showHideDialog);
+                setShowFilter(false);
+                setShowSortOverlay(false);
+              }}
+              className={controlBtnClass}
+              aria-label="Hide columns / more"
+            >
+              <FiMoreHorizontal className="w-5 h-5 z-[1]" />
+              <span className="z-[1] text-sm">More</span>
+            </button>
+            {showSortOverlay ? (
+              <SortOverlay
+                hide={() => setShowSortOverlay(false)}
+                value={sortBy}
+                onChange={onSortChange}
+                options={Constants.eventsSortingOptions}
+              />
+            ) : null}
+          </div>
+          <div className="flex justify-end">
+            <button
+              type="button"
+              className="text-beaming-orange font-semibold text-sm py-1"
+              onClick={(e) => {
+                e.stopPropagation();
+                setSelectionMode(!selectionMode);
+              }}
+            >
+              {selectionMode ? 'Done' : 'Select'}
+            </button>
+          </div>
+          {showFilter ? (
+            <Filter
+              hide={() => {
+                setShowFilter(false);
+                setShowHideDialog(false);
+              }}
+              isAdmin={true}
+              existingEvents={[...thisMonthEvents, ...prevEvents]}
+            />
+          ) : null}
+          {showHideDialog ? <EventColumnsHideOverlay /> : null}
+        </div>
+
+        {/* Desktop toolbar — unchanged controls */}
+        <div className="hidden md:flex justify-between mt-5 mb-8 relative">
           <div></div>
-          <div className="flex flex-wrap justify-start md:justify-evenly items-center gap-2 md:gap-4 relative z-[3] min-w-0">
+          <div className="flex flex-wrap justify-evenly items-center gap-4 relative z-[3] min-w-0">
             {loader.isSpinnerVisible && (
               <Spinner colorClass={'text-beaming-orange mr-2 '} size={32} />
             )}
-            <SearchBar allEvents={filterEventsByLinkedAccounts([...thisMonthEvents, ...prevEvents])} grow />
+            <SearchBar allEvents={filterEventsByLinkedAccounts([...thisMonthEvents, ...prevEvents])} />
             <button
               onClick={(e) => {
                 e.stopPropagation();
@@ -498,7 +632,7 @@ const Index = () => {
                 setShowSortOverlay(false);
                 setShowHideDialog(false);
               }}
-              className="flex group items-center gap-2 border-solid border-[1px] px-3 py-2 md:py-1 rounded-lg relative overflow-clip text-mist-white border-slate-black bg-slate-black md:bg-transparent-white "
+              className={controlBtnClass}
             >
               <div
                 className={
@@ -528,7 +662,7 @@ const Index = () => {
                 setShowFilter(false);
                 setShowHideDialog(false);
               }}
-              className="flex group items-center gap-2 border-solid border-[1px] px-3 py-2 md:py-1 rounded-lg relative overflow-clip text-mist-white border-slate-black bg-slate-black md:bg-transparent-white  "
+              className={controlBtnClass}
             >
               <div
                 className={
@@ -565,20 +699,7 @@ const Index = () => {
               <SortOverlay
                 hide={() => setShowSortOverlay(false)}
                 value={sortBy}
-                onChange={(newValue: any) => {
-                  setSortBy(newValue as Option);
-                  if (newValue.value == '') {
-                    setSelectedColumn('');
-                  }
-                  const valueOfSelectedColumn =
-                    columnNameToValue(selectedColumn);
-                  if (!newValue.value.startsWith(valueOfSelectedColumn)) {
-                    setSelectedColumn('');
-                    setSortOrder('asc');
-                  } else if (newValue.value.startsWith(valueOfSelectedColumn)) {
-                    setSortOrder(sortOrder === 'desc' ? 'asc' : 'desc');
-                  }
-                }}
+                onChange={onSortChange}
                 options={Constants.eventsSortingOptions}
               />
             ) : (
@@ -591,7 +712,7 @@ const Index = () => {
                 setShowFilter(false);
                 setShowSortOverlay(false);
               }}
-              className="flex group items-center gap-2 border-solid border-[1px] px-3 py-2 md:py-1 rounded-lg relative overflow-clip text-mist-white border-slate-black bg-slate-black md:bg-transparent-white  "
+              className={controlBtnClass}
             >
               <div
                 className={
@@ -656,6 +777,7 @@ const Index = () => {
                 isAlt={false}
                 onClick={() => {}}
                 onEventUpdate={fetchEvents}
+                selectionMode={selectionMode}
               />
             ) : filter.show ? (
               <EventsSection
@@ -673,6 +795,7 @@ const Index = () => {
                 isAlt={false}
                 onClick={() => {}}
                 onEventUpdate={fetchEvents}
+                selectionMode={selectionMode}
               />
             ) : (
               <>
@@ -690,6 +813,7 @@ const Index = () => {
                     selectedColumn={selectedColumn}
                     onClick={() => setLastClickedSection('month')}
                     onEventUpdate={fetchEvents}
+                    selectionMode={selectionMode}
                   />
                 </div>
                 {/*<EventsSection
