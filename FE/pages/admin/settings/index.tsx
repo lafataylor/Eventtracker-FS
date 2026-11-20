@@ -1,5 +1,8 @@
 import React, { useEffect, useState } from 'react';
 import AdminSideBar from '../../../components/Admin/AdminSideBar';
+import {
+  adminMainPaneClass,
+} from '../../../utils/adminMobileLayout';
 
 import Scrollbars from 'react-custom-scrollbars-2';
 import {
@@ -311,12 +314,12 @@ const index = () => {
   };
 
   return (
-    <div className="w-full flex h-full font-montserrat">
+    <div className="w-full flex h-full font-montserrat overflow-hidden">
       <AdminSideBar currentPage="settings" />
-      <div className="h-full  font-montserrat flex flex-col w-full text-off-white">
-        <div className="px-8 pt-8 h-full  font-montserrat flex flex-col w-full text-off-white overflow-y-auto">
+      <div className={adminMainPaneClass()}>
+        <div className="px-4 pt-4 md:px-8 md:pt-8 h-full font-montserrat flex flex-col w-full min-w-0 text-off-white overflow-y-auto">
           <nav className="border-b-4 border-beaming-orange">
-            <div className="text-5xl font-semibold pb-3 px-3">Settings</div>
+            <div className="text-2xl sm:text-3xl md:text-5xl font-semibold pb-3 px-3">Settings</div>
           </nav>
           <div className="flex flex-col font-semibold  pt-6 gap-5 text-sm  h-full px-1 ">
             {/*<Scrollbars className="container-scroll">*/}

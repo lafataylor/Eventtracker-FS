@@ -1,6 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import AdminSideBar from '../../../components/Admin/AdminSideBar';
 import {
+  adminMainPaneClass,
+  adminPageTitleClass,
+} from '../../../utils/adminMobileLayout';
+import {
   readAdminAccounts,
   readAccountDetails,
   readDetailFields,
@@ -559,12 +563,12 @@ export default function AdminDetailsPage() {
   };
 
   return (
-    <div className="w-full flex h-full font-montserrat">
+    <div className="w-full flex h-full font-montserrat overflow-hidden">
       <AdminSideBar currentPage="details" />
 
-      <div className="p-8 pb-0 h-full font-montserrat flex flex-col w-full text-off-white overflow-y-auto">
+      <div className={adminMainPaneClass("p-4 pb-0 md:p-8 md:pb-0 overflow-y-auto")}>
         <nav className="border-b-4 border-beaming-orange mb-6">
-          <div className="text-5xl font-bold pb-3 px-3">Account Details</div>
+          <div className={adminPageTitleClass("pb-3")}>Account Details</div>
         </nav>
 
         <p className="text-sm text-gray-400 mb-5 px-1 max-w-2xl">

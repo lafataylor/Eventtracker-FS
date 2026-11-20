@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useStore } from '../../../store/store';
 import AdminSideBar from '../../../components/Admin/AdminSideBar';
+import { adminMainPaneClass } from '../../../utils/adminMobileLayout';
 import LoadingDialog from '../../../components/overlay/LoadingDialog';
 import ActionDialog from '../../../components/overlay/ActionDialog';
 import { readFeedback } from '../../../services/lib/admin';
@@ -39,11 +40,11 @@ const index = () => {
   }, []);
 
   return (
-    <div className="w-full flex h-full font-montserrat">
+    <div className="w-full flex h-full font-montserrat overflow-hidden">
       <AdminSideBar currentPage="feedback" />
-      <div className="p-8 h-full font-montserrat flex flex-col w-full text-off-white overflow-y-auto">
+      <div className={adminMainPaneClass("p-4 md:p-8 overflow-y-auto")}>
         <nav className="border-b-4 border-beaming-orange">
-          <div className="text-5xl font-semibold pb-3 px-3">Feedback</div>
+          <div className="text-2xl sm:text-3xl md:text-5xl font-semibold pb-3 px-3">Feedback</div>
         </nav>
         <div className="flex flex-col font-semibold pt-6 gap-5 text-sm px-1">
           <FeedbackSection />

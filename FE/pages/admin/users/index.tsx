@@ -2,6 +2,10 @@ import React, { useState, useEffect, useRef } from 'react';
 import Head from 'next/head';
 import { useStore } from '../../../store/store';
 import AdminSideBar from '../../../components/Admin/AdminSideBar';
+import {
+  adminMainPaneClass,
+  adminPageTitleClass,
+} from '../../../utils/adminMobileLayout';
 import { requestMiddleware } from '../../../services/lib/admin';
 import {
   showLoadingDialog,
@@ -162,26 +166,26 @@ function Users() {
   };
 
   return (
-    <div className="w-full flex h-full font-montserrat">
+    <div className="w-full flex h-full font-montserrat overflow-hidden">
       <AdminSideBar currentPage="users" />
-      <div className="h-full font-montserrat flex flex-col w-full text-off-white">
-        <div className="px-8 pt-8 h-full flex flex-col w-full overflow-y-auto">
+      <div className={adminMainPaneClass()}>
+        <div className="px-4 pt-4 md:px-8 md:pt-8 h-full flex flex-col w-full min-w-0 overflow-y-auto">
           <nav className="border-b-4 border-beaming-orange flex justify-start items-center pb-3 gap-4">
-            <div className="text-5xl font-bold px-3">
-              Manage Users <span className="text-xl font-semibold text-gray-300">({users.length})</span>
+            <div className={adminPageTitleClass()}>
+              Manage Users <span className="text-base sm:text-xl font-semibold text-gray-300">({users.length})</span>
             </div>
           </nav>
           
-          <div className="flex justify-between mt-5 mb-8 relative">
+          <div className="flex flex-col sm:flex-row sm:justify-between mt-5 mb-8 relative gap-3">
             <div></div>
-            <div className="flex justify-evenly items-center gap-4 relative z-[3]">
+            <div className="flex justify-start sm:justify-evenly items-center gap-4 relative z-[3] min-w-0 w-full sm:w-auto">
               {state.loader?.isSpinnerVisible && (
                 <Spinner colorClass={'text-beaming-orange mr-2 '} size={32} />
               )}
-              <div className="flex items-center gap-2 px-4 p-2 rounded-lg bg-slate-black/60 border border-slate-black/50">
-                <IoMdSearch className="w-4 h-4 text-gray-400" />
+              <div className="flex items-center gap-2 px-4 p-2 rounded-lg bg-slate-black/60 border border-slate-black/50 min-w-0 w-full sm:w-auto">
+                <IoMdSearch className="w-4 h-4 text-gray-400 shrink-0" />
                 <input
-                  className="outline-none bg-transparent text-off-white w-[280px] border-none focus:ring-0 appearance-none"
+                  className="outline-none bg-transparent text-off-white w-full sm:w-[280px] min-w-0 border-none focus:ring-0 appearance-none text-base md:text-sm"
                   style={{ backgroundColor: 'transparent' }}
                   placeholder="Search users by name or email"
                   type="text"

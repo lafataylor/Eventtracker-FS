@@ -13,32 +13,53 @@ import { useStore } from '../../store/store';
 import AccountsListItem from './AccountsListItem';
 import { FaChevronDown } from 'react-icons/fa';
 
+/** How many rows to show on mobile before "Show all N accounts". */
+const MOBILE_PREVIEW_COUNT = 5;
+
 interface AccountsSectionProps {
   title: string;
   subTitle?: string;
+  /** Short city/group label for the mobile accordion header (e.g. "Bali"). */
+  cityLabel?: string;
+  /** Count shown in the mobile badge; defaults to accounts.length. */
+  count?: number;
   accounts: Account[];
   defaultIsExpanded?: boolean;
   isAlt: boolean;
   onClick: Function;
+  /** Mobile Select mode — show checkboxes on list rows. */
+  selectionMode?: boolean;
 }
 
 const AccountsSection = ({
   title,
   subTitle,
+  cityLabel,
+  count,
   accounts,
   defaultIsExpanded,
   isAlt,
   onClick,
+  selectionMode = false,
 }: AccountsSectionProps) => {
   const [isExpanded, setIsExpanded] = useState(defaultIsExpanded ?? false);
+  const [showAllMobile, setShowAllMobile] = useState(false);
   const [state, dispatch] = useStore();
   const { selections } = state;
+
+  const badgeCount = count ?? accounts.length;
+  const mobileLabel = cityLabel ?? title;
 
   useEffect(() => {
     if (defaultIsExpanded) {
       setIsExpanded(defaultIsExpanded);
     }
   }, []);
+
+  useEffect(() => {
+    // Reset truncation when the section collapses or the list changes.
+    if (!isExpanded) setShowAllMobile(false);
+  }, [isExpanded, accounts.length]);
 
   const onSelectOrDeselectAllClickedHandler = (isChecked: boolean) => {
     let updatedSelected: Object = { ...selections.accounts };
@@ -85,38 +106,71 @@ const AccountsSection = ({
     }
   };
 
+  const mobileVisibleAccounts =
+    showAllMobile || accounts.length <= MOBILE_PREVIEW_COUNT
+      ? accounts
+      : accounts.slice(0, MOBILE_PREVIEW_COUNT);
+
+  const headerClass = isExpanded
+    ? 'bg-beaming-orange text-midnight'
+    : // Collapsed: dark bar on phone (mockup); keep orange on desktop.
+      'bg-slate-black text-off-white border border-stone-gray/50 md:bg-beaming-orange md:text-midnight md:border-0';
+
   return (
-    <div className="flex flex-col ">
-      <div
+    <div className="flex flex-col">
+      <button
+        type="button"
         onClick={() => {
-          //deleteItemsInStack();
           setIsExpanded(!isExpanded);
           onClick();
         }}
         className={
-          'rounded-xl overflow-y-auto shadow-[0px_0px_40px_rgba(0,0,0,0.05)]  shadow-dim-shadow flex items-start gap-4 p-4 z-[1] ' +
-          (isAlt ? 'bg-beaming-orange' : 'bg-beaming-orange') +
-          ' hover:filter hover:brightness-[90%] hover:cursor-pointer'
+          'rounded-xl overflow-hidden shadow-[0px_0px_40px_rgba(0,0,0,0.05)] shadow-dim-shadow flex items-center gap-3 p-4 z-[1] w-full text-left hover:filter hover:brightness-[90%] hover:cursor-pointer ' +
+          headerClass
         }
       >
+        {/* Desktop: chevron left (existing). Mobile: chevron right (mockup). */}
         <FaChevronDown
-          className="w-4  pt-[2px] mt-2 h-3 text-black transition-transform duration-200"
-          style={{
-            transform: isExpanded ? 'rotate(180deg)' : '',
-          }}
+          className={
+            'hidden md:block w-4 h-3 shrink-0 transition-transform duration-200 ' +
+            (isExpanded ? 'text-black rotate-180' : 'text-black')
+          }
         />
-        <div>
-          <div className="font-semibold select-none text-midnight">{title}</div>
-          {isExpanded && subTitle && (
-            <div className="text-sm select-none text-midnight">{subTitle}</div>
-          )}
+        <div className="min-w-0 flex-1 flex items-center gap-3">
+          <div className="font-semibold select-none truncate md:hidden">
+            {mobileLabel}
+          </div>
+          <div className="hidden md:block min-w-0">
+            <div className="font-semibold select-none text-midnight">{title}</div>
+            {isExpanded && subTitle && (
+              <div className="text-sm select-none text-midnight">{subTitle}</div>
+            )}
+          </div>
+          <span
+            className={
+              'md:hidden shrink-0 text-xs font-semibold px-2.5 py-0.5 rounded-full ' +
+              (isExpanded
+                ? 'bg-slate-black/25 text-midnight'
+                : 'bg-stone-gray/40 text-off-white')
+            }
+          >
+            {badgeCount}
+          </span>
         </div>
-      </div>
+        <FaChevronDown
+          className={
+            'md:hidden w-4 h-4 shrink-0 transition-transform duration-200 ' +
+            (isExpanded
+              ? 'text-midnight rotate-180'
+              : 'text-off-white md:text-black')
+          }
+        />
+      </button>
       {isExpanded ? (
         <div className="flex gap-6 flex-wrap -mt-2 pt-2 rounded-b-xl overflow-clip relative z-0">
           <div
             className={
-              'w-full h-full absolute top-0 left-0 opacity-30 ' +
+              'hidden md:block w-full h-full absolute top-0 left-0 opacity-30 ' +
               (isAlt ? 'bg-beaming-orange' : 'bg-beaming-orange')
             }
           ></div>
@@ -126,44 +180,105 @@ const AccountsSection = ({
               No Accounts Found...
             </div>
           ) : (
-            <table className="rounded-b-xl  w-full h-full z-[1]">
-              <thead className="grid text-beaming-orange font-semibold grid-cols-[50px_2fr_1fr_1fr] border-b-4 border-b-beaming-orange">
-                <td className="border-r-[1px] border-slate-black text-beaming-orange font-semibold flex justify-center items-center relative">
-                  <label className="custom_checkbox relative">
-                    <input
-                      type="checkbox"
-                      onChange={(e) => {
-                        deleteItemsInStack();
-                        onSelectOrDeselectAllClickedHandler(e.target.checked);
-                      }}
-                    />
-                    <span className="custom_checkbox_mark"></span>
-                  </label>
-                </td>
-                <td className="border-r-[1px] border-slate-black text-beaming-orange font-semibold flex justify-center  align-middle p-3">
-                  Username
-                </td>
-                <td className="border-r-[1px] border-slate-black text-beaming-orange font-semibold flex justify-center align-middle p-3">
-                  Date Added
-                </td>
-                <td className=" border-slate-black align-middle text-beaming-orange font-semibold flex justify-center p-3">
-                  Status
-                </td>
-              </thead>
-              <div className=" max-h-[30vh] overflow-y-auto">
-                {accounts.map((account, index) => (
+            <>
+              {/* Mobile stacked list — same select/bulk path as desktop table */}
+              <div className="md:hidden w-full z-[1] bg-midnight/40 rounded-b-xl">
+                {selectionMode && accounts.length > 0 ? (
+                  <div className="flex items-center gap-3 px-3 py-3 border-b border-slate-black">
+                    <label className="custom_checkbox relative shrink-0">
+                      <input
+                        type="checkbox"
+                        checked={accounts.every(
+                          (account) => account.id in selections.accounts
+                        )}
+                        onChange={(e) => {
+                          deleteItemsInStack();
+                          onSelectOrDeselectAllClickedHandler(e.target.checked);
+                        }}
+                      />
+                      <span className="custom_checkbox_mark"></span>
+                    </label>
+                    <span className="text-sm text-stone-gray font-medium">
+                      Select all in this group
+                    </span>
+                  </div>
+                ) : null}
+                {mobileVisibleAccounts.map((account, index) => (
                   <AccountsListItem
+                    key={account.id}
                     account={account}
                     isSelected={account.id in selections.accounts}
                     setSelected={(isChecked: boolean) => {
                       deleteItemsInStack();
                       onSelectOrDeselectHandler(isChecked, account.id);
                     }}
-                    isLast={accounts.length - 1 == index}
+                    isLast={
+                      index === mobileVisibleAccounts.length - 1 &&
+                      (showAllMobile ||
+                        accounts.length <= MOBILE_PREVIEW_COUNT)
+                    }
+                    selectionMode={selectionMode}
                   />
                 ))}
+                {!showAllMobile && accounts.length > MOBILE_PREVIEW_COUNT ? (
+                  <button
+                    type="button"
+                    className="w-full text-center text-beaming-orange font-semibold py-3.5 text-sm"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setShowAllMobile(true);
+                    }}
+                  >
+                    Show all {accounts.length} accounts
+                  </button>
+                ) : null}
               </div>
-            </table>
+
+              {/* Desktop table */}
+              <div className="hidden md:block w-full overflow-x-auto z-[1]">
+                <table className="rounded-b-xl min-w-[520px] w-full h-full">
+                  <thead className="grid text-beaming-orange font-semibold grid-cols-[50px_2fr_1fr_1fr] border-b-4 border-b-beaming-orange">
+                    <td className="border-r-[1px] border-slate-black text-beaming-orange font-semibold flex justify-center items-center relative">
+                      <label className="custom_checkbox relative">
+                        <input
+                          type="checkbox"
+                          onChange={(e) => {
+                            deleteItemsInStack();
+                            onSelectOrDeselectAllClickedHandler(
+                              e.target.checked
+                            );
+                          }}
+                        />
+                        <span className="custom_checkbox_mark"></span>
+                      </label>
+                    </td>
+                    <td className="border-r-[1px] border-slate-black text-beaming-orange font-semibold flex justify-center  align-middle p-3">
+                      Username
+                    </td>
+                    <td className="border-r-[1px] border-slate-black text-beaming-orange font-semibold flex justify-center align-middle p-3">
+                      Date Added
+                    </td>
+                    <td className=" border-slate-black align-middle text-beaming-orange font-semibold flex justify-center p-3">
+                      Status
+                    </td>
+                  </thead>
+                  <div className=" max-h-[30vh] overflow-y-auto">
+                    {accounts.map((account, index) => (
+                      <AccountsListItem
+                        key={account.id}
+                        account={account}
+                        isSelected={account.id in selections.accounts}
+                        setSelected={(isChecked: boolean) => {
+                          deleteItemsInStack();
+                          onSelectOrDeselectHandler(isChecked, account.id);
+                        }}
+                        isLast={accounts.length - 1 == index}
+                      />
+                    ))}
+                  </div>
+                </table>
+              </div>
+            </>
           )}
         </div>
       ) : (

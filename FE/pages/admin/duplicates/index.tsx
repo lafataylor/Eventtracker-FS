@@ -1,5 +1,9 @@
 import React, { useEffect, useRef, useState } from 'react';
 import AdminSideBar from '../../../components/Admin/AdminSideBar';
+import {
+  adminMainPaneClass,
+  adminPageTitleClass,
+} from '../../../utils/adminMobileLayout';
 import { useStore } from '../../../store/store';
 import LoadingDialog from '../../../components/overlay/LoadingDialog';
 import ActionDialog from '../../../components/overlay/ActionDialog';
@@ -423,11 +427,11 @@ const Index = () => {
   }, [view]);
 
   return (
-    <div className="w-full flex h-full font-montserrat">
+    <div className="w-full flex h-full font-montserrat overflow-hidden">
       <AdminSideBar currentPage="duplicates" />
-      <div className="px-8 pt-8 h-full flex flex-col w-full text-off-white overflow-x-auto">
+      <div className={adminMainPaneClass("px-4 pt-4 md:px-8 md:pt-8 overflow-x-auto")}>
         <nav className="border-b-4 border-beaming-orange flex justify-start items-center pb-3 gap-4">
-          <div className="text-5xl font-bold px-3">Duplicates</div>
+          <div className={adminPageTitleClass()}>Duplicates</div>
           {!isLoading && view === 'pairs' && (
             <div className="text-lg text-stone-gray self-end pb-1">
               {totalGroups} group{totalGroups === 1 ? '' : 's'} to review ({pendingTotal} pair{pendingTotal === 1 ? '' : 's'})
