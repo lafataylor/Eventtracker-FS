@@ -18,6 +18,12 @@ export interface DeleteAccountsRequest {
   accounts: string[];
 }
 
+export interface UpdateAdminAccountRequest {
+  id: number;
+  track_feed?: boolean;
+  track_stories?: boolean;
+}
+
 // Delete User
 export interface DeleteUserRequest {
   id: string;

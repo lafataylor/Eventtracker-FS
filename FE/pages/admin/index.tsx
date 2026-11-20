@@ -158,6 +158,20 @@ const Index = () => {
     fetchAccounts();
   }, []);
 
+  const onTrackFlagsChange = (
+    accountId: number,
+    patch: {
+      track_feed?: boolean | null;
+      track_stories?: boolean | null;
+    }
+  ) => {
+    setAccounts((prev) =>
+      prev.map((account) =>
+        account.id === accountId ? { ...account, ...patch } : account
+      )
+    );
+  };
+
   const sortAccounts = (accounts: Account[], sortValue: string): Account[] => {
     const [field, order] = sortValue.split('_');
 
@@ -479,6 +493,7 @@ const Index = () => {
                 defaultIsExpanded={true}
                 selectionMode={selectionMode}
                 onClick={() => {}}
+                onTrackFlagsChange={onTrackFlagsChange}
               />
             ) : (
               <>
@@ -500,6 +515,7 @@ const Index = () => {
                       isAlt={index % 2 !== 0}
                       selectionMode={selectionMode}
                       onClick={() => {}}
+                      onTrackFlagsChange={onTrackFlagsChange}
                     />
                   )
                 )}

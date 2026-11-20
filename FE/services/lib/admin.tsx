@@ -5,6 +5,7 @@ import {
   UpdatePreferenceRequest,
   ReadSystemLogsRequest,
   DeleteAccountsRequest,
+  UpdateAdminAccountRequest,
   DeleteEventsRequest,
   UpdateEventRequest,
   UpdateKeywordsRequest,
@@ -73,6 +74,12 @@ export function deleteAdminAccounts(data: DeleteAccountsRequest) {
   return axiosClient.delete('admin/accounts/', {
     headers: getHeader(),
     data: data,
+  });
+}
+
+export function updateAdminAccount(data: UpdateAdminAccountRequest) {
+  return axiosClient.put('admin/accounts/', data, {
+    headers: getHeader(),
   });
 }
 
