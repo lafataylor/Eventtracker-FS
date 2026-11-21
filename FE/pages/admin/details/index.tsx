@@ -566,7 +566,7 @@ export default function AdminDetailsPage() {
     <div className="w-full flex h-full font-montserrat overflow-hidden">
       <AdminSideBar currentPage="details" />
 
-      <div className={adminMainPaneClass("p-4 pb-0 md:p-8 md:pb-0 overflow-y-auto")}>
+      <div className={adminMainPaneClass("px-4 pb-0 md:p-8 md:pb-0 overflow-y-auto")}>
         <nav className="border-b-4 border-beaming-orange mb-6">
           <div className={adminPageTitleClass("pb-3")}>Account Details</div>
         </nav>

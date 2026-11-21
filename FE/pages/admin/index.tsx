@@ -343,7 +343,7 @@ const Index = () => {
         }
       />
       <div
-        className={adminMainPaneClass('p-4 pb-0 md:p-8 md:pb-0')}
+        className={adminMainPaneClass('px-4 pb-0 md:p-8 md:pb-0')}
         onClick={() => {
           setShowFilter(false);
           setShowSortOverlay(false);
