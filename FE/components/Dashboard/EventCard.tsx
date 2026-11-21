@@ -54,6 +54,8 @@ interface EventCardsProp {
   isInBoardView?: boolean;
   isInMasonryView?: boolean;
   sectionDayStartMs?: number;
+  /** Admin list reuse: same public list row, no heart. Public site unchanged. */
+  hideFavorite?: boolean;
 }
 
 function OutsideRegionLabel({ language }: { language?: string }) {
@@ -157,6 +159,7 @@ function EventCard({
   isInBoardView,
   isInMasonryView,
   sectionDayStartMs,
+  hideFavorite = false,
 }: EventCardsProp) {
   const outsideCueClass = outsideRegion ? 'opacity-80 ' : '';
   const isImageTileView = isInBoardView || isInMasonryView;
@@ -788,7 +791,7 @@ function EventCard({
             <ListOfferingChip label={`+${extraOfferingCount}`} />
           )}
         </div>
-        {favoriteHeart}
+        {!hideFavorite ? favoriteHeart : null}
       </div>
     )}
     {isInListView && !isImageTileView && (
@@ -902,28 +905,16 @@ function EventCard({
               {listDateParts.month}
             </p>
           ) : null}
-          <div
-            className="relative z-10 mt-1.5 flex h-6 w-6 items-center justify-center pointer-events-auto cursor-pointer"
-            role="button"
-            tabIndex={0}
-            aria-label={
-              isFavorite ? 'Remove from favorites' : 'Save to favorites'
-            }
-            onClick={(e) => {
-              e.stopPropagation();
-              e.preventDefault();
-              if (justEdited) return;
-              if (isFavorite) {
-                handleUnfavoriteClick(event.id);
-              } else {
-                handleFavoriteClick(event.id);
+          {!hideFavorite ? (
+            <div
+              className="relative z-10 mt-1.5 flex h-6 w-6 items-center justify-center pointer-events-auto cursor-pointer"
+              role="button"
+              tabIndex={0}
+              aria-label={
+                isFavorite ? 'Remove from favorites' : 'Save to favorites'
               }
-            }}
-            onMouseDown={(e) => e.stopPropagation()}
-            onPointerDown={(e) => e.stopPropagation()}
-            onKeyDown={(e) => {
-              e.stopPropagation();
-              if (e.key === 'Enter' || e.key === ' ') {
+              onClick={(e) => {
+                e.stopPropagation();
                 e.preventDefault();
                 if (justEdited) return;
                 if (isFavorite) {
@@ -931,26 +922,40 @@ function EventCard({
                 } else {
                   handleFavoriteClick(event.id);
                 }
-              }
-            }}
-          >
-            {justEdited ? (
-              <FaHeart
-                key={heartPopKey}
-                className="w-5 h-5 text-beaming-orange-transparent animate-heart-pop pointer-events-none"
-              />
-            ) : isFavorite ? (
-              <FaHeart
-                key={heartPopKey}
-                className={`w-5 h-5 text-beaming-orange pointer-events-none ${heartPopClass}`}
-              />
-            ) : (
-              <FaRegHeart
-                key={heartPopKey}
-                className={`w-5 h-5 text-beaming-orange pointer-events-none ${heartPopClass}`}
-              />
-            )}
-          </div>
+              }}
+              onMouseDown={(e) => e.stopPropagation()}
+              onPointerDown={(e) => e.stopPropagation()}
+              onKeyDown={(e) => {
+                e.stopPropagation();
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  if (justEdited) return;
+                  if (isFavorite) {
+                    handleUnfavoriteClick(event.id);
+                  } else {
+                    handleFavoriteClick(event.id);
+                  }
+                }
+              }}
+            >
+              {justEdited ? (
+                <FaHeart
+                  key={heartPopKey}
+                  className="w-5 h-5 text-beaming-orange-transparent animate-heart-pop pointer-events-none"
+                />
+              ) : isFavorite ? (
+                <FaHeart
+                  key={heartPopKey}
+                  className={`w-5 h-5 text-beaming-orange pointer-events-none ${heartPopClass}`}
+                />
+              ) : (
+                <FaRegHeart
+                  key={heartPopKey}
+                  className={`w-5 h-5 text-beaming-orange pointer-events-none ${heartPopClass}`}
+                />
+              )}
+            </div>
+          ) : null}
         </div>
       </div>
     )}

@@ -7,6 +7,7 @@ import {
 import { useStore } from '../../store/store';
 import { Constants } from '../../utils/constants';
 import EventsListItem from './EventsListItem';
+import EventCard from '../Dashboard/EventCard';
 import {
   columnNameToProperty,
   sortNameToColumnName,
@@ -38,6 +39,8 @@ interface EventsSectionProps {
   setSortOrder: Function;
   onEventUpdate: Function;
   sortBy: Option;
+  /** Phone Select mode — checkboxes beside public list rows. */
+  selectionMode?: boolean;
 }
 
 const EventsSection = ({
@@ -54,6 +57,7 @@ const EventsSection = ({
   setSortOrder,
   setSortBy,
   onEventUpdate,
+  selectionMode = false,
 }: EventsSectionProps) => {
   const [isExpanded, setIsExpanded] = useState(false);
   const [state, dispatch] = useStore();
@@ -249,12 +253,84 @@ const EventsSection = ({
         >
           <div
             className={
-              'absolute top-0 left-0 w-full h-full opacity-10 ' +
+              'hidden md:block absolute top-0 left-0 w-full h-full opacity-10 ' +
               (isAlt ? 'bg-beaming-orange' : 'bg-beaming-orange')
             }
           ></div>
 
-          <div className="flex flex-col scroll-margin overflow-auto max-h-[calc(100vh-17rem)] rounded-b-xl w-full z-[2]">
+          {/* Mobile: reuse public site list rows (thumb, title, place, date).
+              Owner 2026-11-20 — not the custom mock as primary UI. */}
+          <div className="md:hidden w-full z-[2] flex flex-col gap-2 pt-2 max-h-[calc(100vh-14rem)] overflow-y-auto">
+            {selectionMode && sortedEvents.length > 0 ? (
+              <div className="flex items-center gap-3 px-1 py-2">
+                <label className="custom_checkbox relative shrink-0">
+                  <input
+                    type="checkbox"
+                    checked={sortedEvents.every(
+                      (event) => event.id in selections.events
+                    )}
+                    onChange={(e) => {
+                      deleteItemsInStack();
+                      onSelectOrDeselectAllClickedHandler(e.target.checked);
+                    }}
+                  />
+                  <span className="custom_checkbox_mark"></span>
+                </label>
+                <span className="text-sm text-stone-gray font-medium">
+                  Select all in this group
+                </span>
+              </div>
+            ) : null}
+            {sortedEvents.length === 0 ? (
+              <div className="text-center text-stone-gray py-8">
+                No events found...
+              </div>
+            ) : (
+              sortedEvents.map((event) => (
+                <div
+                  key={`event_mobile_${event.id}`}
+                  className="flex items-stretch gap-2"
+                >
+                  {selectionMode ? (
+                    <label
+                      className="custom_checkbox relative shrink-0 self-center pl-1"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={event.id in selections.events}
+                        onChange={(e) => {
+                          deleteItemsInStack();
+                          onSelectOrDeselectHandler(
+                            e.target.checked,
+                            event.id
+                          );
+                        }}
+                      />
+                      <span className="custom_checkbox_mark"></span>
+                    </label>
+                  ) : null}
+                  <div className="min-w-0 flex-1 relative">
+                    <EventCard
+                      event={event}
+                      isInListView={true}
+                      hideFavorite={true}
+                      isFavorite={false}
+                      disabled={false}
+                    />
+                    {event.series_ids && event.series_ids.length > 1 ? (
+                      <span className="absolute left-3 bottom-2 z-[2] text-[10px] px-1.5 py-[1px] rounded bg-midnight/80 text-mist-white pointer-events-none">
+                        {event.series_ids.length} dates
+                      </span>
+                    ) : null}
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+
+          {/* Desktop table — unchanged */}
+          <div className="hidden md:flex flex-col scroll-margin overflow-auto max-h-[calc(100vh-17rem)] rounded-b-xl w-full z-[2]">
             <div className="w-fit sticky z-10 top-0 flex text-midnight font-semibold border-b-2 border-b-beaming-orange">
               <td className="w-[50px] border-r-[1px] border-slate-black text-beaming-orange font-semibold flex justify-center align-middle p-3 whitespace-nowrap bg-beaming-orange-dark">
                 <label className="custom_checkbox relative">
