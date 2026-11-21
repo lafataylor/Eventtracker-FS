@@ -687,7 +687,10 @@ function EventCard({
           }
         }}
         className={
-          'hidden md:grid w-full items-center gap-x-4 lg:gap-x-5 cursor-pointer rounded-xl bg-slate-black px-3 py-2.5 hover:bg-stone-gray/50 transition-colors grid-cols-[130px_minmax(0,3fr)_1px_minmax(0,1fr)_1px_6.75rem_1px_minmax(0,1fr)_2.5rem] ' +
+          // 2026-11-19 / LAF-52: was title 3fr + date 6.75rem + location/
+          // offerings 1fr each. Owner asked to pull the title block left and
+          // trim date (WED / OCT 4 / time) so location + offering chips breathe.
+          'hidden md:grid w-full items-center gap-x-4 lg:gap-x-5 cursor-pointer rounded-xl bg-slate-black px-3 py-2.5 hover:bg-stone-gray/50 transition-colors grid-cols-[130px_minmax(0,2.5fr)_1px_minmax(0,1.25fr)_1px_5.5rem_1px_minmax(0,1.25fr)_2.5rem] ' +
           (almostOver ? 'opacity-70 ' : '') +
           outsideCueClass
         }
