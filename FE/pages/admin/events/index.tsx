@@ -495,7 +495,7 @@ const Index = () => {
         }
       />
       <div
-        className={adminMainPaneClass("px-4 pt-4 md:px-8 md:pt-8 overflow-x-hidden md:overflow-x-auto")}
+        className={adminMainPaneClass("px-4 md:px-8 md:pt-8 overflow-x-hidden md:overflow-x-auto")}
         onClick={() => {
           setShowFilter(false);
           setShowHideDialog(false);

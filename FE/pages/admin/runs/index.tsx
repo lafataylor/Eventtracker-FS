@@ -181,7 +181,7 @@ const index = () => {
     <div className="w-full flex h-full font-montserrat overflow-hidden">
       <AdminSideBar currentPage="runs" />
       <div className={adminMainPaneClass()}>
-        <div className="px-4 pt-4 md:px-8 md:pt-8 h-full font-montserrat flex flex-col w-full min-w-0 text-off-white overflow-y-auto">
+        <div className="px-4 md:px-8 md:pt-8 h-full font-montserrat flex flex-col w-full min-w-0 text-off-white overflow-y-auto">
           <nav className="border-b-4 border-beaming-orange">
             <div className="text-2xl sm:text-3xl md:text-5xl font-semibold pb-3 px-3">Runs</div>
           </nav>

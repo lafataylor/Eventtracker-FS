@@ -42,7 +42,7 @@ const index = () => {
   return (
     <div className="w-full flex h-full font-montserrat overflow-hidden">
       <AdminSideBar currentPage="feedback" />
-      <div className={adminMainPaneClass("p-4 md:p-8 overflow-y-auto")}>
+      <div className={adminMainPaneClass("px-4 pb-4 md:p-8 overflow-y-auto")}>
         <nav className="border-b-4 border-beaming-orange">
           <div className="text-2xl sm:text-3xl md:text-5xl font-semibold pb-3 px-3">Feedback</div>
         </nav>

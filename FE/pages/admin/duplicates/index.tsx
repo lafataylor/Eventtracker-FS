@@ -429,7 +429,7 @@ const Index = () => {
   return (
     <div className="w-full flex h-full font-montserrat overflow-hidden">
       <AdminSideBar currentPage="duplicates" />
-      <div className={adminMainPaneClass("px-4 pt-4 md:px-8 md:pt-8 overflow-x-auto")}>
+      <div className={adminMainPaneClass("px-4 md:px-8 md:pt-8 overflow-x-auto")}>
         <nav className="border-b-4 border-beaming-orange flex justify-start items-center pb-3 gap-4">
           <div className={adminPageTitleClass()}>Duplicates</div>
           {!isLoading && view === 'pairs' && (

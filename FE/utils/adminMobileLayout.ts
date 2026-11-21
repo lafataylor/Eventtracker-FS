@@ -23,9 +23,18 @@ export function adminPageTitleClass(extra = ''): string {
   return extra ? `${base} ${extra}` : base;
 }
 
+// Top padding that clears the fixed mobile admin bar.
+// Bar is py-3 + h-11 button + border-b-4 ≈ 4.25rem; pt-14 (3.5rem) was short
+// and callers' p-4 / pt-4 often overrode it — Accounts search and Events title
+// clipped under the orange underline (owner screenshots 2026-11-21).
+// pt-20 (5rem) leaves a clear gap. Do not pass mobile p-4 or pt-4 in `extra`;
+// use px- / pb- and md:p- / md:pt- so this top pad is not fought.
+export const ADMIN_MOBILE_TOP_PAD = 'pt-20 md:pt-0';
+
 /** Main pane beside the sidebar: shrink in flex, clear the mobile menu bar. */
 export function adminMainPaneClass(extra = ''): string {
   const base =
-    'min-w-0 flex-1 h-full font-montserrat flex flex-col text-off-white overflow-x-hidden pt-14 md:pt-0';
+    'min-w-0 flex-1 h-full font-montserrat flex flex-col text-off-white overflow-x-hidden ' +
+    ADMIN_MOBILE_TOP_PAD;
   return extra ? `${base} ${extra}` : base;
 }

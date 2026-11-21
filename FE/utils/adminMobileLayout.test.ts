@@ -2,6 +2,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  ADMIN_MOBILE_TOP_PAD,
   adminAuthFieldRowClass,
   adminAuthInputClass,
   adminMainPaneClass,
@@ -31,11 +32,19 @@ test('admin page titles shrink below md', () => {
   assert.match(cls, /\bpb-3\b/);
 });
 
-test('admin main pane shrinks in flex and clears the mobile menu bar', () => {
-  const cls = adminMainPaneClass('p-4 md:p-8');
+test('admin main pane clears the fixed orange header bar on mobile', () => {
+  // pt-20 clears py-3 + h-11 + border-b-4; pt-14 was too short (2026-11-21).
+  assert.match(ADMIN_MOBILE_TOP_PAD, /\bpt-20\b/);
+  assert.match(ADMIN_MOBILE_TOP_PAD, /\bmd:pt-0\b/);
+  assert.doesNotMatch(ADMIN_MOBILE_TOP_PAD, /\bpt-14\b/);
+
+  const cls = adminMainPaneClass('px-4 pb-0 md:p-8 md:pb-0');
   assert.match(cls, /\bmin-w-0\b/);
   assert.match(cls, /\bflex-1\b/);
-  assert.match(cls, /\bpt-14\b/);
+  assert.match(cls, /\bpt-20\b/);
   assert.match(cls, /\bmd:pt-0\b/);
-  assert.match(cls, /\bp-4\b/);
+  assert.match(cls, /\bpx-4\b/);
+  // Callers must not pass mobile p-* / pt-* that fight the header pad.
+  assert.doesNotMatch(cls, /(?:^|\s)p-4(?:\s|$)/);
+  assert.doesNotMatch(cls, /(?:^|\s)pt-4(?:\s|$)/);
 });

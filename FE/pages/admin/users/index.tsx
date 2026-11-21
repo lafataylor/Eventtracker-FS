@@ -169,7 +169,7 @@ function Users() {
     <div className="w-full flex h-full font-montserrat overflow-hidden">
       <AdminSideBar currentPage="users" />
       <div className={adminMainPaneClass()}>
-        <div className="px-4 pt-4 md:px-8 md:pt-8 h-full flex flex-col w-full min-w-0 overflow-y-auto">
+        <div className="px-4 md:px-8 md:pt-8 h-full flex flex-col w-full min-w-0 overflow-y-auto">
           <nav className="border-b-4 border-beaming-orange flex justify-start items-center pb-3 gap-4">
             <div className={adminPageTitleClass()}>
               Manage Users <span className="text-base sm:text-xl font-semibold text-gray-300">({users.length})</span>
