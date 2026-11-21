@@ -6,6 +6,9 @@ export interface Account {
   user: string | null;
   status: string;
   forLocation?: string;
+  // Manage Accounts toggles; null from API means use defaults (feed on / stories off)
+  track_feed?: boolean | null;
+  track_stories?: boolean | null;
 }
 
 export interface Log {

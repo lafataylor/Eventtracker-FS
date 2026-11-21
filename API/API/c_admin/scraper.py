@@ -39,17 +39,34 @@ logger = logging.getLogger('django')
 # High-visibility log tag for the Instagram stories code path (separate Apify run).
 STORY_SCRAPER_LOG_TAG = "[INSTAGRAM_STORIES]"
 
-# ---------------------------------------------------------------------------
-# Stories-scraping subset control
-# Set STORIES_SCRAPE_MODE = "all"    → fetch stories for every account
-# Set STORIES_SCRAPE_MODE = "subset" → fetch stories only for STORIES_SUBSET_ACCOUNTS
-# ---------------------------------------------------------------------------
-STORIES_SCRAPE_MODE = "subset"   # "all" | "subset"
-STORIES_SUBSET_ACCOUNTS = {
-    "justineswinebar",
-    "cafetondo",
-    "10highdesign",
-}
+
+def scrape_flags_for_accounts(account_names):
+    """Return {username: (track_feed, track_stories)} from Account rows.
+
+    Replaces STORIES_SUBSET_ACCOUNTS / STORIES_SCRAPE_MODE. Unknown handles
+    default to feed on / stories off. Duplicate city rows OR their flags.
+    """
+    from .track_flags import effective_track_feed, effective_track_stories
+
+    names = list(account_names)
+    flags = {name: (True, False) for name in names}
+    if not names:
+        return flags
+
+    rows = Account.objects.filter(user__in=names)
+    by_user = defaultdict(list)
+    for row in rows:
+        by_user[row.user].append(row)
+
+    for name in names:
+        live = by_user.get(name) or []
+        if not live:
+            continue
+        flags[name] = (
+            any(effective_track_feed(a.track_feed) for a in live),
+            any(effective_track_stories(a.track_stories) for a in live),
+        )
+    return flags
 
 
 def _story_log_banner(account, title, extra_lines=None):
@@ -889,17 +906,19 @@ def fetch_last_run(account):
         logger.error(f"Failed to fetch last run for account {account}. Error: {e}")
         return lower_bound_timestamp
 
-def clean_scrape_using_apify(account: str, output_file_path: str, enable_stories: bool = True):
+def clean_scrape_using_apify(account: str, output_file_path: str, enable_stories: bool = True, enable_feed: bool = True):
+    # enable_feed / enable_stories come from Account.track_* (Manage Accounts).
+    # Story-only skips the post scraper; feed-only skips stories. Both off is
+    # filtered earlier in accounts_to_scrape so we should not be called then.
     try:
         apify_api_key = os.getenv("APIFY_API_KEY")
         client = ApifyClient(apify_api_key)
-        logger.debug(f"Initiating fetch for: {account}")
+        logger.debug(f"Initiating fetch for: {account} feed={enable_feed} stories={enable_stories}")
 
         run_input = {"username": [account], "resultsLimit": 5}
         run_input_Dos = {"usernames": [account]}
 
         run = client.actor('apify/instagram-profile-scraper').call(run_input=run_input_Dos)
-        runDos = client.actor("apify/instagram-post-scraper").call(run_input=run_input)
 
         biography, externalUrl = None, None
         for item in client.dataset(run["defaultDatasetId"]).iterate_items():
@@ -909,14 +928,26 @@ def clean_scrape_using_apify(account: str, output_file_path: str, enable_stories
         last_fetched = fetch_last_run(account)
         imageObjects = []
 
-        with ThreadPoolExecutor(max_workers=5) as executor:
-            future_to_item = {executor.submit(process_post, item, account, biography, externalUrl, last_fetched): item for item in client.dataset(runDos["defaultDatasetId"]).iterate_items()}
-            for future in as_completed(future_to_item):
-                imageObjects.extend(future.result())
+        if enable_feed:
+            runDos = client.actor("apify/instagram-post-scraper").call(run_input=run_input)
+            with ThreadPoolExecutor(max_workers=5) as executor:
+                future_to_item = {executor.submit(process_post, item, account, biography, externalUrl, last_fetched): item for item in client.dataset(runDos["defaultDatasetId"]).iterate_items()}
+                for future in as_completed(future_to_item):
+                    imageObjects.extend(future.result())
+        else:
+            logger.info(
+                "[TRACK_FLAGS] account=%r track_feed=off; skipping post scrape",
+                account,
+            )
 
         if enable_stories:
             _safe_extend_story_objects(
                 imageObjects, account, biography, externalUrl, last_fetched, client
+            )
+        else:
+            logger.info(
+                "[TRACK_FLAGS] account=%r track_stories=off; skipping stories scrape",
+                account,
             )
 
         ###
@@ -935,7 +966,7 @@ def clean_scrape_using_apify(account: str, output_file_path: str, enable_stories
     return True
 
 
-def scrape_using_apify(account: str, output_file_name: str, output_file_path: str, count: int = 0, last_fetched: str = 0, enable_stories: bool = True):
+def scrape_using_apify(account: str, output_file_name: str, output_file_path: str, count: int = 0, last_fetched: str = 0, enable_stories: bool = True, enable_feed: bool = True):
     def download_and_save_image(url, save_path, last_fetched):
         try:
             # Send a GET request to the URL
@@ -962,7 +993,7 @@ def scrape_using_apify(account: str, output_file_name: str, output_file_path: st
         apify_api_key = os.getenv("APIFY_API_KEY")
         client = ApifyClient(apify_api_key)
 
-        logger.debug("\n\n\n Initiating fetch for : " +str(account))
+        logger.debug("\n\n\n Initiating fetch for : " +str(account) + f" feed={enable_feed} stories={enable_stories}")
 
         # Prepare the Actor input
         run_input = {
@@ -976,9 +1007,6 @@ def scrape_using_apify(account: str, output_file_name: str, output_file_path: st
 
         # Run the Actor and wait for it to finish
         run = client.actor('apify/instagram-profile-scraper').call(run_input=run_input_Dos)
-
-        runDos = client.actor("apify/instagram-post-scraper").call(run_input=run_input)
-
 
         biography = None
 
@@ -1005,107 +1033,18 @@ def scrape_using_apify(account: str, output_file_name: str, output_file_path: st
 
         imageObjects = []
 
-        for item in client.dataset(runDos["defaultDatasetId"]).iterate_items():
-            shortcode = item["shortCode"]
-            timestamp = item["timestamp"]
-            post_link = f"https://www.instagram.com/p/{shortcode}/"
-
-            try:
-                caption = item.get("caption") or ""
-
-                logger.debug("\n " + str(account) +" last fetched: "+str(last_fetched))
-
-                image_timestamp = convert_timestamp_to_float(timestamp)
-                if image_timestamp is None:
-                    image_timestamp = parse_item_timestamp_to_float(timestamp)
-                if image_timestamp is None:
-                    image_timestamp = float(time.time())
-
-                if image_timestamp < float(last_fetched):
-                    print("Skipping an older post for the account: ",account)
-                    logger.debug("\n Skipped timestamp: " +str(image_timestamp))
-                    continue
-
-                logger.debug("\n Timestamp not skipped: " + str(image_timestamp))
-
-                if item["type"] == "Sidecar":
-                    total_slides = len(item.get("images") or [])
-                    slides_added = 0
-                    logger.info(
-                        "[CAROUSEL_SLIDE] START | account=%r shortcode=%r total_slides=%d post_link=%r",
-                        account, shortcode, total_slides, post_link,
-                    )
-                    for idx, image in enumerate(item.get("images") or []):
-                        if isinstance(image, dict):
-                            image = image.get("url") or image.get("displayUrl")
-                        if not image:
-                            continue
-                        obj = {}
-                        child_shortcode = f"{shortcode}__{idx}"
-                        save_path = f"posters/{account}/{child_shortcode}.jpeg"
-
-                        obj["baseImageUrl"] = image
-                        obj["display_url"] = image
-                        obj["caption"] = caption
-                        obj["biography"] = biography
-                        obj["externalUrl"] = externalUrl
-                        obj["shortcode"] = child_shortcode
-                        obj["parent_shortcode"] = shortcode
-                        obj["link"] = post_link
-                        obj["taken_at_timestamp"] = float(time.time())
-
-                        download_and_save_image(image,save_path,last_fetched)
-
-                        imageObjects.append(obj)
-                        slides_added += 1
-                        logger.info(
-                            "[CAROUSEL_SLIDE] ADDED | account=%r shortcode=%r slide_index=%d child_shortcode=%r",
-                            account, shortcode, idx, child_shortcode,
-                        )
-                    logger.info(
-                        "[CAROUSEL_SLIDE] DONE | account=%r shortcode=%r slides_added=%d / total_slides=%d",
-                        account, shortcode, slides_added, total_slides,
-                    )
-
-                elif item["type"] == "Image":
-                    obj = {}
-                    save_path = f'posters/{account}/{shortcode}.jpeg'
-
-                    obj["baseImageUrl"] = item["displayUrl"]
-                    obj["display_url"] = item["displayUrl"]
-                    obj["caption"] = caption
-                    obj["biography"] = biography
-                    obj["externalUrl"] = externalUrl
-                    obj["shortcode"] = shortcode
-                    obj["link"] = post_link
-                    #obj["taken_at_timestamp"] = convert_timestamp_to_float(timestamp)
-                    obj["taken_at_timestamp"] = float(time.time())
-
-                    download_and_save_image(item["displayUrl"],save_path,last_fetched)
-
-                    imageObjects.append(obj)
-
-                elif item["type"] == "Video":
-                    obj = {}
-                    save_path = f'posters/{account}/{shortcode}.jpeg'
-                    video_url = item["videoUrl"]
-
-                    obj["baseImageUrl"] = video_url
-                    obj["display_url"] = video_url
-                    obj["caption"] = caption
-                    obj["biography"] = biography
-                    obj["externalUrl"] = externalUrl
-                    obj["shortcode"] = shortcode
-                    obj["link"] = post_link
-                    obj["taken_at_timestamp"] = float(time.time())
-
-                    download_and_save_first_frame(video_url, save_path)
-
-                    imageObjects.append(obj)
-
-            except Exception as e:
-                print("Image details could not be fetched. Error details: "+str(e))
-                
+        if not enable_feed:
+            logger.info(
+                "[TRACK_FLAGS] account=%r track_feed=off; skipping post scrape",
+                account,
+            )
+        else:
+            runDos = client.actor("apify/instagram-post-scraper").call(run_input=run_input)
+            for item in client.dataset(runDos["defaultDatasetId"]).iterate_items():
+                _scrape_using_apify_process_feed_item(
+                    item, account, biography, externalUrl, last_fetched, imageObjects,
+                    download_and_save_image,
+                )
 
         if enable_stories:
             _safe_extend_story_objects(
@@ -1126,6 +1065,111 @@ def scrape_using_apify(account: str, output_file_name: str, output_file_path: st
         return False
 
     return True
+
+
+def _scrape_using_apify_process_feed_item(
+    item, account, biography, externalUrl, last_fetched, imageObjects, download_and_save_image,
+):
+    """Process one feed post item inside scrape_using_apify (legacy path)."""
+    shortcode = item["shortCode"]
+    timestamp = item["timestamp"]
+    post_link = f"https://www.instagram.com/p/{shortcode}/"
+
+    try:
+        caption = item.get("caption") or ""
+
+        logger.debug("\n " + str(account) +" last fetched: "+str(last_fetched))
+
+        image_timestamp = convert_timestamp_to_float(timestamp)
+        if image_timestamp is None:
+            image_timestamp = parse_item_timestamp_to_float(timestamp)
+        if image_timestamp is None:
+            image_timestamp = float(time.time())
+
+        if image_timestamp < float(last_fetched):
+            print("Skipping an older post for the account: ",account)
+            logger.debug("\n Skipped timestamp: " +str(image_timestamp))
+            return
+
+        logger.debug("\n Timestamp not skipped: " + str(image_timestamp))
+
+        if item["type"] == "Sidecar":
+            total_slides = len(item.get("images") or [])
+            slides_added = 0
+            logger.info(
+                "[CAROUSEL_SLIDE] START | account=%r shortcode=%r total_slides=%d post_link=%r",
+                account, shortcode, total_slides, post_link,
+            )
+            for idx, image in enumerate(item.get("images") or []):
+                if isinstance(image, dict):
+                    image = image.get("url") or image.get("displayUrl")
+                if not image:
+                    continue
+                obj = {}
+                child_shortcode = f"{shortcode}__{idx}"
+                save_path = f"posters/{account}/{child_shortcode}.jpeg"
+
+                obj["baseImageUrl"] = image
+                obj["display_url"] = image
+                obj["caption"] = caption
+                obj["biography"] = biography
+                obj["externalUrl"] = externalUrl
+                obj["shortcode"] = child_shortcode
+                obj["parent_shortcode"] = shortcode
+                obj["link"] = post_link
+                obj["taken_at_timestamp"] = float(time.time())
+
+                download_and_save_image(image, save_path, last_fetched)
+
+                imageObjects.append(obj)
+                slides_added += 1
+                logger.info(
+                    "[CAROUSEL_SLIDE] ADDED | account=%r shortcode=%r slide_index=%d child_shortcode=%r",
+                    account, shortcode, idx, child_shortcode,
+                )
+            logger.info(
+                "[CAROUSEL_SLIDE] DONE | account=%r shortcode=%r slides_added=%d / total_slides=%d",
+                account, shortcode, slides_added, total_slides,
+            )
+
+        elif item["type"] == "Image":
+            obj = {}
+            save_path = f'posters/{account}/{shortcode}.jpeg'
+
+            obj["baseImageUrl"] = item["displayUrl"]
+            obj["display_url"] = item["displayUrl"]
+            obj["caption"] = caption
+            obj["biography"] = biography
+            obj["externalUrl"] = externalUrl
+            obj["shortcode"] = shortcode
+            obj["link"] = post_link
+            obj["taken_at_timestamp"] = float(time.time())
+
+            download_and_save_image(item["displayUrl"], save_path, last_fetched)
+
+            imageObjects.append(obj)
+
+        elif item["type"] == "Video":
+            obj = {}
+            save_path = f'posters/{account}/{shortcode}.jpeg'
+            video_url = item["videoUrl"]
+
+            obj["baseImageUrl"] = video_url
+            obj["display_url"] = video_url
+            obj["caption"] = caption
+            obj["biography"] = biography
+            obj["externalUrl"] = externalUrl
+            obj["shortcode"] = shortcode
+            obj["link"] = post_link
+            obj["taken_at_timestamp"] = float(time.time())
+
+            download_and_save_first_frame(video_url, save_path)
+
+            imageObjects.append(obj)
+
+    except Exception as e:
+        print("Image details could not be fetched. Error details: "+str(e))
+
 
 @retry(stop=stop_after_attempt(3), wait=wait_fixed(60*8))
 def label_using_gpt4(image_path: str, caption: str, biography: str, externalUrl: str):
@@ -1318,6 +1362,8 @@ def clean_download_images(accounts: list, exec_id: str, headers: dict):
 
     # Process accounts to handle duplicates and aggregate forLocation
     processed_accounts = defaultdict(set)
+    # Flags from accounts_to_scrape dicts; fall back to DB lookup below.
+    passed_flags = {}
     if accounts:
         # Support both list of dicts and list of usernames (strings)
         if isinstance(accounts[0], dict):
@@ -1331,6 +1377,11 @@ def clean_download_images(accounts: list, exec_id: str, headers: dict):
                     processed_accounts[user].add(location)
                 elif user:
                     processed_accounts[user]  # Ensure user is in dict
+                if user and ('track_feed' in account_data or 'track_stories' in account_data):
+                    passed_flags[user] = (
+                        bool(account_data.get('track_feed', True)),
+                        bool(account_data.get('track_stories', False)),
+                    )
         else:
             for account in accounts:
                 processed_accounts[account]  # Handles list of strings
@@ -1349,20 +1400,22 @@ def clean_download_images(accounts: list, exec_id: str, headers: dict):
 
     num_events = 0
 
-    #Store scraped data for all accounts in output_file_path
+    # Store scraped data for all accounts in output_file_path.
+    # Track flags come from Account rows (or the dicts accounts_to_scrape built).
     all_account_names = list(processed_accounts.keys())
-    if STORIES_SCRAPE_MODE == "subset":
-        stories_accounts = STORIES_SUBSET_ACCOUNTS & set(all_account_names)
-        logger.info(
-            "[STORIES_SUBSET] mode=subset total_accounts=%d stories_enabled_for=%d accounts=%r",
-            len(all_account_names), len(stories_accounts), sorted(stories_accounts)
-        )
-    else:
-        stories_accounts = set(all_account_names)
+    db_flags = scrape_flags_for_accounts(all_account_names)
+    for name, flags in passed_flags.items():
+        db_flags[name] = flags
+    logger.info(
+        "[TRACK_FLAGS] total_accounts=%d flags=%r",
+        len(all_account_names),
+        {n: db_flags[n] for n in sorted(all_account_names)},
+    )
 
     for account, locations in processed_accounts.items():
         # Join locations into a comma-separated string
         for_location = ",".join(sorted(list(locations))) if locations else None
+        enable_feed, enable_stories = db_flags.get(account, (True, False))
         
         logger.debug("\n\n\n Initiating run for: "+str(account))
 
@@ -1371,7 +1424,11 @@ def clean_download_images(accounts: list, exec_id: str, headers: dict):
         output_file_path = f"posters/{output_file_name}.json"
 
         try:
-            scrape_successful = clean_scrape_using_apify(account, output_file_path, enable_stories=(account in stories_accounts))
+            scrape_successful = clean_scrape_using_apify(
+                account, output_file_path,
+                enable_stories=enable_stories,
+                enable_feed=enable_feed,
+            )
 
             if scrape_successful:
                 #execution["users"][account].update(get_display_url_for_images(output_file_path, 0))
@@ -1438,16 +1495,20 @@ def download_images(accounts: list, session_id: str, headers: dict, config: dict
         'users': {}
     }
 
-    if STORIES_SCRAPE_MODE == "subset":
-        stories_accounts = STORIES_SUBSET_ACCOUNTS & set(accounts)
-        logger.info(
-            "[STORIES_SUBSET] mode=subset total_accounts=%d stories_enabled_for=%d accounts=%r",
-            len(accounts), len(stories_accounts), sorted(stories_accounts)
-        )
-    else:
-        stories_accounts = set(accounts)
+    account_names = [
+        (a.get('user') if isinstance(a, dict) else a) for a in accounts
+    ]
+    account_names = [n for n in account_names if n]
+    db_flags = scrape_flags_for_accounts(account_names)
+    logger.info(
+        "[TRACK_FLAGS] legacy download_images total_accounts=%d flags=%r",
+        len(account_names),
+        {n: db_flags[n] for n in sorted(account_names)},
+    )
 
     for account in accounts:
+        if isinstance(account, dict):
+            account = account.get('user') or account
         execution["users"][account] = {}
         images_to_upload["users"][account] = {}
 
@@ -1455,6 +1516,7 @@ def download_images(accounts: list, session_id: str, headers: dict, config: dict
         output_file_path = f"posters/{output_file_name}.json"
 
         output_path = f"posters/{account}"
+        enable_feed, enable_stories = db_flags.get(account, (True, False))
 
         account_scraped_failed = False
         try:
@@ -1468,7 +1530,8 @@ def download_images(accounts: list, session_id: str, headers: dict, config: dict
 
                     scraped_by_apify = scrape_using_apify(
                         account, output_file_name, output_file_path, count, account_last_fetched,
-                        enable_stories=(account in stories_accounts))
+                        enable_stories=enable_stories,
+                        enable_feed=enable_feed)
 
                 #if scraped_by_instatouch:
                 if scraped_by_apify:

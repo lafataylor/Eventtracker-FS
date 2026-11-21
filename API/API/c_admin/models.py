@@ -27,6 +27,12 @@ class Account(models.Model):
     status = models.CharField(max_length=255, null=True, default="Tracking")
     created_by = models.CharField(max_length=255, null=True)
     forLocation = models.CharField(max_length=255, null=True, blank=True)
+    # Per-account scrape paths. null=True so the AddField migration is
+    # AUTO_APPLY-safe on SQLite (no table rebuild). Defaults: feed on,
+    # stories off. Both off = pause scraping without deleting the row.
+    # 2026-11-20: replaced STORIES_SUBSET_ACCOUNTS hardcode.
+    track_feed = models.BooleanField(null=True, default=True)
+    track_stories = models.BooleanField(null=True, default=False)
 
 class Logs(models.Model):
     scraped_at = models.CharField(max_length=255, null=True)

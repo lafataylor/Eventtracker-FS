@@ -139,6 +139,34 @@ class AdminAccounts(APIView):
         except:
             return ServerProcessingError()
 
+    def put(self, request, format=None):
+        """Update per-account track_feed / track_stories (Manage Accounts toggles)."""
+        account_id = request.data.get("id")
+        if validator.is_missing([account_id]):
+            return MissingInformation()
+
+        try:
+            account = Account.objects.filter(id=int(account_id)).first()
+            if not account:
+                return ServerProcessingError(message='Account not found')
+
+            update_fields = []
+            if 'track_feed' in request.data:
+                account.track_feed = bool(request.data.get('track_feed'))
+                update_fields.append('track_feed')
+            if 'track_stories' in request.data:
+                account.track_stories = bool(request.data.get('track_stories'))
+                update_fields.append('track_stories')
+
+            if not update_fields:
+                return InvalidParameters()
+
+            account.save(update_fields=update_fields)
+            return Success(AccountSerializer(account).data, status=True)
+        except Exception as e:
+            logger.debug("Error updating account track flags: " + str(e))
+            return ServerProcessingError(message=str(e))
+
     def delete(self, request, format=None):
         accounts = request.data.get("accounts")
 
@@ -189,7 +217,7 @@ TRACKING_STATUS = "Tracking"
 
 
 def accounts_to_scrape(usernames):
-    """The accounts a run should actually fetch, honouring Account.status.
+    """The accounts a run should actually fetch, honouring status + track flags.
 
     `status` has existed since the model was written and nothing read it:
     cronRun.py asks admin/accounts/ for every account with no filter, and the
@@ -204,12 +232,23 @@ def accounts_to_scrape(usernames):
     A username with no Account row is still passed through: that was the
     previous behaviour and the scraper relies on it. A NULL status means the
     model default, i.e. Tracking.
+
+    track_feed / track_stories (2026-11-20) replace STORIES_SUBSET_ACCOUNTS.
+    Both off means the account stays listed but is not scraped for either path.
+    Duplicate city rows OR their flags together.
     """
+    from .track_flags import effective_track_feed, effective_track_stories
+
     selected = []
     for username in usernames:
         rows = list(Account.objects.filter(user=username))
         if not rows:
-            selected.append({'user': username, 'forLocation': None})
+            selected.append({
+                'user': username,
+                'forLocation': None,
+                'track_feed': True,
+                'track_stories': False,
+            })
             continue
         # The same handle can exist more than once with different cities; the
         # account is live if ANY of its rows is still tracking, and only the
@@ -218,10 +257,20 @@ def accounts_to_scrape(usernames):
         if not live:
             logger.info("[ACCOUNTS] skipping %r: no row is still Tracking", username)
             continue
+        track_feed = any(effective_track_feed(a.track_feed) for a in live)
+        track_stories = any(effective_track_stories(a.track_stories) for a in live)
+        if not track_feed and not track_stories:
+            logger.info(
+                "[ACCOUNTS] skipping %r: Tracking but track_feed and track_stories both off",
+                username,
+            )
+            continue
         locations = sorted({a.forLocation for a in live if a.forLocation})
         selected.append({
             'user': username,
             'forLocation': ','.join(locations) if locations else None,
+            'track_feed': track_feed,
+            'track_stories': track_stories,
         })
     return selected
 

@@ -29,6 +29,13 @@ interface AccountsSectionProps {
   onClick: Function;
   /** Mobile Select mode — show checkboxes on list rows. */
   selectionMode?: boolean;
+  onTrackFlagsChange?: (
+    accountId: number,
+    patch: {
+      track_feed?: boolean | null;
+      track_stories?: boolean | null;
+    }
+  ) => void;
 }
 
 const AccountsSection = ({
@@ -41,6 +48,7 @@ const AccountsSection = ({
   isAlt,
   onClick,
   selectionMode = false,
+  onTrackFlagsChange,
 }: AccountsSectionProps) => {
   const [isExpanded, setIsExpanded] = useState(defaultIsExpanded ?? false);
   const [showAllMobile, setShowAllMobile] = useState(false);
@@ -218,6 +226,7 @@ const AccountsSection = ({
                         accounts.length <= MOBILE_PREVIEW_COUNT)
                     }
                     selectionMode={selectionMode}
+                    onTrackFlagsChange={onTrackFlagsChange}
                   />
                 ))}
                 {!showAllMobile && accounts.length > MOBILE_PREVIEW_COUNT ? (
@@ -236,8 +245,8 @@ const AccountsSection = ({
 
               {/* Desktop table */}
               <div className="hidden md:block w-full overflow-x-auto z-[1]">
-                <table className="rounded-b-xl min-w-[520px] w-full h-full">
-                  <thead className="grid text-beaming-orange font-semibold grid-cols-[50px_2fr_1fr_1fr] border-b-4 border-b-beaming-orange">
+                <table className="rounded-b-xl min-w-[720px] w-full h-full">
+                  <thead className="grid text-beaming-orange font-semibold grid-cols-[50px_2fr_1fr_1.2fr_1.2fr_1fr] border-b-4 border-b-beaming-orange">
                     <td className="border-r-[1px] border-slate-black text-beaming-orange font-semibold flex justify-center items-center relative">
                       <label className="custom_checkbox relative">
                         <input
@@ -258,6 +267,12 @@ const AccountsSection = ({
                     <td className="border-r-[1px] border-slate-black text-beaming-orange font-semibold flex justify-center align-middle p-3">
                       Date Added
                     </td>
+                    <td className="border-r-[1px] border-slate-black text-beaming-orange font-semibold flex justify-center align-middle p-3">
+                      Track feed
+                    </td>
+                    <td className="border-r-[1px] border-slate-black text-beaming-orange font-semibold flex justify-center align-middle p-3">
+                      Track stories
+                    </td>
                     <td className=" border-slate-black align-middle text-beaming-orange font-semibold flex justify-center p-3">
                       Status
                     </td>
@@ -273,6 +288,7 @@ const AccountsSection = ({
                           onSelectOrDeselectHandler(isChecked, account.id);
                         }}
                         isLast={accounts.length - 1 == index}
+                        onTrackFlagsChange={onTrackFlagsChange}
                       />
                     ))}
                   </div>

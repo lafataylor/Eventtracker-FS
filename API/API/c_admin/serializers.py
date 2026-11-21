@@ -6,7 +6,16 @@ from .models import Account, Logs, Keywords, UserFeedback, GeocodingCache, Accou
 class AccountSerializer(ModelSerializer):
     class Meta:
         model = Account
-        fields = ["id", "is_personal", "created_at", "user", "forLocation"]
+        fields = [
+            "id",
+            "is_personal",
+            "created_at",
+            "user",
+            "forLocation",
+            "status",
+            "track_feed",
+            "track_stories",
+        ]
 
 class LogsSerializer(ModelSerializer):
     class Meta:

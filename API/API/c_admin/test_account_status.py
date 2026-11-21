@@ -28,7 +28,8 @@ class AccountsToScrapeTests(TestCase):
 
     def test_a_tracking_account_is_scraped(self):
         self.assertEqual(accounts_to_scrape(['keep_me']),
-                         [{'user': 'keep_me', 'forLocation': 'Berlin'}])
+                         [{'user': 'keep_me', 'forLocation': 'Berlin',
+                           'track_feed': True, 'track_stories': False}])
 
     def test_a_paused_account_is_skipped(self):
         self.assertEqual(accounts_to_scrape(['retired']), [])
@@ -42,7 +43,8 @@ class AccountsToScrapeTests(TestCase):
         # Pre-existing behaviour worth keeping: a username with no Account row
         # is still handed to the scraper rather than silently dropped.
         self.assertEqual(accounts_to_scrape(['never_seen']),
-                         [{'user': 'never_seen', 'forLocation': None}])
+                         [{'user': 'never_seen', 'forLocation': None,
+                           'track_feed': True, 'track_stories': False}])
 
     def test_duplicate_rows_combine_their_locations(self):
         # Also pre-existing: the same handle can exist twice with different
