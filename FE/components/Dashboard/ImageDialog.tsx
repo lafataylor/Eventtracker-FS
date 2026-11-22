@@ -1,7 +1,6 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { hideImage } from '../../store/actions/imageDialog';
 import { useStore } from '../../store/store';
-import Image from './Image';
 import { FiX } from 'react-icons/fi';
 import { showEvent } from '../../store/actions/eventDetailsDialog';
 

@@ -727,24 +727,12 @@ const Home: NextPage<{ firstFavoriteEventThumb: string; name: string }> = ({
 };
 
 export const getServerSideProps: GetServerSideProps = async (context) => {
-  const { email, name } = context.query; // Get email from query parameters
-  let firstFavoriteEventThumb = '';
+  const { name } = context.query;
 
-  // Fetch the favorite events based on the email
-  if (email) {
-    const yearData = await EventService.getFavoritedEvents({
-      email: email as string,
-    });
-    const favorites = yearData.data.favorites;
-
-    if (favorites && favorites.length > 0) {
-      firstFavoriteEventThumb = favorites[0].orig_thumb; // Get the orig_thumb of the first favorite event
-    }
-  }
-
+  // Meta thumb left empty; client loads favorites after mount.
   return {
     props: {
-      firstFavoriteEventThumb, // Pass only firstFavoriteEventThumb
+      firstFavoriteEventThumb: '',
       name: typeof name === 'string' ? name : null,
     },
   };

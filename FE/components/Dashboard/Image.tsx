@@ -1,64 +1,22 @@
-import React, { useEffect, useState } from 'react';
-import Cookies from 'js-cookie';
+import React from 'react';
 
 interface ImageProps {
   baseImageUrl: any;
 }
 
-const getImageAuthHeaders = (): HeadersInit => {
-  // 2026-11-17: /api/getImage requires the same admin Token JWT as Django admin APIs.
-  const token = Cookies.get('adminToken');
-  return token ? { Authorization: 'Token ' + token } : {};
-};
-
-const Image = ({baseImageUrl}: ImageProps) => {
-  const [imageUrl, setImageUrl] = useState('');
-
-  useEffect(() => {
-    // Fetch the image URL from the API route when the ID changes
-    //fetch(`/api/getImage/${encodeURIComponent(baseImageUrl.baseImageUrl)}`) 
-    fetch(`/api/hello`)
-    .then((response) => {
-      //console.log("api response....: ",response.json())
-    })
-    .catch((error) => {
-      //console.log("api response error: ",error)
-    }); 
-
-    fetch(`/api/getImage/${encodeURIComponent(baseImageUrl)}`, {
-      headers: getImageAuthHeaders(),
-      credentials: 'same-origin',
-    }) 
-        .then((response) => {
-          //console.log("success response: ",response)
-          return response.json()
-        })
-        .then((responseBody) => {
-          //console.log("success data: ",responseBody)
-          /*const objectURL = URL.createObjectURL(responseBody.imageData.blob());
-          //console.log("success image url: ", objectURL);*/
-          setImageUrl(responseBody.imageData)
-        })
-        /*.then((response) => {
-          //console.log("success response: ",response)
-          if (!response.body) {
-            throw new Error('ReadableStream is not yet supported in your browser.');
-          }
-          return response.blob();
-        })*/
-        /*.then((blob) => {
-          //console.log("success data: ",blob)
-          const objectURL = URL.createObjectURL(blob);
-          //console.log("success image url: ", objectURL);
-          setImageUrl(objectURL);
-        })*/
-        .catch((error) => {
-          console.error('Error fetching image:', error);
-        });
-  }, []);
+/** Renders a direct image URL. Unused by ImageDialog (which uses orig_thumb). */
+const Image = ({ baseImageUrl }: ImageProps) => {
+  const src =
+    typeof baseImageUrl === 'string'
+      ? baseImageUrl
+      : baseImageUrl?.baseImageURL || baseImageUrl?.baseImageUrl || '';
 
   return (
-    <img className="w-full pb-1 rounded-xl flex-1" src={imageUrl} alt="Instagram Image" />
+    <img
+      className="w-full pb-1 rounded-xl flex-1"
+      src={src}
+      alt="Instagram Image"
+    />
   );
 };
 
