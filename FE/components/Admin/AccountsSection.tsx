@@ -12,6 +12,10 @@ import {
 import { useStore } from '../../store/store';
 import AccountsListItem from './AccountsListItem';
 import { FaChevronDown } from 'react-icons/fa';
+import {
+  accountsDesktopTableGridClass,
+  accountsRowShowsTrackingStatus,
+} from '../../utils/manageAccountsUi';
 
 /** How many rows to show on mobile before "Show all N accounts". */
 const MOBILE_PREVIEW_COUNT = 5;
@@ -246,7 +250,13 @@ const AccountsSection = ({
               {/* Desktop table */}
               <div className="hidden md:block w-full overflow-x-auto z-[1]">
                 <table className="rounded-b-xl min-w-[720px] w-full h-full">
-                  <thead className="grid text-beaming-orange font-semibold grid-cols-[50px_2fr_1fr_1.2fr_1.2fr_1fr] border-b-4 border-b-beaming-orange">
+                  <thead
+                    className={
+                      'grid text-beaming-orange font-semibold ' +
+                      accountsDesktopTableGridClass() +
+                      ' border-b-4 border-b-beaming-orange'
+                    }
+                  >
                     <td className="border-r-[1px] border-slate-black text-beaming-orange font-semibold flex justify-center items-center relative">
                       <label className="custom_checkbox relative">
                         <input
@@ -270,12 +280,21 @@ const AccountsSection = ({
                     <td className="border-r-[1px] border-slate-black text-beaming-orange font-semibold flex justify-center align-middle p-3">
                       Track feed
                     </td>
-                    <td className="border-r-[1px] border-slate-black text-beaming-orange font-semibold flex justify-center align-middle p-3">
+                    <td
+                      className={
+                        (accountsRowShowsTrackingStatus('desktop')
+                          ? 'border-r-[1px] border-slate-black '
+                          : '') +
+                        'text-beaming-orange font-semibold flex justify-center align-middle p-3'
+                      }
+                    >
                       Track stories
                     </td>
-                    <td className=" border-slate-black align-middle text-beaming-orange font-semibold flex justify-center p-3">
-                      Status
-                    </td>
+                    {accountsRowShowsTrackingStatus('desktop') ? (
+                      <td className=" border-slate-black align-middle text-beaming-orange font-semibold flex justify-center p-3">
+                        Status
+                      </td>
+                    ) : null}
                   </thead>
                   <div className=" max-h-[30vh] overflow-y-auto">
                     {accounts.map((account, index) => (

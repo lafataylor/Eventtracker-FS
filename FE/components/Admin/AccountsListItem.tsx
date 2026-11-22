@@ -2,6 +2,12 @@ import React, { useState } from 'react';
 import { Account } from '../../interface/objects/simpleObject';
 import { formatDate } from '../../utils/utils';
 import {
+  accountsDesktopTableGridClass,
+  accountsMobileTrackControlsOnTitleRow,
+  accountsMobileTrackLabel,
+  accountsRowShowsTrackingStatus,
+} from '../../utils/manageAccountsUi';
+import {
   requestMiddleware,
   updateAdminAccount,
 } from '../../services/lib/admin';
@@ -56,6 +62,9 @@ const AccountsListItem = ({
 
   const feedChecked = trackFeedOn(account);
   const storiesChecked = trackStoriesOn(account);
+  const showMobileStatus = accountsRowShowsTrackingStatus('mobile');
+  const showDesktopStatus = accountsRowShowsTrackingStatus('desktop');
+  const trackOnTitleRow = accountsMobileTrackControlsOnTitleRow();
 
   const toggleFlag = async (field: 'track_feed' | 'track_stories', next: boolean) => {
     if (saving) return;
@@ -78,32 +87,35 @@ const AccountsListItem = ({
     }
   };
 
-  const trackControls = (
-    <div className="flex flex-col gap-1.5 text-sm text-off-white">
-      <label className="flex items-center gap-2 cursor-pointer select-none">
+  // Compact inline toggles for the mobile title-row right (LAF-62).
+  const mobileTrackControls = (
+    <div className="flex flex-row flex-wrap items-center justify-end gap-x-3 gap-y-1 text-sm text-off-white shrink-0">
+      <label className="flex items-center gap-1.5 cursor-pointer select-none">
         <input
           type="checkbox"
           checked={feedChecked}
           disabled={saving !== null}
           onChange={(e) => toggleFlag('track_feed', e.target.checked)}
         />
-        <span>Track feed</span>
+        <span>{accountsMobileTrackLabel('track_feed')}</span>
       </label>
-      <label className="flex items-center gap-2 cursor-pointer select-none">
+      <label className="flex items-center gap-1.5 cursor-pointer select-none">
         <input
           type="checkbox"
           checked={storiesChecked}
           disabled={saving !== null}
           onChange={(e) => toggleFlag('track_stories', e.target.checked)}
         />
-        <span>Track stories</span>
+        <span>{accountsMobileTrackLabel('track_stories')}</span>
       </label>
     </div>
   );
 
+  const desktopGrid = accountsDesktopTableGridClass();
+
   return (
     <>
-      {/* Mobile list row — owner mockup 2026-11-20 */}
+      {/* Mobile list row — owner mockup 2026-11-20; toggles on title row 2026-11-22 */}
       <div
         className={
           'md:hidden flex items-start gap-3 px-3 py-3.5 ' +
@@ -121,27 +133,36 @@ const AccountsListItem = ({
           </label>
         ) : null}
         <div className="min-w-0 flex-1">
-          <div className="font-semibold text-off-white truncate">
-            {account.user}
+          <div className="flex items-center gap-2 min-w-0">
+            <div className="font-semibold text-off-white truncate min-w-0 flex-1">
+              {account.user}
+            </div>
+            {trackOnTitleRow ? mobileTrackControls : null}
           </div>
           <div className="text-sm text-stone-gray mt-0.5">
             Added {formatAddedLabel(new Date(account.created_at))}
           </div>
-          <div className="mt-2">{trackControls}</div>
+          {!trackOnTitleRow ? (
+            <div className="mt-2">{mobileTrackControls}</div>
+          ) : null}
         </div>
-        <div className="flex items-center gap-2 shrink-0 mt-1">
-          <span
-            className="w-2.5 h-2.5 rounded-full bg-vibrant-green"
-            aria-hidden
-          />
-          <span className="text-off-white text-sm">{statusLabel}</span>
-        </div>
+        {showMobileStatus ? (
+          <div className="flex items-center gap-2 shrink-0 mt-1">
+            <span
+              className="w-2.5 h-2.5 rounded-full bg-vibrant-green"
+              aria-hidden
+            />
+            <span className="text-off-white text-sm">{statusLabel}</span>
+          </div>
+        ) : null}
       </div>
 
-      {/* Desktop table row — columns extended for Track feed / Track stories */}
+      {/* Desktop table row — Status column dropped; feed/stories stay as columns */}
       <tr
         className={
-          'hidden md:grid grid-cols-[50px_2fr_1fr_1.2fr_1.2fr_1fr] ' +
+          'hidden md:grid ' +
+          desktopGrid +
+          ' ' +
           (isLast ? '' : 'border-b-[1px] border-slate-black')
         }
       >
@@ -172,7 +193,12 @@ const AccountsListItem = ({
             <span>Track feed</span>
           </label>
         </td>
-        <td className="border-r-[1px] border-slate-black flex align-middle p-3">
+        <td
+          className={
+            (showDesktopStatus ? 'border-r-[1px] border-slate-black ' : '') +
+            'flex align-middle p-3'
+          }
+        >
           <label className="flex items-center gap-2 cursor-pointer select-none text-sm">
             <input
               type="checkbox"
@@ -183,7 +209,9 @@ const AccountsListItem = ({
             <span>Track stories</span>
           </label>
         </td>
-        <td className="align-middle flex p-3">{statusLabel}</td>
+        {showDesktopStatus ? (
+          <td className="align-middle flex p-3">{statusLabel}</td>
+        ) : null}
       </tr>
     </>
   );
