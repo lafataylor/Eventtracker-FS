@@ -16,6 +16,7 @@ from c_auth.authentication import get_uid_from_token
 from .scraper import *
 from .session import *
 from .constants import *
+from .run_state import live_run_exists, reap_stale_runs
 
 # Ticket 2 — post-level carousel extraction.
 # `client` from scraper is the OpenAI client, but create_event_from_instagram_link
@@ -33,6 +34,7 @@ from datetime import datetime
 import json
 
 import subprocess
+import sys
 
 from threading import Thread
 
@@ -276,34 +278,38 @@ def accounts_to_scrape(usernames):
 
 
 class AdminRunScraper(APIView):
-    def download_images_thread(self, accounts, session_id, headers, config, exec_id):
-        try:
-            #download_images(accounts=accounts, session_id=session_id, headers=headers, config=config, exec_id=exec_id)
-            clean_download_images(accounts=accounts, exec_id=exec_id, headers=headers)
-        except Exception as e:
-            logger.debug("Error during event population: "+str(e))
+    """Start a scrape as its own process (manage.py run_scrape).
 
+    It used to run as a Thread in this web worker, so a gunicorn restart or
+    WORKER TIMEOUT killed it mid-run and left its "In Progress" row open
+    (2026-11-08: no scrape for three weeks). Same request and response as
+    before, so the Runs button and cronRun.py keep working.
+    """
     def post(self, request, format=None):
         try:
             logger.debug("\n\n\n Run scraper request received")
 
             accounts = request.data.get("accounts")
 
-            headers = get_headers()
-
             if len(accounts) > 0:
-                config = get_config(headers)
+                if live_run_exists():
+                    return Success(data={"message": "A run is already in progress"})
 
-                if not accounts:
-                    raise ValueError('No accounts to scrape')
+                exec_id = Execution.objects.create(status="200").id
 
-                full_accounts = accounts_to_scrape(accounts)
+                accounts_file = os.path.join(settings.BASE_DIR, "logs", "run_scrape_accounts_%s.json" % exec_id)
+                with open(accounts_file, "w") as f:
+                    json.dump(accounts, f)
 
-                exec_id = get_exec()
+                with open(os.path.join(settings.BASE_DIR, "logs", "run_scrape.log"), "a") as out:
+                    subprocess.Popen(
+                        [sys.executable, os.path.join(settings.BASE_DIR, "manage.py"), "run_scrape",
+                         "--exec-id", str(exec_id), "--accounts-file", accounts_file],
+                        cwd=settings.BASE_DIR, env=os.environ.copy(),
+                        stdin=subprocess.DEVNULL, stdout=out, stderr=subprocess.STDOUT,
+                        start_new_session=True,
+                    )
 
-                thread = Thread(target=self.download_images_thread, args=(full_accounts, "test", headers, config, exec_id))
-                thread.start()
-                
                 return Success(data={"id":exec_id})
 
             return Success(data={"message":"1.."})
@@ -368,6 +374,10 @@ def read_logs(request):
         # scanned every row too (1.2 s on a copy of production). A run in
         # progress is recent by definition: look only at the newest ids. A
         # nightly run writes a few thousand rows, so the window is weeks wide.
+        # A run that died without closing its row would block cronRun.py's
+        # "already in progress" check for ever; close it first (run_state.py).
+        reap_stale_runs()
+
         newest_id = Logs.objects.order_by('-id').values_list('id', flat=True).first() or 0
         latest_in_progress = (Logs.objects
                               .filter(id__gt=newest_id - IN_PROGRESS_LOOKBACK, status="In Progress")
