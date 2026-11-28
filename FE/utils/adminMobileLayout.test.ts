@@ -33,15 +33,15 @@ test('admin page titles shrink below md', () => {
 });
 
 test('admin main pane clears the fixed orange header bar on mobile', () => {
-  // pt-20 clears py-3 + h-11 + border-b-4; pt-14 was too short (2026-11-21).
-  assert.match(ADMIN_MOBILE_TOP_PAD, /\bpt-20\b/);
+  // pt-14 clears the compact h-14 (56px) + border-b-2 bar (2026-11-27).
+  assert.match(ADMIN_MOBILE_TOP_PAD, /\bpt-14\b/);
   assert.match(ADMIN_MOBILE_TOP_PAD, /\bmd:pt-0\b/);
-  assert.doesNotMatch(ADMIN_MOBILE_TOP_PAD, /\bpt-14\b/);
+  assert.doesNotMatch(ADMIN_MOBILE_TOP_PAD, /\bpt-20\b/);
 
   const cls = adminMainPaneClass('px-4 pb-0 md:p-8 md:pb-0');
   assert.match(cls, /\bmin-w-0\b/);
   assert.match(cls, /\bflex-1\b/);
-  assert.match(cls, /\bpt-20\b/);
+  assert.match(cls, /\bpt-14\b/);
   assert.match(cls, /\bmd:pt-0\b/);
   assert.match(cls, /\bpx-4\b/);
   // Callers must not pass mobile p-* / pt-* that fight the header pad.

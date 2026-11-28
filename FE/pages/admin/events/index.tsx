@@ -1,9 +1,13 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import AdminSideBar from '../../../components/Admin/AdminSideBar';
+import { adminPageTitleClass } from '../../../utils/adminMobileLayout';
 import {
-  adminMainPaneClass,
-  adminPageTitleClass,
-} from '../../../utils/adminMobileLayout';
+  adminEventsDenseContentPadClass,
+  adminEventsDenseIconBtnClass,
+  adminEventsDenseMainPaneClass,
+  adminEventsDenseToolbarClass,
+  shouldHideAdminChrome,
+} from '../../../utils/adminEventsDense';
 import { useStore } from '../../../store/store';
 import { Constants } from '../../../utils/constants';
 import Filter from '../../../components/Filter/Filter';
@@ -44,12 +48,8 @@ import Spinner from '../../../components/Spinner';
 import { Option } from '../../../interface/filterInterface';
 import { Event } from '../../../interface/objects/simpleObject';
 import { columnNameToValue, convertTo24Hr } from '../../../utils/utils';
-import { FaPlus, FaTimes } from 'react-icons/fa';
-import {
-  setEventsLoadedBySearch,
-  updateSearchResults,
-} from '../../../store/actions/search';
-import event from '../../../services/lib/event';
+import { FaTimes } from 'react-icons/fa';
+import { updateSearchResults } from '../../../store/actions/search';
 import EventCreate from '../../../components/Admin/EventCreate';
 
 const Index = () => {
@@ -95,52 +95,11 @@ const Index = () => {
   };
 
   const [createEvent, setCreateEvent] = useState(false);
-  const emptyEvent: Event = {
-    id: 0,
-    name: '',
-    artist: '',
-    opener: '',
-    host: '',
-    promoter: '',
-    offering: '',
-    timestamp: '',
-    created_at: '',
-    date: '',
-    time: '',
-    venue: {
-      id: 0,
-      name: '',
-      address: '',
-      city: '',
-      state: '',
-      country: '',
-    },
-    price: '',
-    ticket_link: '',
-    is_age_restricted: false,
-    orig_link: '',
-    orig_thumb: '',
-    poster: {
-      id: 0,
-      user: '',
-      is_personal: true,
-      created_at: '',
-    },
-    is_event: true,
-    age_barrier: '',
-    late: false,
-    link_in_bio: false,
-    rsvp_required: false,
-    num_events: 0,
-    genres: '',
-    is_blurred: false,
-    is_favorite: false,
-    viewing_language: 'en',
-    start_date: '',
-    start_time: '',
-    end_date: '',
-    end_time: '',
-  };
+  // Dense mobile chrome: hide header + search toolbar on scroll down,
+  // reveal on scroll up (owner 2026-11-27). Desktop ignores this.
+  const [chromeHidden, setChromeHidden] = useState(false);
+  const scrollBodyRef = useRef<HTMLDivElement | null>(null);
+  const lastScrollTopRef = useRef(0);
 
   const filterEventsByLinkedAccounts = (events: Event[]): Event[] => {
     // If linkedAccounts includes "all" or is empty, show all events
@@ -257,6 +216,24 @@ const Index = () => {
 
   useEffect(() => {
     fetchLinkedAccounts();
+  }, []);
+
+  useEffect(() => {
+    const el = scrollBodyRef.current;
+    if (!el) return;
+    const onScroll = () => {
+      const scrollTop = el.scrollTop;
+      setChromeHidden((currentlyHidden) =>
+        shouldHideAdminChrome({
+          scrollTop,
+          lastScrollTop: lastScrollTopRef.current,
+          currentlyHidden,
+        })
+      );
+      lastScrollTopRef.current = scrollTop;
+    };
+    el.addEventListener('scroll', onScroll, { passive: true });
+    return () => el.removeEventListener('scroll', onScroll);
   }, []);
 
   const getNestedProperty = <T,>(object: T, path: string): any => {
@@ -479,23 +456,31 @@ const Index = () => {
   const controlBtnClass =
     'flex group items-center gap-2 border-solid border-[1px] px-3 py-2 md:py-1 rounded-lg relative overflow-clip text-mist-white border-slate-black bg-slate-black md:bg-transparent-white shrink-0';
 
+  const toggleSelectionMode = () => setSelectionMode((mode) => !mode);
+
+  const eventsSectionSelectionProps = {
+    selectionMode,
+    onSelectionModeToggle: toggleSelectionMode,
+  };
+
   return (
     <div className="w-full flex h-full font-montserrat overflow-hidden">
       <AdminSideBar
         currentPage="events"
         mobileTitle="Events"
+        mobileBarHidden={chromeHidden}
         mobileTrailing={
           <button
             type="button"
             onClick={() => setCreateEvent(true)}
-            className="bg-beaming-orange text-midnight font-semibold text-sm px-3 py-2 rounded-lg whitespace-nowrap"
+            className="bg-beaming-orange text-midnight font-semibold text-xs px-2.5 py-1.5 rounded-lg whitespace-nowrap"
           >
-            + New Event
+            + New
           </button>
         }
       />
       <div
-        className={adminMainPaneClass("px-4 md:px-8 md:pt-8 overflow-x-hidden md:overflow-x-auto")}
+        className={adminEventsDenseMainPaneClass()}
         onClick={() => {
           setShowFilter(false);
           setShowHideDialog(false);
@@ -515,95 +500,87 @@ const Index = () => {
           </button>
         </nav>
 
-        {/* Mobile toolbar — all controls stay reachable */}
-        <div className="md:hidden flex flex-col gap-3 mt-4 mb-5 relative z-[3]">
-          <div className="flex items-center gap-2">
-            {loader.isSpinnerVisible && (
-              <Spinner colorClass={'text-beaming-orange mr-2 '} size={28} />
+        {/* Mobile toolbar — Search + icon-only Filter/Sort/More in one row.
+            Fixed under the 56px header; slides away with it on scroll down. */}
+        <div
+          className={adminEventsDenseToolbarClass(chromeHidden)}
+          onClick={(e) => e.stopPropagation()}
+        >
+          {loader.isSpinnerVisible && (
+            <Spinner colorClass={'text-beaming-orange '} size={24} />
+          )}
+          <SearchBar
+            allEvents={filterEventsByLinkedAccounts([
+              ...thisMonthEvents,
+              ...prevEvents,
+            ])}
+            placeholder="Search events"
+            grow
+          />
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              setShowFilter(!showFilter);
+              setShowSortOverlay(false);
+              setShowHideDialog(false);
+            }}
+            className={adminEventsDenseIconBtnClass(showFilter || isFilterSet())}
+            aria-label="Filter"
+            aria-pressed={showFilter || isFilterSet()}
+          >
+            <FiFilter className="w-4 h-4 z-[1]" />
+          </button>
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              setShowSortOverlay(!showSortOverlay);
+              setShowFilter(false);
+              setShowHideDialog(false);
+            }}
+            className={adminEventsDenseIconBtnClass(
+              showSortOverlay || Boolean(sortBy?.value)
             )}
-            <SearchBar
-              allEvents={filterEventsByLinkedAccounts([
-                ...thisMonthEvents,
-                ...prevEvents,
-              ])}
-              placeholder="Search events"
-              grow
-            />
-          </div>
-          <div className="flex flex-wrap items-center gap-2 relative">
-            <button
-              type="button"
-              onClick={(e) => {
-                e.stopPropagation();
-                setShowFilter(!showFilter);
-                setShowSortOverlay(false);
-                setShowHideDialog(false);
-              }}
-              className={controlBtnClass}
-            >
-              <FiFilter className="w-4 h-4 z-[1]" />
-              <span className="z-[1] text-sm">Filter</span>
-            </button>
-            <button
-              type="button"
-              onClick={(e) => {
-                e.stopPropagation();
-                setShowSortOverlay(!showSortOverlay);
-                setShowFilter(false);
-                setShowHideDialog(false);
-              }}
-              className={controlBtnClass}
-            >
-              <BiSortAlt2 className="w-5 h-5 z-[1]" />
-              <span className="z-[1] text-sm flex items-center gap-1">
-                Sort
-                {sortBy?.value ? (
-                  <FaTimes
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setSortBy({ value: '', label: 'None' });
-                      setSelectedColumn('');
-                      setShowSortOverlay(false);
-                    }}
-                  />
-                ) : null}
-              </span>
-            </button>
-            <button
-              type="button"
-              onClick={(e) => {
-                e.stopPropagation();
-                setShowHideDialog(!showHideDialog);
-                setShowFilter(false);
-                setShowSortOverlay(false);
-              }}
-              className={controlBtnClass}
-              aria-label="Hide columns / more"
-            >
-              <FiMoreHorizontal className="w-5 h-5 z-[1]" />
-              <span className="z-[1] text-sm">More</span>
-            </button>
-            {showSortOverlay ? (
-              <SortOverlay
-                hide={() => setShowSortOverlay(false)}
-                value={sortBy}
-                onChange={onSortChange}
-                options={Constants.eventsSortingOptions}
+            aria-label="Sort"
+            aria-pressed={showSortOverlay || Boolean(sortBy?.value)}
+          >
+            <BiSortAlt2 className="w-5 h-5 z-[1]" />
+            {sortBy?.value ? (
+              <FaTimes
+                className="absolute top-0.5 right-0.5 w-2.5 h-2.5"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setSortBy({ value: '', label: 'None' });
+                  setSelectedColumn('');
+                  setShowSortOverlay(false);
+                }}
+                aria-label="Clear sort"
               />
             ) : null}
-          </div>
-          <div className="flex justify-end">
-            <button
-              type="button"
-              className="text-beaming-orange font-semibold text-sm py-1"
-              onClick={(e) => {
-                e.stopPropagation();
-                setSelectionMode(!selectionMode);
-              }}
-            >
-              {selectionMode ? 'Done' : 'Select'}
-            </button>
-          </div>
+          </button>
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              setShowHideDialog(!showHideDialog);
+              setShowFilter(false);
+              setShowSortOverlay(false);
+            }}
+            className={adminEventsDenseIconBtnClass(showHideDialog)}
+            aria-label="More"
+            aria-pressed={showHideDialog}
+          >
+            <FiMoreHorizontal className="w-5 h-5 z-[1]" />
+          </button>
+          {showSortOverlay ? (
+            <SortOverlay
+              hide={() => setShowSortOverlay(false)}
+              value={sortBy}
+              onChange={onSortChange}
+              options={Constants.eventsSortingOptions}
+            />
+          ) : null}
           {showFilter ? (
             <Filter
               hide={() => {
@@ -757,8 +734,14 @@ const Index = () => {
           {showHideDialog ? <EventColumnsHideOverlay /> : <></>}
         </div>
 
-        <div className="flex-1 w-full overflow-x-auto overflow-y-auto pb-8">
-          <div className="w-[100%] h-full pr-2 flex flex-col gap-8">
+        <div
+          ref={scrollBodyRef}
+          className={
+            'flex-1 w-full overflow-x-auto overflow-y-auto pb-8 ' +
+            adminEventsDenseContentPadClass(chromeHidden)
+          }
+        >
+          <div className="w-[100%] h-full pr-2 flex flex-col gap-2 md:gap-8">
             {search.show ? (
               <EventsSection
                 key="search"
@@ -777,7 +760,7 @@ const Index = () => {
                 isAlt={false}
                 onClick={() => {}}
                 onEventUpdate={fetchEvents}
-                selectionMode={selectionMode}
+                {...eventsSectionSelectionProps}
               />
             ) : filter.show ? (
               <EventsSection
@@ -795,7 +778,7 @@ const Index = () => {
                 isAlt={false}
                 onClick={() => {}}
                 onEventUpdate={fetchEvents}
-                selectionMode={selectionMode}
+                {...eventsSectionSelectionProps}
               />
             ) : (
               <>
@@ -813,39 +796,9 @@ const Index = () => {
                     selectedColumn={selectedColumn}
                     onClick={() => setLastClickedSection('month')}
                     onEventUpdate={fetchEvents}
-                    selectionMode={selectionMode}
+                    {...eventsSectionSelectionProps}
                   />
                 </div>
-                {/*<EventsSection
-                  title={`Events added this month (${sortedThisMonthEvents.length})`}
-                  events={sortedThisMonthEvents}
-                  defaultIsExpanded={true}
-                  isAlt={lastClickedSection !== 'month'}
-                  setSelectedColumn={setSelectedColumn}
-                  setSortBy={setSortBy}
-                  sortBy={sortBy}
-                  sortOrder={sortOrder}
-                  setSortOrder={setSortOrder}
-                  selectedColumn={selectedColumn}
-                  onClick={() => setLastClickedSection('month')}
-                  onEventUpdate={fetchEvents}
-                />
-                <div className="z-[1]">
-                  <EventsSection
-                    title={`Events added previously (${sortedPrevEvents.length})`}
-                    events={sortedPrevEvents}
-                    defaultIsExpanded={true}
-                    setSelectedColumn={setSelectedColumn}
-                    setSortBy={setSortBy}
-                    selectedColumn={selectedColumn}
-                    sortBy={sortBy}
-                    sortOrder={sortOrder}
-                    setSortOrder={setSortOrder}
-                    isAlt={lastClickedSection !== 'prev'}
-                    onClick={() => setLastClickedSection('prev')}
-                    onEventUpdate={fetchEvents}
-                  />
-                </div>*/}
               </>
             )}
           </div>

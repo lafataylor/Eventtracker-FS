@@ -23,12 +23,18 @@ interface AdminSideBarProps {
   mobileTitle?: string;
   /** Right-side control in the mobile top bar (e.g. Accounts "+ Add"). */
   mobileTrailing?: React.ReactNode;
+  /**
+   * Slide the mobile top bar off-screen (Events dense scroll chrome,
+   * 2026-11-27). Desktop sidebar is unaffected.
+   */
+  mobileBarHidden?: boolean;
 }
 
 function AdminSideBar({
   currentPage,
   mobileTitle = 'Admin',
   mobileTrailing,
+  mobileBarHidden = false,
 }: AdminSideBarProps) {
   const router = useRouter();
   const [state, dispatch] = useStore();
@@ -214,8 +220,18 @@ function AdminSideBar({
 
   return (
     <>
-      {/* Mobile top bar: hamburger + title + optional action. Desktop unchanged. */}
-      <div className="md:hidden fixed top-0 left-0 right-0 z-40 flex items-center justify-between gap-2 px-3 py-3 bg-midnight border-b-4 border-beaming-orange">
+      {/* Mobile top bar: hamburger + title + optional action. Desktop unchanged.
+          2026-11-27: h-14 (56px) + border-b-2 so Events (and other admin
+          pages) fit the dense header height the owner asked for. */}
+      <div
+        className={
+          'md:hidden fixed top-0 left-0 right-0 z-40 box-border h-14 ' +
+          'flex items-center justify-between gap-2 px-3 bg-midnight ' +
+          'border-b-2 border-beaming-orange ' +
+          'transition-transform duration-200 ease-out ' +
+          (mobileBarHidden ? '-translate-y-full' : 'translate-y-0')
+        }
+      >
         <button
           type="button"
           aria-label={menuOpen ? 'Close menu' : 'Open menu'}
@@ -229,7 +245,7 @@ function AdminSideBar({
             <HiOutlineMenu className="w-6 h-6" />
           )}
         </button>
-        <span className="absolute left-0 right-0 text-center pointer-events-none text-mist-white font-bold text-xl truncate px-16">
+        <span className="absolute left-0 right-0 text-center pointer-events-none text-mist-white font-bold text-lg truncate px-16">
           {mobileTitle}
         </span>
         <div className="relative z-10 min-w-[2.75rem] flex justify-end items-center">
