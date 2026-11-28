@@ -30,16 +30,17 @@ If a step fails before the swap, nothing on the live site changes.
 
 ## Hours
 
-Deploys run between **9pm and 2:30pm Central** in winter (**10pm and 3:30pm**
-in summer; the status page always shows today's hours). The nightly Instagram
-import runs in the gap and a deploy would interrupt it. If you deploy outside those
-hours, the status page says **WAITING** and it goes out on its own when the
-hours open. You don't need to do anything.
+Ordinary website and API code can go live **any time**, including while the
+nightly Instagram import is running. Database layout changes (migrations) still
+wait until the import is idle and the database lock is free; low disk space
+always waits. The status page still shows today's reference hours
+(**9pm–2:30pm Central** in winter, **10pm–3:30pm** in summer).
 
 ## What the status page can say
 
 - **LIVE**: your change is on the site.
-- **WAITING**: outside deploy hours; it will go by itself.
+- **WAITING**: low disk, or a migration deploy waiting for the import to finish;
+  it will go by itself when it can.
 - **DEPLOYING**: in progress.
 - **FAILED ... Trying again in a few minutes**: a passing problem (internet,
   a slow restart). It retries by itself, up to 3 times. Nothing to do.
