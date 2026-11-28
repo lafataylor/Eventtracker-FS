@@ -84,7 +84,7 @@ class Event(models.Model):
 
     class Meta:
         indexes = [
-            # Every public feed filters on start_date (day, range, 25h cutoff).
+            # Every public feed filters on start_date (day, range, overnight floor).
             # Declared here rather than as db_index=True: on SQLite Django
             # applies a db_index change by rebuilding the whole table, while
             # AddIndex is a plain CREATE INDEX on the live production database.

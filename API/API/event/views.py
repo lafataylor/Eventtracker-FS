@@ -103,12 +103,16 @@ def _log_safe(value, limit):
         return ''
     return _LOG_UNSAFE.sub(' ', value[:limit])
 
-EVENT_CUTOFF_TIME = timedelta(hours=25)
 # How long a multi-day run may keep listing after its first day. A festival
 # is a few days; anything longer with an end date is an extraction mistake
 # ("Lightning in a Bottle" stored as Aug 21 to Sep 18 sat under Today for a
 # month, 2026-09-18) or an exhibition the owner wants on its opening day only.
 SHORT_RUN = timedelta(days=3)
+
+# City pages keep yesterday under Today until this Pacific hour
+# (FE ``currentTimeHour < 5``). Public feeds use the same switch so a
+# prior-night card is not dropped while the site still asks for it.
+OVERNIGHT_CUTOFF_HOUR = 5
 
 
 def local_day_bounds(first_day, last_day=None):
@@ -134,6 +138,28 @@ def local_day_bounds(first_day, last_day=None):
     start = timezone.make_aware(datetime.combine(first_day, time.min))
     end = timezone.make_aware(datetime.combine(last_day + timedelta(days=1), time.min))
     return start, end
+
+
+def feed_visibility_floor(now=None):
+    """Aware lower bound for public feeds: yesterday until 5 AM Pacific, else today.
+
+    Replaces the old rolling 25-hour ``EVENT_CUTOFF_TIME``. Most nightlife
+    rows are a calendar date (local midnight) plus free-text ``start_time``,
+    so a rolling hour window dropped yesterday around 1 AM while the FE
+    still asked for it until 5 AM (owner, 2026-11). Floor to the start of
+    yesterday before ``OVERNIGHT_CUTOFF_HOUR`` local, otherwise the start of
+    today — timed and date-only prior-night events both survive until then.
+    """
+    if now is None:
+        now = timezone.now()
+    local = timezone.localtime(now)
+    today = local.date()
+    if local.hour < OVERNIGHT_CUTOFF_HOUR:
+        first_day = today - timedelta(days=1)
+    else:
+        first_day = today
+    start, _ = local_day_bounds(first_day)
+    return start
 
 # Events with no extracted start_date are still real events (2,534 of them in
 # production). They are included in search when recently scraped rather than
@@ -281,9 +307,8 @@ def remove_from_favorites(request):
 def get_favorites(request):
     email = request.GET.get("email")
     
-    # Aware bound: datetime.now() was the server's naive wall clock, which
-    # Django re-interpreted in the project timezone (warning on every call).
-    cutoff_time = timezone.now() - EVENT_CUTOFF_TIME
+    # Same calendar floor as the public feeds (yesterday until 5 AM Pacific).
+    cutoff_time = feed_visibility_floor()
 
     if validator.is_missing([email]):
         return MissingInformation()
@@ -296,7 +321,7 @@ def get_favorites(request):
         if not favorites_data:
             return Success({"status": "success", "favorites": []})
 
-        # Filter out events older than the cutoff time
+        # Drop favorites whose timestamp is before the overnight calendar floor.
         favorite_events = favorites_data.events.filter(timestamp__gte=cutoff_time)
         event_serializer = EventSerializer(favorite_events, many=True)
 
@@ -809,12 +834,9 @@ def search_events(request):
             | Q(city__icontains=query) | Q(state__icontains=query)
             | Q(country__icontains=query))
 
-        # Aware bounds. datetime.now() was the server's naive wall clock and
-        # .date() truncated the 25h cutoff to a calendar day; Django then
-        # re-interpreted both in the project timezone (warning on every call),
-        # so the window drifted by up to a day. Compare datetime to datetime.
+        # Calendar floor (yesterday until 5 AM Pacific); see feed_visibility_floor.
         current_time = timezone.now()
-        cutoff = current_time - EVENT_CUTOFF_TIME
+        cutoff = feed_visibility_floor(current_time)
         # Undated events are kept only if they were scraped recently, so the
         # backlog of old undated rows does not flood results.
         undated_cutoff = current_time - timedelta(days=UNDATED_EVENT_WINDOW_DAYS)
@@ -957,9 +979,8 @@ def date_events(request):
         return InvalidParameters()
 
     try:
-        # Aware cutoff, compared datetime to datetime (see search_events):
-        # "not older than 25 hours" now means exactly that.
-        cutoff = timezone.now() - EVENT_CUTOFF_TIME
+        # Calendar floor: yesterday until 5 AM Pacific (see feed_visibility_floor).
+        cutoff = feed_visibility_floor()
 
         # Same visibility rules as search_events. These two feeds are what
         # the city pages render, and they previously filtered is_duplicate
@@ -968,8 +989,8 @@ def date_events(request):
         # placeholder"; 11 of them on 2026-09-02). Exclude only KNOWN
         # non-events: is_event is nullable and NULL means never classified.
         day_start, day_end = local_day_bounds(date)
-        # One lower bound, not two: the day's start unless the 25-hour cutoff
-        # is later (asking for today, part of which is already too old).
+        # One lower bound, not two: the day's start unless the overnight
+        # calendar floor is later (asking for yesterday after 5 AM).
         lower = max(day_start, cutoff)
 
         date_events = hide_pending_duplicate_extras(Event.objects.filter(
@@ -1007,9 +1028,8 @@ def date_range_events(request):
         return InvalidParameters()
 
     try:
-        # Aware cutoff, compared datetime to datetime (see search_events):
-        # "not older than 25 hours" now means exactly that.
-        cutoff = timezone.now() - EVENT_CUTOFF_TIME
+        # Calendar floor: yesterday until 5 AM Pacific (see feed_visibility_floor).
+        cutoff = feed_visibility_floor()
 
         # See date_events above: same rules, same reason.
         # Half-open bounds so the END DAY is included: the old
@@ -1017,10 +1037,10 @@ def date_range_events(request):
         # a single-day range return nothing and every range miss its last day.
         window_start, window_end = local_day_bounds(start_date, end_date)
 
-        # The cutoff belongs INSIDE each branch. ANDing start_date__gte=cutoff
+        # The floor belongs INSIDE each branch. ANDing start_date__gte=cutoff
         # outside the group made the end_date branch unreachable: anything that
-        # STARTED more than 25 hours ago was excluded before its end_date could
-        # be considered, so a festival, exhibition or residency vanished from
+        # STARTED before the floor was excluded before its end_date could be
+        # considered, so a festival, exhibition or residency vanished from
         # the range feed for its whole run except the first day.
         lower = max(window_start, cutoff)
 
@@ -1066,17 +1086,17 @@ def filter_events(request):
     POSSIBLE_FILTER_TYPES = ["date", "price", "artist", "location", "account"]
 
     try:
-        # Aware cutoff (see search_events).
-        cutoff = timezone.now() - EVENT_CUTOFF_TIME
+        # Calendar floor (yesterday until 5 AM Pacific); see feed_visibility_floor.
+        cutoff = feed_visibility_floor()
 
-        # Base scope: upcoming, visible events. The date cutoff belongs here,
+        # Base scope: upcoming, visible events. The date floor belongs here,
         # not inside the date branch — otherwise a price/artist/location filter
         # searches the whole 53k-row history instead of upcoming events.
         queryset = hide_pending_duplicate_extras(
             Event.objects.filter(is_duplicate=False, suppressed=False))
         # An explicit date filter names the days it wants, past or not: the
         # admin asking for "Event Date is 08/21/2026" got nothing because
-        # the cutoff excluded it (owner, 2026-09-18). Without one, the scope
+        # the floor excluded it (owner, 2026-09-18). Without one, the scope
         # stays upcoming so a price/artist filter does not scan history.
         if not any((f.get("type") == "date") for f in filters if isinstance(f, dict)):
             queryset = queryset.filter(start_date__gte=cutoff)

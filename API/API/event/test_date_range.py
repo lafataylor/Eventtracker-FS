@@ -27,7 +27,7 @@ class DateFeedFixtureMixin:
     """Events pinned to local calendar days around a fixed reference day."""
 
     def setUp(self):
-        # Far enough ahead that the 25-hour cutoff never hides these.
+        # Far enough ahead that the overnight calendar floor never hides these.
         self.day = (timezone.localtime(timezone.now()) + timedelta(days=10)).date()
         self.next_day = self.day + timedelta(days=1)
         self.prev_day = self.day - timedelta(days=1)
@@ -162,8 +162,8 @@ class RangeFeedEndDateBranchTests(DateFeedFixtureMixin, TestCase):
     """An event may match the window by its END date, not only its start.
 
     The OR branch for ``end_date`` was unreachable: ``start_date__gte=cutoff``
-    was ANDed outside the Q group, so anything that STARTED more than 25 hours
-    ago was excluded before the end_date test could apply. Every festival,
+    was ANDed outside the Q group, so anything that STARTED before the feed
+    floor was excluded before the end_date test could apply. Every festival,
     exhibition and residency was therefore missing from the range feed for the
     whole of its run except the first day.
     """
@@ -183,7 +183,7 @@ class RangeFeedEndDateBranchTests(DateFeedFixtureMixin, TestCase):
         self.assertNotIn('long exhibition', self._range_feed(self.day, self.day))
 
     def test_a_finished_run_stays_out(self):
-        # ended well before the 25-hour cutoff: still gone
+        # ended well before the overnight calendar floor: still gone
         self._ev('finished run',
                  timezone.now() - timedelta(days=20),
                  end=timezone.now() - timedelta(days=10))
