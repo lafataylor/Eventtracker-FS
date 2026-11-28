@@ -7,6 +7,10 @@
 # minutes from cron, notices the branch moved, and ships it:
 #   preflight -> safety rail -> API tests -> API swap -> site build -> site swap
 #   -> live check (puts BOTH parts back if it fails) -> status page.
+# Ordinary website/API code may ship when preflight only fails the scrape
+# window or "pipeline wrote" (import still active); low disk still waits, and
+# tips that add AUTO_APPLY migrations still wait for an idle import so the
+# db-maint lock path is not taken mid-scrape. Global preflight.sh is unchanged.
 # The server only READS from GitHub, so no deploy key or password ever leaves
 # the server, and nothing a laptop holds can run commands here.
 #
@@ -140,10 +144,26 @@ deploy_hours() {
 # Why preflight said no, in plain words.
 wait_reason() { # preflight_output_file (only its FAIL lines count; passing lines mention the same words)
   local fails; fails=$(grep "FAIL" "$1")
-  if echo "$fails" | grep -q "scrape window"; then echo "Reason: it is outside deploy hours ($(deploy_hours))."
+  if echo "$fails" | grep -q "free"; then echo "Reason: the server is low on disk space. Tell Zain."
+  elif echo "$fails" | grep -q "scrape window"; then echo "Reason: it is outside deploy hours ($(deploy_hours))."
   elif echo "$fails" | grep -q "pipeline wrote"; then echo "Reason: the nightly Instagram import is still running."
-  elif echo "$fails" | grep -q "free"; then echo "Reason: the server is low on disk space. Tell Zain."
   else echo "Reason: the server's safety check said no: $(echo "$fails" | sed 's/^ *FAIL: //' | head -1)"; fi
+}
+
+# True when every FAIL line is the scrape-window or pipeline-idle soft gate.
+# Low disk ("free") and any other FAIL stay hard — those always WAIT.
+# Passing lines that mention the same words do not count (same rule as wait_reason).
+preflight_import_soft_only() { # preflight_output_file
+  local fails line
+  fails=$(grep "FAIL" "$1" 2>/dev/null || true)
+  [ -n "$fails" ] || return 1
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    echo "$line" | grep -q "scrape window" && continue
+    echo "$line" | grep -q "pipeline wrote" && continue
+    return 1
+  done <<< "$fails"
+  return 0
 }
 
 central_time() { TZ=America/Chicago date '+%a %b %-d, %-I:%M %p Central'; }
@@ -167,9 +187,10 @@ write_status() { # headline, details
     if [ -n "$live_sha" ]; then echo "LIVE: $(short "$live_sha") since $(statefile live_since)"; fi
     if [ -n "$prev_sha" ]; then echo "PREVIOUS: $(git -C "$STATE/repo" rev-parse --short "$prev_sha") (make rollback puts this one back)"; fi
     echo
-    echo "Deploys run from $(deploy_hours) today. A request made outside"
-    echo "those hours waits and goes out on its own when they open (the nightly"
-    echo "Instagram import runs in the gap)."
+    echo "Ordinary website and API code can go live any time, including while"
+    echo "the nightly Instagram import is running. Database layout changes wait"
+    echo "until the import is idle (and still need the database lock). Low disk"
+    echo "always waits. Deploy hours shown for reference: $(deploy_hours)."
     echo
     echo "RECENT"
     tail -n 8 "$STATE/history.log" 2>/dev/null | awk '{a[NR]=$0} END{for(i=NR;i>0;i--) print a[i]}'
@@ -285,16 +306,6 @@ main() {
   [ "$TARGET" = "$(statefile stopped_sha)" ] && exit 0
 
   local title; title=$(short "$TARGET")
-  if ! "$MISC/preflight.sh" > "$STATE/last-preflight.txt" 2>&1; then
-    if [ "$(statefile waiting_sha)" != "$TARGET" ]; then
-      echo "$TARGET" > "$STATE/waiting_sha"
-      log_history "$title: requested, waiting for the deploy hours"
-    fi
-    write_status "WAITING to deploy $title" "$(wait_reason "$STATE/last-preflight.txt")
-It goes out on its own as soon as it can. Nothing to do."
-    exit 0
-  fi
-
   local live_api live_fe new_api new_fe blocked
   live_api=$(statefile live_api_tree); live_fe=$(statefile live_fe_tree)
   new_api=$(tree_of "$STATE/repo" "$TARGET" API/API); new_fe=$(tree_of "$STATE/repo" "$TARGET" FE)
@@ -303,6 +314,33 @@ It goes out on its own as soon as it can. Nothing to do."
     write_status "NOT SET UP: the server does not know which version is live yet" "Nothing was changed. Zain needs to finish the one-time setup in docs/DEPLOYING.md."
     exit 1
   fi
+
+  # Preflight still runs for every tip. Soft scrape-window / pipeline-wrote
+  # fails may proceed for ordinary code (no new AUTO_APPLY migrations). Low
+  # disk and unknown fails always WAIT. Migration tips wait so safe_migrate
+  # never races the overnight import; the db-maint lock still gates them later.
+  if ! "$MISC/preflight.sh" > "$STATE/last-preflight.txt" 2>&1; then
+    local soft="" migrate_needed=""
+    if preflight_import_soft_only "$STATE/last-preflight.txt"; then
+      soft=yes
+      if [ "$new_api" != "$live_api" ] \
+         && [ -n "$(added_migration_files "$STATE/repo" "$live_api" "$TARGET")" ]; then
+        migrate_needed=yes
+      fi
+    fi
+    if [ -n "$soft" ] && [ -z "$migrate_needed" ]; then
+      log_history "$title: deploying despite import/hours (ordinary code)"
+    else
+      if [ "$(statefile waiting_sha)" != "$TARGET" ]; then
+        echo "$TARGET" > "$STATE/waiting_sha"
+        log_history "$title: requested, waiting for the deploy hours"
+      fi
+      write_status "WAITING to deploy $title" "$(wait_reason "$STATE/last-preflight.txt")
+It goes out on its own as soon as it can. Nothing to do."
+      exit 0
+    fi
+  fi
+
   if [ "$new_api" != "$live_api" ]; then
     blocked=$(blocking_changes "$STATE/repo" "$live_api" "$TARGET")
     if [ "$blocked" = "cannot compare with the live version" ]; then

@@ -107,5 +107,26 @@ printf '  ok: outside the scrape window\n  FAIL: pipeline wrote 3 min ago - too 
 check "passing lines never decide the reason" "Reason: the nightly Instagram import is still running." "$(wait_reason "$P")"
 echo "  FAIL: pipeline wrote 3 min ago - too recent, may still be active" > "$P"
 check "import running is explained" "Reason: the nightly Instagram import is still running." "$(wait_reason "$P")"
+echo "  FAIL: only 2.1 G free (need 3 G)" > "$P"
+check "low disk is explained" "Reason: the server is low on disk space. Tell Zain." "$(wait_reason "$P")"
+
+# 10. Soft preflight fails (scrape window / pipeline wrote) vs hard (disk).
+#     Ordinary code may proceed on soft; migrations and disk still wait.
+echo "  FAIL: inside the nightly scrape window (deploy between 03:00 and 20:30 UTC)" > "$P"
+check "scrape window alone is soft" "yes" "$(preflight_import_soft_only "$P" && echo yes || echo no)"
+echo "  FAIL: pipeline wrote 3 min ago - too recent, may still be active" > "$P"
+check "pipeline wrote alone is soft" "yes" "$(preflight_import_soft_only "$P" && echo yes || echo no)"
+printf '  FAIL: inside the nightly scrape window (deploy between 03:00 and 20:30 UTC)\n  FAIL: pipeline wrote 1 min ago - too recent, may still be active\n' > "$P"
+check "both soft fails together stay soft" "yes" "$(preflight_import_soft_only "$P" && echo yes || echo no)"
+printf '  ok: outside the scrape window\n  FAIL: pipeline wrote 3 min ago - too recent, may still be active\n' > "$P"
+check "passing scrape-window line does not harden pipeline-wrote" "yes" "$(preflight_import_soft_only "$P" && echo yes || echo no)"
+echo "  FAIL: only 2.1 G free (need 3 G)" > "$P"
+check "low disk is hard" "no" "$(preflight_import_soft_only "$P" && echo yes || echo no)"
+printf '  FAIL: inside the nightly scrape window (deploy between 03:00 and 20:30 UTC)\n  FAIL: only 2.1 G free (need 3 G)\n' > "$P"
+check "disk plus soft is still hard" "no" "$(preflight_import_soft_only "$P" && echo yes || echo no)"
+echo "  FAIL: something unexpected" > "$P"
+check "unknown FAIL is hard" "no" "$(preflight_import_soft_only "$P" && echo yes || echo no)"
+: > "$P"
+check "empty preflight output is not soft" "no" "$(preflight_import_soft_only "$P" && echo yes || echo no)"
 
 [ "$FAILS" -eq 0 ] && echo "ALL PASSED" || { echo "$FAILS FAILED"; exit 1; }
