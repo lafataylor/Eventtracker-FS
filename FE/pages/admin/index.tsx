@@ -14,6 +14,7 @@ import Select, {
 import { Account } from '../../interface/objects/simpleObject';
 import { useStore } from '../../store/store';
 import { Constants } from '../../utils/constants';
+import { accountsCitySectionDefaultExpanded } from '../../utils/manageAccountsUi';
 import AccountsFilter from '../../components/Filter/AccountsFilter';
 import AccountsSection from '../../components/Admin/AccountsSection';
 import AddAccount from '../../components/Admin/AddAccount';
@@ -511,7 +512,9 @@ const Index = () => {
                       }
                       count={locationAccounts.length}
                       accounts={locationAccounts}
-                      defaultIsExpanded={index === 0}
+                      defaultIsExpanded={accountsCitySectionDefaultExpanded(
+                        index
+                      )}
                       isAlt={index % 2 !== 0}
                       selectionMode={selectionMode}
                       onClick={() => {}}
