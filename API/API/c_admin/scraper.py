@@ -39,6 +39,16 @@ logger = logging.getLogger('django')
 # High-visibility log tag for the Instagram stories code path (separate Apify run).
 STORY_SCRAPER_LOG_TAG = "[INSTAGRAM_STORIES]"
 
+# Apify input for the stories/reels actor call in fetch_story_image_objects.
+# onlyPostsNewerThan is applied by apify/instagram-scraper before it fetches,
+# so old reels are never downloaded. The official input schema accepts
+# YYYY-MM-DD, ISO timestamps, or a relative duration matching
+# r"(\d+)\s*(minute|hour|day|week|month|year)s?" (UTC). "stories" is
+# deprecated and now returns reels; the value is left unchanged so this
+# change is only the recency window and a results cap.
+APIFY_REELS_NEWER_THAN = "7 days"
+APIFY_REELS_RESULTS_LIMIT = 30
+
 
 def scrape_flags_for_accounts(account_names):
     """Return {username: (track_feed, track_stories)} from Account rows.
@@ -377,6 +387,10 @@ def fetch_story_image_objects(client, account, biography, externalUrl, last_fetc
     (same actor as create_event_from_instagram_link), then build the same imageObjects
     used for posts (GPT labeling, save flow).
 
+    The actor call itself is limited to APIFY_REELS_NEWER_THAN / APIFY_REELS_RESULTS_LIMIT
+    so Apify does not fetch a deep reel history. process_post still drops anything
+    older than last_fetched after the results come back.
+
     Never raises: on any failure returns [] so the legacy post scrape path is unaffected.
     """
     username = instagram_username_clean(account)
@@ -402,7 +416,8 @@ def fetch_story_image_objects(client, account, biography, externalUrl, last_fetc
             f"ig_username={username!r}",
             f"actor=apify/instagram-scraper resultsType=stories",
             f"directUrl=https://www.instagram.com/{username}/",
-            f"last_fetched={last_fetched!r} (stories older than this are skipped inside process_post)",
+            f"onlyPostsNewerThan={APIFY_REELS_NEWER_THAN!r} resultsLimit={APIFY_REELS_RESULTS_LIMIT}",
+            f"last_fetched={last_fetched!r} (stories older than this are still skipped inside process_post)",
         ],
     )
 
@@ -418,6 +433,8 @@ def fetch_story_image_objects(client, account, biography, externalUrl, last_fetc
         run_input = {
             "resultsType": "stories",
             "directUrls": [f"https://www.instagram.com/{username}/"],
+            "onlyPostsNewerThan": APIFY_REELS_NEWER_THAN,
+            "resultsLimit": APIFY_REELS_RESULTS_LIMIT,
         }
         try:
             run = client.actor("apify/instagram-scraper").call(run_input=run_input)
