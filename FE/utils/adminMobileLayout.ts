@@ -24,12 +24,12 @@ export function adminPageTitleClass(extra = ''): string {
 }
 
 // Top padding that clears the fixed mobile admin bar.
-// Bar is py-3 + h-11 button + border-b-4 ≈ 4.25rem; pt-14 (3.5rem) was short
-// and callers' p-4 / pt-4 often overrode it — Accounts search and Events title
-// clipped under the orange underline (owner screenshots 2026-11-21).
-// pt-20 (5rem) leaves a clear gap. Do not pass mobile p-4 or pt-4 in `extra`;
-// use px- / pb- and md:p- / md:pt- so this top pad is not fought.
-export const ADMIN_MOBILE_TOP_PAD = 'pt-20 md:pt-0';
+// 2026-11-27: bar is a fixed h-14 (56px) with border-b-2 (inside the box),
+// so pt-14 clears it. Older pt-20 was for the taller py-3 + h-11 + border-b-4
+// chrome. Do not pass mobile p-4 or pt-4 in `extra`; use px- / pb- and
+// md:p- / md:pt- so this top pad is not fought. Events dense page uses its
+// own pad helper (adminEventsDense) because it also clears a fixed toolbar.
+export const ADMIN_MOBILE_TOP_PAD = 'pt-14 md:pt-0';
 
 /** Main pane beside the sidebar: shrink in flex, clear the mobile menu bar. */
 export function adminMainPaneClass(extra = ''): string {

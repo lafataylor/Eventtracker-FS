@@ -24,6 +24,7 @@ import {
 import { FaChevronDown, FaArrowDown, FaArrowUp } from 'react-icons/fa';
 import { FaBan } from 'react-icons/fa';
 import { Option } from '../../interface/filterInterface';
+import { adminEventsDenseSelectBtnClass } from '../../utils/adminEventsDense';
 
 interface EventsSectionProps {
   title: string;
@@ -41,6 +42,11 @@ interface EventsSectionProps {
   sortBy: Option;
   /** Phone Select mode — checkboxes beside public list rows. */
   selectionMode?: boolean;
+  /**
+   * When set, render Select/Done beside the section title on mobile
+   * (dense Events chrome, 2026-11-27) instead of a separate toolbar row.
+   */
+  onSelectionModeToggle?: () => void;
 }
 
 const EventsSection = ({
@@ -58,6 +64,7 @@ const EventsSection = ({
   setSortBy,
   onEventUpdate,
   selectionMode = false,
+  onSelectionModeToggle,
 }: EventsSectionProps) => {
   const [isExpanded, setIsExpanded] = useState(false);
   const [state, dispatch] = useStore();
@@ -239,11 +246,25 @@ const EventsSection = ({
             transform: isExpanded ? 'rotate(180deg)' : '',
           }}
         />
-        <div>
-          <div className="font-semibold text-black select-none">{title}</div>
-          {isExpanded && subTitle && (
-            <div className="text-sm select-none text-black">{subTitle}</div>
-          )}
+        <div className="min-w-0 flex-1 flex items-start justify-between gap-2">
+          <div className="min-w-0">
+            <div className="font-semibold text-black select-none">{title}</div>
+            {isExpanded && subTitle && (
+              <div className="text-sm select-none text-black">{subTitle}</div>
+            )}
+          </div>
+          {onSelectionModeToggle ? (
+            <button
+              type="button"
+              className={adminEventsDenseSelectBtnClass()}
+              onClick={(e) => {
+                e.stopPropagation();
+                onSelectionModeToggle();
+              }}
+            >
+              {selectionMode ? 'Done' : 'Select'}
+            </button>
+          ) : null}
         </div>
       </div>
       {isExpanded ? (
@@ -259,8 +280,10 @@ const EventsSection = ({
           ></div>
 
           {/* Mobile: reuse public site list rows (thumb, title, place, date).
-              Owner 2026-11-20 — not the custom mock as primary UI. */}
-          <div className="md:hidden w-full z-[2] flex flex-col gap-2 pt-2 max-h-[calc(100vh-14rem)] overflow-y-auto">
+              Owner 2026-11-20 — not the custom mock as primary UI.
+              2026-11-27: no nested max-height scroll — the Events page scroll
+              body owns scroll so header+toolbar can hide/reveal together. */}
+          <div className="md:hidden w-full z-[2] flex flex-col gap-2 pt-2">
             {selectionMode && sortedEvents.length > 0 ? (
               <div className="flex items-center gap-3 px-1 py-2">
                 <label className="custom_checkbox relative shrink-0">
