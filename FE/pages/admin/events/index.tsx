@@ -480,7 +480,7 @@ const Index = () => {
         }
       />
       <div
-        className={adminEventsDenseMainPaneClass()}
+        className={adminEventsDenseMainPaneClass(chromeHidden)}
         onClick={() => {
           setShowFilter(false);
           setShowHideDialog(false);

@@ -24,7 +24,10 @@ import {
 import { FaChevronDown, FaArrowDown, FaArrowUp } from 'react-icons/fa';
 import { FaBan } from 'react-icons/fa';
 import { Option } from '../../interface/filterInterface';
-import { adminEventsDenseSelectBtnClass } from '../../utils/adminEventsDense';
+import {
+  adminEventsDenseSelectBtnClass,
+  adminEventsSectionHeaderClass,
+} from '../../utils/adminEventsDense';
 
 interface EventsSectionProps {
   title: string;
@@ -229,14 +232,12 @@ const EventsSection = ({
           setIsExpanded(!isExpanded);
           onClick();
         }}
-        className={
-          'relative rounded-t-xl before:absolute before:w-2 before:h-[50px] before:bg-beaming-orange-dark before:right-0 before:-bottom-[50px] before:z-[1] shadow-[0px_0px_40px_rgba(0,0,0,0.05)] shadow-dim-shadow flex items-start gap-4 p-4 z-[1px] ' +
-          (isAlt ? 'bg-beaming-orange' : 'bg-beaming-orange') +
-          ' hover:filter hover:brightness-[90%] hover:cursor-pointer'
-        }
+        className={adminEventsSectionHeaderClass()}
       >
+        {/* Desktop accordion join fill — hide on phone so it does not bleed
+            under the list (owner 2026-11-27 orange bar / clip follow-up). */}
         {isExpanded && (
-          <div className="absolute bottom-0 left-0 bg-beaming-orange z-[-10] w-[100%] text-beaming-orange">
+          <div className="hidden md:block absolute bottom-0 left-0 bg-beaming-orange z-[-10] w-[100%] text-beaming-orange">
             ...
           </div>
         )}
