@@ -31,7 +31,7 @@ def _local(day, hour):
 
 class SeriesFixtureMixin:
     def setUp(self):
-        # Far enough ahead that the 25-hour cutoff never hides these.
+        # Far enough ahead that the overnight calendar floor never hides these.
         self.day = (timezone.localtime(timezone.now()) + timedelta(days=10)).date()
         self.week_later = self.day + timedelta(days=7)
 
